@@ -1,5 +1,7 @@
 # Markie
 
+![Example Output](README.svg)
+
 A pure Rust Markdown to SVG/PNG renderer that converts Markdown documents into beautiful, shareable images.
 
 ## Features
