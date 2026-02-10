@@ -53,9 +53,9 @@ mod tests {
         let svg = result.unwrap();
         
         // Check if rect height is calculated correctly according to the new logic
-        // rect_height = font_size_code + code_padding_y * 1.5
-        // 14.0 + 10.0 * 1.5 = 14.0 + 15.0 = 29.0
-        assert!(svg.contains("height=\"29.00\""));
+        // rect_height = font_size_code + code_padding_y
+        // 14.0 + 10.0 = 24.0
+        assert!(svg.contains("height=\"24.00\""));
     }
 
     #[test]
@@ -386,9 +386,9 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         // Tighter background box based on font size
-        let rect_height = self.theme.font_size_code + self.theme.code_padding_y * 1.5;
+        let rect_height = self.theme.font_size_code + self.theme.code_padding_y;
         // Align roughly to baseline - ascent + padding
-        let rect_y = self.cursor_y - self.theme.font_size_code * 0.85 - self.theme.code_padding_y * 0.5;
+        let rect_y = self.cursor_y - self.theme.font_size_code * 0.8;
 
         self.svg_content.push_str(&format!(
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" />"#,
@@ -415,7 +415,7 @@ impl<T: TextMeasure> Renderer<T> {
         let (space_width, _) =
             self.measure
                 .measure_text(" ", self.current_font_size(), false, false, false, None);
-        self.cursor_x += total_width + space_width;
+        self.cursor_x += total_width;
         self.at_line_start = false;
 
         Ok(())
@@ -824,7 +824,7 @@ impl<T: TextMeasure> Renderer<T> {
             fill,
             weight_attr,
             style_attr,
-            self.escape_xml(text),
+            self.escape_xml(text).replace(' ', "&#160;"),
         ));
     }
 
