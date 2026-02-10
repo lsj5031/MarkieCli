@@ -2,17 +2,11 @@
 
 A pure Rust Markdown to SVG/PNG renderer that converts Markdown documents into beautiful, shareable images.
 
-## Examples
-
-![Complex Example](assets/complex.png)
-
-![Syntax Highlighting](assets/syntax_test.png)
-
 ## Features
 
 - **Pure Rust**: Built entirely with Rust for performance and reliability
 - **Multiple Output Formats**: Export to SVG or PNG
-- **Customizable Themes**: Support for custom themes via base64-encoded JSON
+- **Customizable Themes**: Support for custom themes via Alacritty configuration files (YAML/TOML)
 - **Flexible Input**: Read from file or stdin
 - **Adjustable Width**: Control output image width
 - **Font Support**: Includes local font directory and system font fallbacks
@@ -59,12 +53,6 @@ cat README.md | markie - -o output.svg
 markie input.md -o output.png --width 1200
 ```
 
-### With custom theme (Base64 JSON)
-
-```bash
-markie input.md -o output.svg --theme "eyJmb250X2ZhbWlseSI6ICJBcmlhbC..."
-```
-
 ### With Alacritty theme (YAML or TOML)
 
 You can use any Alacritty theme directly (both `.yaml` and `.toml` formats are supported).
@@ -76,9 +64,7 @@ markie input.md -o output.svg --theme solarized_light.toml
 
 ## Theme Format
 
-Themes can be passed as:
-1. Base64-encoded JSON string
-2. Path to an Alacritty theme file (YAML or TOML)
+Themes can be passed as a path to an Alacritty theme file (YAML or TOML).
 
 Example of Alacritty TOML theme:
 

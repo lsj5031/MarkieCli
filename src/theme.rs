@@ -1,4 +1,3 @@
-use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 
 const GITHUB_LIGHT_BACKGROUND: &str = "#ffffff";
@@ -169,17 +168,6 @@ impl Theme {
         }
     }
 
-    pub fn from_base64(encoded: &str) -> Result<Self, String> {
-        let decoded = general_purpose::STANDARD
-            .decode(encoded)
-            .map_err(|e| format!("Failed to decode base64: {}", e))?;
-
-        let json_str = std::str::from_utf8(&decoded)
-            .map_err(|e| format!("Invalid UTF-8 in decoded data: {}", e))?;
-
-        serde_json::from_str(json_str).map_err(|e| format!("Failed to parse theme JSON: {}", e))
-    }
-
     pub fn from_alacritty_yaml(content: &str) -> Result<Self, String> {
         let alacritty: AlacrittyTheme = serde_yaml::from_str(content)
             .map_err(|e| format!("Failed to parse Alacritty YAML: {}", e))?;
@@ -195,28 +183,18 @@ impl Theme {
     }
 
     fn from_alacritty_theme(alacritty: AlacrittyTheme) -> Result<Self, String> {
-        // Map Alacritty colors to Markie theme
         let colors = alacritty.colors;
         
         Ok(Theme {
             background_color: colors.primary.background,
             text_color: colors.primary.foreground.clone(),
-            // Using blue for headings usually looks okay, or magenta/cyan for flair
             heading_color: colors.normal.blue.clone(),
-            // Cyan or Blue are common for links
             link_color: colors.normal.cyan,
-            // Use black (often a dark grey in themes) for code bg if light theme, 
-            // but Alacritty themes are often dark. 
-            // Let's try to derive a code background. 
-            // Often "black" in Alacritty is the "surface" color.
             code_bg_color: colors.normal.black,
             code_text_color: colors.primary.foreground.clone(),
-            
-            // Use a dimmed color for quote borders, maybe white/grey
             quote_border_color: colors.normal.white,
-            quote_text_color: colors.primary.foreground, // Quotes use normal text color
+            quote_text_color: colors.primary.foreground,
 
-            // Defaults for sizing
             font_size_base: FONT_SIZE_BASE,
             font_size_code: FONT_SIZE_CODE,
             line_height: LINE_HEIGHT,
