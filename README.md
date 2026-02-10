@@ -2,6 +2,12 @@
 
 A pure Rust Markdown to SVG/PNG renderer that converts Markdown documents into beautiful, shareable images.
 
+## Examples
+
+![Complex Example](assets/complex.png)
+
+![Syntax Highlighting](assets/syntax_test.png)
+
 ## Features
 
 - **Pure Rust**: Built entirely with Rust for performance and reliability
