@@ -1,6 +1,112 @@
 use crate::fonts::TextMeasure;
 use crate::theme::Theme;
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{Style as SyntectStyle, ThemeSet};
+use syntect::parsing::SyntaxSet;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::Theme;
+    use crate::fonts::TextMeasure;
+
+    // Mock TextMeasure for testing
+    struct MockMeasure;
+    impl TextMeasure for MockMeasure {
+        fn measure_text(
+            &mut self,
+            text: &str,
+            font_size: f32,
+            _is_code: bool,
+            _is_bold: bool,
+            _is_italic: bool,
+            _max_width: Option<f32>,
+        ) -> (f32, f32) {
+            // Simple approximation: width = len * size * 0.6, height = size
+            (text.len() as f32 * font_size * 0.6, font_size)
+        }
+    }
+
+    #[test]
+    fn test_renderer_initialization() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let renderer = Renderer::new(theme, measure, 800.0);
+        assert!(renderer.is_ok());
+    }
+
+    #[test]
+    fn test_inline_code_rendering() {
+        let mut theme = Theme::default();
+        theme.code_padding_y = 10.0;
+        theme.font_size_code = 14.0;
+        
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+        
+        // This should trigger render_inline_code
+        let markdown = "`code`";
+        let result = renderer.render(markdown);
+        
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+        
+        // Check if rect height is calculated correctly according to the new logic
+        // rect_height = font_size_code + code_padding_y * 1.5
+        // 14.0 + 10.0 * 1.5 = 14.0 + 15.0 = 29.0
+        assert!(svg.contains("height=\"29.00\""));
+    }
+
+    #[test]
+    fn test_code_block_syntax_highlighting() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+        
+        let markdown = "```rust\nfn main() {}\n```";
+        let result = renderer.render(markdown);
+        
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+        
+        // Check for syntax highlighting colors
+        // Rust keywords like 'fn' should be colored. 
+        // In Solarized themes (used in logic), keywords are often colored.
+        // We look for fill attributes that are NOT the default text color
+        
+        // Note: The specific color depends on the syntect theme loaded.
+        // But we can check that we have multiple different fill colors in the output
+        // or specifically that we have spans/tspan/text with fill attributes.
+        
+        // In the implementation, draw_text_at uses text tag with fill attribute.
+        // Let's verify we have text tags with fill colors.
+        assert!(svg.contains("<text"));
+        assert!(svg.contains("fill=\"#"));
+    }
+    
+    #[test]
+    fn test_syntax_highlighting_language_detection() {
+         let theme = Theme::default();
+         let measure = MockMeasure;
+         let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+         
+         // Python code
+         let markdown = "```python\ndef foo():\n    pass\n```";
+         let result = renderer.render(markdown);
+         assert!(result.is_ok());
+         let svg_py = result.unwrap();
+         
+         // Rust code
+         let markdown_rs = "```rust\nfn main() {}\n```";
+         let result_rs = renderer.render(markdown_rs);
+         assert!(result_rs.is_ok());
+         let svg_rs = result_rs.unwrap();
+         
+         // The SVGs should be different (different content and potentially different colors)
+         assert_ne!(svg_py, svg_rs);
+    }
+}
 
 const LIST_INDENT: f32 = 24.0;
 const LIST_MARKER_GAP: f32 = 8.0;
@@ -17,9 +123,9 @@ struct QuoteState {
     start_y: f32,
 }
 
-pub struct Renderer {
+pub struct Renderer<T: TextMeasure = crate::fonts::CosmicTextMeasure> {
     theme: Theme,
-    measure: TextMeasure,
+    measure: T,
     svg_content: String,
     cursor_x: f32,
     cursor_y: f32,
@@ -38,13 +144,19 @@ pub struct Renderer {
 
     in_code_block: bool,
     code_block_buffer: String,
+    code_block_lang: Option<String>,
+
+    ps: SyntaxSet,
+    ts: ThemeSet,
 }
 
-impl Renderer {
-    pub fn new(theme: Theme, width: f32) -> Result<Self, String> {
-        let measure = TextMeasure::new()?;
+impl<T: TextMeasure> Renderer<T> {
+    pub fn new(theme: Theme, measure: T, width: f32) -> Result<Self, String> {
         let padding_x = theme.padding_x;
         let padding_y = theme.padding_y;
+
+        let ps = SyntaxSet::load_defaults_newlines();
+        let ts = ThemeSet::load_defaults();
 
         Ok(Self {
             theme,
@@ -63,6 +175,9 @@ impl Renderer {
             blockquotes: Vec::new(),
             in_code_block: false,
             code_block_buffer: String::new(),
+            code_block_lang: None,
+            ps,
+            ts,
         })
     }
 
@@ -76,6 +191,7 @@ impl Renderer {
                         self.render_code_block()?;
                         self.code_block_buffer.clear();
                         self.in_code_block = false;
+                        self.code_block_lang = None;
                         self.add_margin(self.theme.margin_bottom);
                         self.cursor_x = self.line_start_x();
                         self.at_line_start = true;
@@ -112,10 +228,14 @@ impl Renderer {
             Tag::Paragraph => {
                 self.start_block(self.theme.margin_top);
             }
-            Tag::CodeBlock(_kind) => {
+            Tag::CodeBlock(kind) => {
                 self.start_block(self.theme.margin_top);
                 self.in_code_block = true;
                 self.code_block_buffer.clear();
+                self.code_block_lang = match kind {
+                    pulldown_cmark::CodeBlockKind::Fenced(lang) => Some(lang.to_string()),
+                    _ => None,
+                };
             }
             Tag::List(start) => {
                 if self.list_stack.is_empty() {
@@ -256,7 +376,7 @@ impl Renderer {
     }
 
     fn render_inline_code(&mut self, code: &str) -> Result<(), String> {
-        let (text_width, text_height) =
+        let (text_width, _text_height) =
             self.measure
                 .measure_text(code, self.theme.font_size_code, true, false, false, None);
 
@@ -265,12 +385,17 @@ impl Renderer {
             self.new_line();
         }
 
+        // Tighter background box based on font size
+        let rect_height = self.theme.font_size_code + self.theme.code_padding_y * 1.5;
+        // Align roughly to baseline - ascent + padding
+        let rect_y = self.cursor_y - self.theme.font_size_code * 0.85 - self.theme.code_padding_y * 0.5;
+
         self.svg_content.push_str(&format!(
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" />"#,
             self.cursor_x,
-            self.cursor_y - text_height + 4.0,
+            rect_y,
             total_width,
-            text_height + self.theme.code_padding_y * 2.0,
+            rect_height,
             self.theme.code_radius,
             self.theme.code_bg_color,
         ));
@@ -301,26 +426,71 @@ impl Renderer {
         let max_content_width = (self.right_edge() - x - self.theme.code_padding_x * 2.0)
             .max(self.theme.font_size_code);
 
-        let mut lines = Vec::new();
+        // 1. Highlight Phase
+        let mut raw_highlighted_lines: Vec<Vec<(SyntectStyle, String)>> = Vec::new();
         let code_buffer = self.code_block_buffer.clone();
-        for line in code_buffer.lines() {
-            self.wrap_code_line(line, max_content_width, &mut lines);
+
+        {
+            let lang = self.code_block_lang.as_deref().unwrap_or("txt");
+            let syntax = self.ps.find_syntax_by_token(lang)
+                .or_else(|| self.ps.find_syntax_by_extension(lang))
+                .unwrap_or_else(|| self.ps.find_syntax_plain_text());
+            
+            let is_dark = {
+                let hex = self.theme.code_bg_color.trim_start_matches('#');
+                if hex.len() == 6 {
+                     let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(255);
+                     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
+                     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(255);
+                     (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) < 128.0
+                } else {
+                     false
+                }
+            };
+
+            let theme_name = if is_dark { "Solarized (dark)" } else { "Solarized (light)" };
+            let theme = self.ts.themes.get(theme_name)
+                .or_else(|| self.ts.themes.get(if is_dark { "base16-ocean.dark" } else { "base16-ocean.light" }))
+                .unwrap_or_else(|| self.ts.themes.values().next().unwrap());
+
+            let mut highlighter = HighlightLines::new(syntax, theme);
+            
+            for line in code_buffer.lines() {
+                let ranges = highlighter.highlight_line(line, &self.ps)
+                    .map_err(|e| format!("Highlight error: {}", e))?;
+                
+                raw_highlighted_lines.push(ranges.iter().map(|(s, t)| (*s, t.to_string())).collect());
+            }
         }
+
+        // 2. Wrap Phase
+        let mut lines = Vec::new();
+        for line_segments in raw_highlighted_lines {
+            let segments_ref: Vec<(SyntectStyle, &str)> = line_segments.iter()
+                .map(|(s, t)| (*s, t.as_str()))
+                .collect();
+            self.wrap_styled_line(&segments_ref, max_content_width, &mut lines);
+        }
+        
         if lines.is_empty() {
-            lines.push(String::new());
+            lines.push(vec![(SyntectStyle::default(), String::new())]);
         }
 
         let mut max_line_width: f32 = 0.0;
-        for line in &lines {
-            let (line_width, _) = self.measure.measure_text(
-                line,
-                self.theme.font_size_code,
-                true,
-                false,
-                false,
-                None,
-            );
-            max_line_width = max_line_width.max(line_width);
+        for line_segments in &lines {
+            let mut line_w = 0.0;
+            for (_style, text) in line_segments {
+                 let (w, _) = self.measure.measure_text(
+                    text,
+                    self.theme.font_size_code,
+                    true,
+                    false,
+                    false,
+                    None,
+                );
+                line_w += w;
+            }
+            max_line_width = max_line_width.max(line_w);
         }
 
         let line_height = self.theme.font_size_code * self.theme.line_height;
@@ -337,23 +507,38 @@ impl Renderer {
             self.theme.code_bg_color,
         ));
 
-        let code_text_color = self.theme.code_text_color.clone();
-        for (idx, line) in lines.iter().enumerate() {
+        for (idx, line_segments) in lines.iter().enumerate() {
             let y = self.cursor_y
                 + self.theme.code_padding_y
                 + self.theme.font_size_code
                 + idx as f32 * line_height;
 
-            self.draw_text_at(
-                x + self.theme.code_padding_x,
-                y,
-                line,
-                "monospace",
-                self.theme.font_size_code,
-                &code_text_color,
-                false,
-                false,
-            );
+            let mut current_x = x + self.theme.code_padding_x;
+
+            for (style, text) in line_segments {
+                let fill = format!("#{:02x}{:02x}{:02x}", style.foreground.r, style.foreground.g, style.foreground.b);
+                
+                self.draw_text_at(
+                    current_x,
+                    y,
+                    text,
+                    "monospace",
+                    self.theme.font_size_code,
+                    &fill,
+                    false,
+                    false,
+                );
+
+                let (w, _) = self.measure.measure_text(
+                    text,
+                    self.theme.font_size_code,
+                    true,
+                    false,
+                    false,
+                    None,
+                );
+                current_x += w;
+            }
         }
 
         self.cursor_y += block_height;
@@ -363,35 +548,55 @@ impl Renderer {
         Ok(())
     }
 
-    fn wrap_code_line(&mut self, line: &str, max_width: f32, out: &mut Vec<String>) {
-        if line.is_empty() {
-            out.push(String::new());
-            return;
+    fn wrap_styled_line(&mut self, segments: &[(SyntectStyle, &str)], max_width: f32, out: &mut Vec<Vec<(SyntectStyle, String)>>) {
+        if segments.is_empty() {
+             out.push(Vec::new());
+             return;
         }
 
-        let mut current = String::new();
-        for ch in line.chars() {
-            let mut candidate = current.clone();
-            candidate.push(ch);
+        let mut current_line: Vec<(SyntectStyle, String)> = Vec::new();
+        let mut current_line_width = 0.0;
 
-            let (candidate_width, _) = self.measure.measure_text(
-                &candidate,
-                self.theme.font_size_code,
-                true,
-                false,
-                false,
-                None,
-            );
+        for (style, text) in segments {
+            if text.is_empty() { continue; }
+            
+            let mut current_text = String::new();
+            
+            for ch in text.chars() {
+                let candidate_str = String::from(ch);
+                let (ch_width, _) = self.measure.measure_text(
+                    &candidate_str,
+                    self.theme.font_size_code,
+                    true,
+                    false,
+                    false,
+                    None,
+                );
 
-            if candidate_width > max_width && !current.is_empty() {
-                out.push(current);
-                current = ch.to_string();
-            } else {
-                current.push(ch);
+                if current_line_width + ch_width > max_width {
+                     if !current_text.is_empty() {
+                         current_line.push((*style, current_text));
+                     }
+                     out.push(current_line);
+                     current_line = Vec::new();
+                     current_line_width = 0.0;
+                     current_text = String::new();
+                }
+
+                current_text.push(ch);
+                current_line_width += ch_width;
+            }
+            
+            if !current_text.is_empty() {
+                current_line.push((*style, current_text));
             }
         }
-
-        out.push(current);
+        
+        if !current_line.is_empty() {
+            out.push(current_line);
+        } else if out.is_empty() {
+             out.push(Vec::new());
+        }
     }
 
     fn render_newline(&mut self) -> Result<(), String> {

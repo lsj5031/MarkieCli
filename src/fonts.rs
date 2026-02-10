@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, Weight};
 
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Hash, PartialEq, Eq, Clone)]
 struct MeasureKey {
     text: String,
     font_size_bits: u32,
@@ -12,20 +12,34 @@ struct MeasureKey {
     max_width_bits: Option<u32>,
 }
 
-pub struct TextMeasure {
+pub trait TextMeasure {
+    fn measure_text(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        is_code: bool,
+        is_bold: bool,
+        is_italic: bool,
+        max_width: Option<f32>,
+    ) -> (f32, f32);
+}
+
+pub struct CosmicTextMeasure {
     font_system: FontSystem,
     cache: HashMap<MeasureKey, (f32, f32)>,
 }
 
-impl TextMeasure {
+impl CosmicTextMeasure {
     pub fn new() -> Result<Self, String> {
         Ok(Self {
             font_system: FontSystem::new(),
             cache: HashMap::new(),
         })
     }
+}
 
-    pub fn measure_text(
+impl TextMeasure for CosmicTextMeasure {
+    fn measure_text(
         &mut self,
         text: &str,
         font_size: f32,
@@ -58,8 +72,8 @@ impl TextMeasure {
 
         buffer.set_size(
             &mut self.font_system,
-            Some(max_width.unwrap_or(f32::MAX)),
-            Some(f32::MAX),
+            max_width,
+            None,
         );
 
         let attrs = Attrs::new()
@@ -95,7 +109,7 @@ impl TextMeasure {
     }
 }
 
-impl Default for TextMeasure {
+impl Default for CosmicTextMeasure {
     fn default() -> Self {
         Self::new().expect("Failed to initialize font system")
     }

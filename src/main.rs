@@ -67,7 +67,8 @@ fn main() -> Result<(), String> {
     };
 
     // Render to SVG
-    let mut renderer = renderer::Renderer::new(theme, args.width)?;
+    let measure = fonts::CosmicTextMeasure::new()?;
+    let mut renderer = renderer::Renderer::new(theme, measure, args.width)?;
     let svg = renderer.render(&markdown)?;
 
     // Determine output format and save
