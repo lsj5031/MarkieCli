@@ -232,13 +232,14 @@ impl<T: TextMeasure> Renderer<T> {
                     HeadingLevel::H3 => 1.3,
                     _ => 1.15,
                 };
-                self.start_block(self.theme.margin_top * top_margin_scale);
+                self.start_block(self.theme.margin_top * top_margin_scale, true);
             }
             Tag::Paragraph => {
-                self.start_block(0.0);
+                let paragraph_needs_ascent = self.item_continuation_indent.is_none();
+                self.start_block(0.0, paragraph_needs_ascent);
             }
             Tag::CodeBlock(kind) => {
-                self.start_block(0.0);
+                self.start_block(0.0, false);
                 self.in_code_block = true;
                 self.code_block_buffer.clear();
                 self.code_block_lang = match kind {
@@ -248,7 +249,7 @@ impl<T: TextMeasure> Renderer<T> {
             }
             Tag::List(start) => {
                 if self.list_stack.is_empty() {
-                    self.start_block(0.0);
+                    self.start_block(self.theme.margin_top * 0.8, false);
                 } else if !self.at_line_start {
                     self.new_line();
                 }
@@ -260,7 +261,7 @@ impl<T: TextMeasure> Renderer<T> {
             }
             Tag::Item => self.start_list_item()?,
             Tag::BlockQuote(_) => {
-                self.start_block(0.0);
+                self.start_block(0.0, false);
                 self.start_blockquote();
             }
             Tag::Link { .. } => self.link_depth += 1,
@@ -290,9 +291,7 @@ impl<T: TextMeasure> Renderer<T> {
             TagEnd::List(_) => {
                 self.list_stack.pop();
                 if self.list_stack.is_empty() {
-                    self.add_margin(self.theme.margin_bottom);
-                    self.cursor_x = self.line_start_x();
-                    self.at_line_start = true;
+                    self.finish_block(self.theme.margin_bottom);
                 }
             }
             TagEnd::BlockQuote(_) => {
@@ -400,8 +399,8 @@ impl<T: TextMeasure> Renderer<T> {
 
         // Tighter background box based on font size
         let rect_height = self.theme.font_size_code + self.theme.code_padding_y;
-        // Align roughly to baseline - ascent + padding
-        let rect_y = self.cursor_y - self.theme.font_size_code * 0.8;
+        // Align roughly to baseline - ascent, then split padding top/bottom
+        let rect_y = self.cursor_y - self.theme.font_size_code * 0.8 - self.theme.code_padding_y / 2.0;
 
         self.svg_content.push_str(&format!(
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" />"#,
@@ -507,7 +506,9 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         let line_height = self.theme.font_size_code * self.theme.line_height;
-        let block_height = lines.len() as f32 * line_height + self.theme.code_padding_y * 2.0;
+        let block_height = (lines.len().saturating_sub(1) as f32) * line_height
+            + self.theme.font_size_code
+            + self.theme.code_padding_y * 2.0;
         let block_width = max_line_width + self.theme.code_padding_x * 2.0;
 
         self.svg_content.push_str(&format!(
@@ -523,7 +524,7 @@ impl<T: TextMeasure> Renderer<T> {
         for (idx, line_segments) in lines.iter().enumerate() {
             let y = self.cursor_y
                 + self.theme.code_padding_y
-                + self.theme.font_size_code
+                + self.theme.font_size_code * 0.8
                 + idx as f32 * line_height;
 
             let mut current_x = x + self.theme.code_padding_x;
@@ -639,7 +640,10 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn start_list_item(&mut self) -> Result<(), String> {
-        if !self.at_line_start {
+        if self.at_line_start {
+            // Move from list block top to first list-item baseline.
+            self.cursor_y += self.theme.font_size_base * 0.8;
+        } else {
             self.new_line();
         }
 
@@ -675,9 +679,6 @@ impl<T: TextMeasure> Renderer<T> {
 
     fn end_list_item(&mut self) {
         self.item_continuation_indent = None;
-        if !self.at_line_start {
-            self.new_line();
-        }
     }
 
     fn start_blockquote(&mut self) {
@@ -709,13 +710,19 @@ impl<T: TextMeasure> Renderer<T> {
         }
     }
 
-    fn start_block(&mut self, margin_top: f32) {
+    fn start_block(&mut self, margin_top: f32, add_ascent: bool) {
         if !self.svg_content.is_empty() {
             if !self.at_line_start {
-                self.new_line();
+                // Move from current baseline to current line bottom.
+                self.cursor_y += self.current_font_size() * 0.2;
+                self.cursor_x = self.line_start_x();
+                self.at_line_start = true;
             }
             self.add_margin(margin_top);
-        } else {
+        }
+
+        if add_ascent {
+            // Move from block top to first baseline.
             self.cursor_y += self.current_font_size() * 0.8;
         }
 
@@ -725,7 +732,10 @@ impl<T: TextMeasure> Renderer<T> {
 
     fn finish_block(&mut self, margin_bottom: f32) {
         if !self.at_line_start {
-            self.new_line();
+            // Move from current baseline to current line bottom.
+            self.cursor_y += self.current_font_size() * 0.2;
+            self.cursor_x = self.line_start_x();
+            self.at_line_start = true;
         }
 
         self.add_margin(margin_bottom);
@@ -734,7 +744,11 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn add_margin(&mut self, margin: f32) {
-        self.cursor_y += margin;
+        // Collapse consecutive vertical margins by applying only the delta
+        // between the new margin and the previously applied one.
+        if margin > self.last_margin_added {
+            self.cursor_y += margin - self.last_margin_added;
+        }
         self.last_margin_added = margin;
     }
 
@@ -839,6 +853,8 @@ impl<T: TextMeasure> Renderer<T> {
         bold: bool,
         italic: bool,
     ) {
+        self.last_margin_added = 0.0;
+
         let weight_attr = if bold { " font-weight=\"700\"" } else { "" };
         let style_attr = if italic { " font-style=\"italic\"" } else { "" };
 
