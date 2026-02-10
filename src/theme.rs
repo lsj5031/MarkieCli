@@ -121,8 +121,6 @@ impl Default for Theme {
 struct AlacrittyColors {
     primary: AlacrittyPrimary,
     normal: AlacrittyNormal,
-    // Optional because some themes might not define it
-    cursor: Option<AlacrittyCursor>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,19 +132,9 @@ struct AlacrittyPrimary {
 #[derive(Debug, Deserialize)]
 struct AlacrittyNormal {
     black: String,
-    red: String,
-    green: String,
-    yellow: String,
     blue: String,
-    magenta: String,
     cyan: String,
     white: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct AlacrittyCursor {
-    text: Option<String>,
-    cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
