@@ -53,7 +53,7 @@ cat README.md | markie - -o output.svg
 markie input.md -o output.png --width 1200
 ```
 
-### With custom theme
+### With custom theme (Base64 JSON)
 
 ```bash
 markie input.md -o output.svg --theme "eyJmb250X2ZhbWlseSI6ICJBcmlhbC..."
@@ -61,10 +61,11 @@ markie input.md -o output.svg --theme "eyJmb250X2ZhbWlseSI6ICJBcmlhbC..."
 
 ### With Alacritty theme (YAML or TOML)
 
-You can use any [Alacritty theme](https://github.com/alacritty/alacritty-theme) directly (both `.yaml` and `.toml` formats are supported):
+You can use any Alacritty theme directly (both `.yaml` and `.toml` formats are supported).
+A great collection of themes can be found at [alacritty-theme](https://github.com/alacritty/alacritty-theme).
 
 ```bash
-markie input.md -o output.svg --theme alacritty.toml
+markie input.md -o output.svg --theme solarized_light.toml
 ```
 
 ## Theme Format
@@ -73,19 +74,18 @@ Themes can be passed as:
 1. Base64-encoded JSON string
 2. Path to an Alacritty theme file (YAML or TOML)
 
-```json
-{
-  "background_color": "#ffffff",
-  "text_color": "#333333",
-  "font_family": "Arial",
-  "font_size": 16,
-  "line_height": 1.6,
-  "heading_colors": {
-    "h1": "#000000",
-    "h2": "#333333",
-    "h3": "#666666"
-  }
-}
+Example of Alacritty TOML theme:
+
+```toml
+[colors.primary]
+background = '#fdf6e3'
+foreground = '#586e75'
+
+[colors.normal]
+black   = '#073642'
+red     = '#dc322f'
+green   = '#859900'
+# ... other colors
 ```
 
 ## Building
@@ -102,7 +102,9 @@ The binary will be available at `target/release/markie`.
 - `pulldown-cmark`: Markdown parsing
 - `resvg`: SVG rendering
 - `tiny-skia`: Software rendering
+- `syntect`: Syntax highlighting
 - `clap`: Command-line argument parsing
+- `serde`: Serialization/Deserialization (JSON, YAML, TOML)
 
 ## License
 
