@@ -11,11 +11,11 @@ const GITHUB_LIGHT_QUOTE_TEXT: &str = "#57606a";
 
 const FONT_SIZE_BASE: f32 = 16.0;
 const FONT_SIZE_CODE: f32 = 13.0;
-const LINE_HEIGHT: f32 = 1.5;
+const LINE_HEIGHT: f32 = 1.6;
 const MARGIN: f32 = 16.0;
 const PADDING: f32 = 32.0;
-const CODE_PADDING_X: f32 = 10.0;
-const CODE_PADDING_Y: f32 = 6.0;
+const CODE_PADDING_X: f32 = 12.0;
+const CODE_PADDING_Y: f32 = 8.0;
 const CODE_RADIUS: f32 = 4.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

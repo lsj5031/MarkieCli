@@ -21,12 +21,6 @@ A pure Rust Markdown to SVG/PNG renderer that converts Markdown documents into b
 cargo install --path .
 ```
 
-### From crates.io (when published)
-
-```bash
-cargo install markie
-```
-
 ## Usage
 
 ### Basic usage

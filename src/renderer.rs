@@ -108,10 +108,10 @@ mod tests {
     }
 }
 
-const LIST_INDENT: f32 = 24.0;
-const LIST_MARKER_GAP: f32 = 8.0;
-const QUOTE_INDENT: f32 = 20.0;
-const QUOTE_INNER_PADDING: f32 = 12.0;
+const LIST_INDENT_RATIO: f32 = 1.5;
+const LIST_MARKER_GAP_RATIO: f32 = 0.5;
+const QUOTE_INDENT_RATIO: f32 = 1.25;
+const QUOTE_INNER_PADDING_RATIO: f32 = 0.75;
 
 struct ListState {
     ordered: bool,
@@ -145,6 +145,8 @@ pub struct Renderer<T: TextMeasure = crate::fonts::CosmicTextMeasure> {
     in_code_block: bool,
     code_block_buffer: String,
     code_block_lang: Option<String>,
+    
+    last_margin_added: f32,
 
     ps: SyntaxSet,
     ts: ThemeSet,
@@ -176,6 +178,7 @@ impl<T: TextMeasure> Renderer<T> {
             in_code_block: false,
             code_block_buffer: String::new(),
             code_block_lang: None,
+            last_margin_added: 0.0,
             ps,
             ts,
         })
@@ -215,21 +218,27 @@ impl<T: TextMeasure> Renderer<T> {
             }
         }
 
-        let total_height = self.cursor_y + self.theme.padding_y;
+        let total_height = self.cursor_y + self.theme.padding_y - self.last_margin_added;
         Ok(self.finalize_svg(total_height))
     }
 
     fn handle_start_tag(&mut self, tag: Tag) -> Result<(), String> {
         match tag {
             Tag::Heading { level, .. } => {
-                self.start_block(self.theme.margin_top);
                 self.heading_level = Some(level);
+                let top_margin_scale = match level {
+                    HeadingLevel::H1 => 1.6,
+                    HeadingLevel::H2 => 1.45,
+                    HeadingLevel::H3 => 1.3,
+                    _ => 1.15,
+                };
+                self.start_block(self.theme.margin_top * top_margin_scale);
             }
             Tag::Paragraph => {
-                self.start_block(self.theme.margin_top);
+                self.start_block(0.0);
             }
             Tag::CodeBlock(kind) => {
-                self.start_block(self.theme.margin_top);
+                self.start_block(0.0);
                 self.in_code_block = true;
                 self.code_block_buffer.clear();
                 self.code_block_lang = match kind {
@@ -239,7 +248,7 @@ impl<T: TextMeasure> Renderer<T> {
             }
             Tag::List(start) => {
                 if self.list_stack.is_empty() {
-                    self.start_block(self.theme.margin_top);
+                    self.start_block(0.0);
                 } else if !self.at_line_start {
                     self.new_line();
                 }
@@ -251,7 +260,7 @@ impl<T: TextMeasure> Renderer<T> {
             }
             Tag::Item => self.start_list_item()?,
             Tag::BlockQuote(_) => {
-                self.start_block(self.theme.margin_top);
+                self.start_block(0.0);
                 self.start_blockquote();
             }
             Tag::Link { .. } => self.link_depth += 1,
@@ -266,8 +275,12 @@ impl<T: TextMeasure> Renderer<T> {
     fn handle_end_tag(&mut self, tag_end: TagEnd) -> Result<(), String> {
         match tag_end {
             TagEnd::Heading(_) => {
+                let bottom_margin_scale = match self.heading_level {
+                    Some(HeadingLevel::H1) | Some(HeadingLevel::H2) => 0.65,
+                    _ => 1.0,
+                };
+                self.finish_block(self.theme.margin_bottom * bottom_margin_scale);
                 self.heading_level = None;
-                self.finish_block(self.theme.margin_bottom);
             }
             TagEnd::Paragraph => {
                 self.finish_block(self.theme.margin_bottom);
@@ -412,7 +425,7 @@ impl<T: TextMeasure> Renderer<T> {
             false,
         );
 
-        let (space_width, _) =
+        let (_, _) =
             self.measure
                 .measure_text(" ", self.current_font_size(), false, false, false, None);
         self.cursor_x += total_width;
@@ -653,7 +666,7 @@ impl<T: TextMeasure> Renderer<T> {
             false,
         );
 
-        self.item_continuation_indent = Some(marker_x + marker_width + LIST_MARKER_GAP);
+        self.item_continuation_indent = Some(marker_x + marker_width + self.theme.font_size_base * LIST_MARKER_GAP_RATIO);
         self.cursor_x = self.item_continuation_indent.unwrap_or(self.line_start_x());
         self.at_line_start = true;
 
@@ -669,7 +682,9 @@ impl<T: TextMeasure> Renderer<T> {
 
     fn start_blockquote(&mut self) {
         let depth = self.blockquotes.len() as f32;
-        let border_x = self.theme.padding_x + depth * QUOTE_INDENT + QUOTE_INNER_PADDING * 0.5;
+        let border_x = self.theme.padding_x
+            + depth * self.theme.font_size_base * QUOTE_INDENT_RATIO
+            + self.theme.font_size_base * QUOTE_INNER_PADDING_RATIO * 0.5;
         let start_y = self.cursor_y - self.theme.font_size_base * 0.8;
 
         self.blockquotes.push(QuoteState { border_x, start_y });
@@ -700,6 +715,8 @@ impl<T: TextMeasure> Renderer<T> {
                 self.new_line();
             }
             self.add_margin(margin_top);
+        } else {
+            self.cursor_y += self.current_font_size() * 0.8;
         }
 
         self.cursor_x = self.line_start_x();
@@ -718,6 +735,7 @@ impl<T: TextMeasure> Renderer<T> {
 
     fn add_margin(&mut self, margin: f32) {
         self.cursor_y += margin;
+        self.last_margin_added = margin;
     }
 
     fn new_line(&mut self) {
@@ -725,17 +743,26 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn advance_line(&mut self, font_size: f32) {
-        self.cursor_y += font_size * self.theme.line_height;
+        self.cursor_y += font_size * self.current_line_height();
         self.cursor_x = self.line_start_x();
         self.at_line_start = true;
     }
 
+    fn current_line_height(&self) -> f32 {
+        if self.heading_level.is_some() {
+            // Tighter line height for headings
+            1.25
+        } else {
+            self.theme.line_height
+        }
+    }
+
     fn current_font_size(&self) -> f32 {
         match self.heading_level {
-            Some(HeadingLevel::H1) => self.theme.font_size_base * 2.0,
-            Some(HeadingLevel::H2) => self.theme.font_size_base * 1.6,
-            Some(HeadingLevel::H3) => self.theme.font_size_base * 1.35,
-            Some(HeadingLevel::H4) => self.theme.font_size_base * 1.2,
+            Some(HeadingLevel::H1) => self.theme.font_size_base * 2.2,
+            Some(HeadingLevel::H2) => self.theme.font_size_base * 1.8,
+            Some(HeadingLevel::H3) => self.theme.font_size_base * 1.5,
+            Some(HeadingLevel::H4) => self.theme.font_size_base * 1.25,
             Some(HeadingLevel::H5) => self.theme.font_size_base * 1.1,
             Some(HeadingLevel::H6) => self.theme.font_size_base,
             None => self.theme.font_size_base,
@@ -777,7 +804,7 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn list_marker_x(&self) -> f32 {
-        let depth_offset = self.list_stack.len().saturating_sub(1) as f32 * LIST_INDENT;
+        let depth_offset = self.list_stack.len().saturating_sub(1) as f32 * self.theme.font_size_base * LIST_INDENT_RATIO;
         self.base_left_indent() + depth_offset
     }
 
@@ -786,8 +813,8 @@ impl<T: TextMeasure> Renderer<T> {
             self.theme.padding_x
         } else {
             self.theme.padding_x
-                + self.blockquotes.len() as f32 * QUOTE_INDENT
-                + QUOTE_INNER_PADDING
+                + self.blockquotes.len() as f32 * self.theme.font_size_base * QUOTE_INDENT_RATIO
+                + self.theme.font_size_base * QUOTE_INNER_PADDING_RATIO
         }
     }
 
