@@ -59,9 +59,19 @@ markie input.md -o output.png --width 1200
 markie input.md -o output.svg --theme "eyJmb250X2ZhbWlseSI6ICJBcmlhbC..."
 ```
 
+### With Alacritty theme (YAML or TOML)
+
+You can use any [Alacritty theme](https://github.com/alacritty/alacritty-theme) directly (both `.yaml` and `.toml` formats are supported):
+
+```bash
+markie input.md -o output.svg --theme alacritty.toml
+```
+
 ## Theme Format
 
-Themes are passed as base64-encoded JSON. The default theme includes:
+Themes can be passed as:
+1. Base64-encoded JSON string
+2. Path to an Alacritty theme file (YAML or TOML)
 
 ```json
 {

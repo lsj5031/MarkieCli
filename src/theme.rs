@@ -117,6 +117,43 @@ impl Default for Theme {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct AlacrittyColors {
+    primary: AlacrittyPrimary,
+    normal: AlacrittyNormal,
+    // Optional because some themes might not define it
+    cursor: Option<AlacrittyCursor>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlacrittyPrimary {
+    background: String,
+    foreground: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlacrittyNormal {
+    black: String,
+    red: String,
+    green: String,
+    yellow: String,
+    blue: String,
+    magenta: String,
+    cyan: String,
+    white: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlacrittyCursor {
+    text: Option<String>,
+    cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlacrittyTheme {
+    colors: AlacrittyColors,
+}
+
 impl Theme {
     pub fn github_light() -> Self {
         Theme {
@@ -153,5 +190,55 @@ impl Theme {
             .map_err(|e| format!("Invalid UTF-8 in decoded data: {}", e))?;
 
         serde_json::from_str(json_str).map_err(|e| format!("Failed to parse theme JSON: {}", e))
+    }
+
+    pub fn from_alacritty_yaml(content: &str) -> Result<Self, String> {
+        let alacritty: AlacrittyTheme = serde_yaml::from_str(content)
+            .map_err(|e| format!("Failed to parse Alacritty YAML: {}", e))?;
+
+        Self::from_alacritty_theme(alacritty)
+    }
+
+    pub fn from_alacritty_toml(content: &str) -> Result<Self, String> {
+        let alacritty: AlacrittyTheme = toml::from_str(content)
+            .map_err(|e| format!("Failed to parse Alacritty TOML: {}", e))?;
+
+        Self::from_alacritty_theme(alacritty)
+    }
+
+    fn from_alacritty_theme(alacritty: AlacrittyTheme) -> Result<Self, String> {
+        // Map Alacritty colors to Markie theme
+        let colors = alacritty.colors;
+        
+        Ok(Theme {
+            background_color: colors.primary.background,
+            text_color: colors.primary.foreground.clone(),
+            // Using blue for headings usually looks okay, or magenta/cyan for flair
+            heading_color: colors.normal.blue.clone(),
+            // Cyan or Blue are common for links
+            link_color: colors.normal.cyan,
+            // Use black (often a dark grey in themes) for code bg if light theme, 
+            // but Alacritty themes are often dark. 
+            // Let's try to derive a code background. 
+            // Often "black" in Alacritty is the "surface" color.
+            code_bg_color: colors.normal.black,
+            code_text_color: colors.primary.foreground.clone(),
+            
+            // Use a dimmed color for quote borders, maybe white/grey
+            quote_border_color: colors.normal.white,
+            quote_text_color: colors.primary.foreground, // Quotes use normal text color
+
+            // Defaults for sizing
+            font_size_base: FONT_SIZE_BASE,
+            font_size_code: FONT_SIZE_CODE,
+            line_height: LINE_HEIGHT,
+            margin_top: MARGIN,
+            margin_bottom: MARGIN,
+            padding_x: PADDING,
+            padding_y: PADDING,
+            code_padding_x: CODE_PADDING_X,
+            code_padding_y: CODE_PADDING_Y,
+            code_radius: CODE_RADIUS,
+        })
     }
 }

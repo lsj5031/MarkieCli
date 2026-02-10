@@ -20,7 +20,7 @@ struct Args {
     #[arg(short, long, value_name = "OUTPUT")]
     output: PathBuf,
 
-    /// Base64-encoded JSON theme (optional)
+    /// Base64-encoded JSON theme (optional), or path to Alacritty YAML theme file
     #[arg(short, long, value_name = "THEME")]
     theme: Option<String>,
 
@@ -33,8 +33,24 @@ fn main() -> Result<(), String> {
     let args = Args::parse();
 
     // Load theme
-    let theme = if let Some(ref theme_base64) = args.theme {
-        theme::Theme::from_base64(theme_base64)?
+    let theme = if let Some(ref theme_str) = args.theme {
+        let path = Path::new(theme_str);
+        if path.exists() && path.is_file() {
+            let content = std::fs::read_to_string(path)
+                .map_err(|e| format!("Failed to read theme file: {}", e))?;
+            
+            // Try TOML first (since Alacritty is moving to TOML), then YAML
+            if let Ok(theme) = theme::Theme::from_alacritty_toml(&content) {
+                theme
+            } else if let Ok(theme) = theme::Theme::from_alacritty_yaml(&content) {
+                theme
+            } else {
+                // If neither parses, try to return one of the errors or a generic one
+                return Err("Failed to parse theme file as TOML or YAML".to_string());
+            }
+        } else {
+            theme::Theme::from_base64(theme_str)?
+        }
     } else {
         theme::Theme::default()
     };
