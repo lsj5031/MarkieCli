@@ -1,6 +1,9 @@
 use crate::fonts::TextMeasure;
 use crate::theme::Theme;
-use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use base64::Engine;
+use imagesize;
+use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use std::path::{Path, PathBuf};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style as SyntectStyle, ThemeSet};
 use syntect::parsing::SyntaxSet;
@@ -8,8 +11,8 @@ use syntect::parsing::SyntaxSet;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::Theme;
     use crate::fonts::TextMeasure;
+    use crate::theme::Theme;
 
     // Mock TextMeasure for testing
     struct MockMeasure;
@@ -41,17 +44,17 @@ mod tests {
         let mut theme = Theme::default();
         theme.code_padding_y = 10.0;
         theme.font_size_code = 14.0;
-        
+
         let measure = MockMeasure;
         let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
-        
+
         // This should trigger render_inline_code
         let markdown = "`code`";
         let result = renderer.render(markdown);
-        
+
         assert!(result.is_ok());
         let svg = result.unwrap();
-        
+
         // Check if rect height is calculated correctly according to the new logic
         // rect_height = font_size_code + code_padding_y
         // 14.0 + 10.0 = 24.0
@@ -63,48 +66,48 @@ mod tests {
         let theme = Theme::default();
         let measure = MockMeasure;
         let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
-        
+
         let markdown = "```rust\nfn main() {}\n```";
         let result = renderer.render(markdown);
-        
+
         assert!(result.is_ok());
         let svg = result.unwrap();
-        
+
         // Check for syntax highlighting colors
-        // Rust keywords like 'fn' should be colored. 
+        // Rust keywords like 'fn' should be colored.
         // In Solarized themes (used in logic), keywords are often colored.
         // We look for fill attributes that are NOT the default text color
-        
+
         // Note: The specific color depends on the syntect theme loaded.
         // But we can check that we have multiple different fill colors in the output
         // or specifically that we have spans/tspan/text with fill attributes.
-        
+
         // In the implementation, draw_text_at uses text tag with fill attribute.
         // Let's verify we have text tags with fill colors.
         assert!(svg.contains("<text"));
         assert!(svg.contains("fill=\"#"));
     }
-    
+
     #[test]
     fn test_syntax_highlighting_language_detection() {
-         let theme = Theme::default();
-         let measure = MockMeasure;
-         let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
-         
-         // Python code
-         let markdown = "```python\ndef foo():\n    pass\n```";
-         let result = renderer.render(markdown);
-         assert!(result.is_ok());
-         let svg_py = result.unwrap();
-         
-         // Rust code
-         let markdown_rs = "```rust\nfn main() {}\n```";
-         let result_rs = renderer.render(markdown_rs);
-         assert!(result_rs.is_ok());
-         let svg_rs = result_rs.unwrap();
-         
-         // The SVGs should be different (different content and potentially different colors)
-         assert_ne!(svg_py, svg_rs);
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        // Python code
+        let markdown = "```python\ndef foo():\n    pass\n```";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg_py = result.unwrap();
+
+        // Rust code
+        let markdown_rs = "```rust\nfn main() {}\n```";
+        let result_rs = renderer.render(markdown_rs);
+        assert!(result_rs.is_ok());
+        let svg_rs = result_rs.unwrap();
+
+        // The SVGs should be different (different content and potentially different colors)
+        assert_ne!(svg_py, svg_rs);
     }
 }
 
@@ -116,11 +119,39 @@ const QUOTE_INNER_PADDING_RATIO: f32 = 0.75;
 struct ListState {
     ordered: bool,
     next_index: usize,
+    needs_ascent: bool,
+}
+
+struct PendingListMarker {
+    marker: String,
+    marker_x: f32,
 }
 
 struct QuoteState {
     border_x: f32,
     start_y: f32,
+}
+
+struct ImageState {
+    src: String,
+    alt_text: String,
+}
+
+struct TableCellData {
+    text: String,
+}
+
+struct TableRowData {
+    cells: Vec<TableCellData>,
+    is_header: bool,
+}
+
+struct TableState {
+    alignments: Vec<Alignment>,
+    rows: Vec<TableRowData>,
+    current_row: Option<TableRowData>,
+    current_cell: Option<TableCellData>,
+    in_head: bool,
 }
 
 pub struct Renderer<T: TextMeasure = crate::fonts::CosmicTextMeasure> {
@@ -142,18 +173,41 @@ pub struct Renderer<T: TextMeasure = crate::fonts::CosmicTextMeasure> {
 
     blockquotes: Vec<QuoteState>,
 
+    current_image: Option<ImageState>,
+
+    pending_list_marker: Option<PendingListMarker>,
+
+    in_table: bool,
+    table_state: Option<TableState>,
+
+    in_strikethrough: bool,
+    in_display_math: bool,
+    pending_math_block: Option<String>,
+
     in_code_block: bool,
     code_block_buffer: String,
     code_block_lang: Option<String>,
-    
+
     last_margin_added: f32,
 
     ps: SyntaxSet,
     ts: ThemeSet,
+
+    base_path: Option<PathBuf>,
 }
 
 impl<T: TextMeasure> Renderer<T> {
+    #[allow(dead_code)]
     pub fn new(theme: Theme, measure: T, width: f32) -> Result<Self, String> {
+        Self::new_with_base_path(theme, measure, width, None)
+    }
+
+    pub fn new_with_base_path(
+        theme: Theme,
+        measure: T,
+        width: f32,
+        base_path: Option<PathBuf>,
+    ) -> Result<Self, String> {
         let padding_x = theme.padding_x;
         let padding_y = theme.padding_y;
 
@@ -175,17 +229,32 @@ impl<T: TextMeasure> Renderer<T> {
             list_stack: Vec::new(),
             item_continuation_indent: None,
             blockquotes: Vec::new(),
+            current_image: None,
+            pending_list_marker: None,
+            in_table: false,
+            table_state: None,
+            in_strikethrough: false,
+            in_display_math: false,
+            pending_math_block: None,
             in_code_block: false,
             code_block_buffer: String::new(),
             code_block_lang: None,
             last_margin_added: 0.0,
             ps,
             ts,
+            base_path,
         })
     }
 
     pub fn render(&mut self, markdown: &str) -> Result<String, String> {
-        let parser = Parser::new(markdown);
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_TABLES);
+        options.insert(Options::ENABLE_STRIKETHROUGH);
+        options.insert(Options::ENABLE_TASKLISTS);
+        options.insert(Options::ENABLE_MATH);
+        options.insert(Options::ENABLE_SMART_PUNCTUATION);
+
+        let parser = Parser::new_ext(markdown, options);
 
         for event in parser {
             if self.in_code_block {
@@ -210,12 +279,28 @@ impl<T: TextMeasure> Renderer<T> {
             match event {
                 Event::Start(tag) => self.handle_start_tag(tag)?,
                 Event::End(tag_end) => self.handle_end_tag(tag_end)?,
-                Event::Text(text) => self.render_text(&text)?,
+                Event::Text(text) => {
+                    if self.in_table {
+                        self.render_table_text(&text);
+                    } else if self.in_display_math {
+                        self.append_math_text(&text);
+                    } else {
+                        self.render_text(&text)?;
+                    }
+                }
                 Event::Code(code) => self.render_inline_code(&code)?,
-                Event::SoftBreak | Event::HardBreak => self.render_newline()?,
+                Event::InlineMath(math) => self.render_inline_math(&math)?,
+                Event::DisplayMath(math) => self.render_display_math(&math)?,
+                Event::SoftBreak => self.render_soft_break()?,
+                Event::HardBreak => self.render_newline()?,
+                Event::TaskListMarker(checked) => self.render_task_marker(checked)?,
                 Event::Rule => self.render_horizontal_rule()?,
                 _ => {}
             }
+        }
+
+        if self.in_table {
+            self.finish_table()?;
         }
 
         let total_height = self.cursor_y + self.theme.padding_y - self.last_margin_added;
@@ -254,9 +339,11 @@ impl<T: TextMeasure> Renderer<T> {
                     self.new_line();
                 }
 
+                let needs_ascent = self.list_stack.is_empty();
                 self.list_stack.push(ListState {
                     ordered: start.is_some(),
                     next_index: start.unwrap_or(1) as usize,
+                    needs_ascent,
                 });
             }
             Tag::Item => self.start_list_item()?,
@@ -265,8 +352,21 @@ impl<T: TextMeasure> Renderer<T> {
                 self.start_blockquote();
             }
             Tag::Link { .. } => self.link_depth += 1,
+            Tag::Image { dest_url, .. } => {
+                self.current_image = Some(ImageState {
+                    src: dest_url.to_string(),
+                    alt_text: String::new(),
+                });
+            }
+            Tag::Table(alignments) => {
+                self.start_table(alignments.to_vec());
+            }
+            Tag::TableHead => self.start_table_head(),
+            Tag::TableRow => self.start_table_row(),
+            Tag::TableCell => self.start_table_cell(),
             Tag::Emphasis => self.emphasis_depth += 1,
             Tag::Strong => self.strong_depth += 1,
+            Tag::Strikethrough => self.in_strikethrough = true,
             _ => {}
         }
 
@@ -284,7 +384,14 @@ impl<T: TextMeasure> Renderer<T> {
                 self.heading_level = None;
             }
             TagEnd::Paragraph => {
-                self.finish_block(self.theme.margin_bottom);
+                let is_list_paragraph =
+                    !self.list_stack.is_empty() && self.item_continuation_indent.is_some();
+                let margin = if is_list_paragraph {
+                    0.0
+                } else {
+                    self.theme.margin_bottom
+                };
+                self.finish_block(margin);
             }
             TagEnd::CodeBlock => {}
             TagEnd::Item => self.end_list_item(),
@@ -301,8 +408,18 @@ impl<T: TextMeasure> Renderer<T> {
                 self.at_line_start = true;
             }
             TagEnd::Link => self.link_depth = self.link_depth.saturating_sub(1),
+            TagEnd::Image => {
+                self.finish_image()?;
+            }
+            TagEnd::Table => {
+                self.finish_table()?;
+            }
+            TagEnd::TableHead => self.finish_table_head(),
+            TagEnd::TableRow => self.finish_table_row(),
+            TagEnd::TableCell => self.finish_table_cell(),
             TagEnd::Emphasis => self.emphasis_depth = self.emphasis_depth.saturating_sub(1),
             TagEnd::Strong => self.strong_depth = self.strong_depth.saturating_sub(1),
+            TagEnd::Strikethrough => self.in_strikethrough = false,
             _ => {}
         }
 
@@ -310,6 +427,11 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn render_text(&mut self, text: &str) -> Result<(), String> {
+        if let Some(image) = self.current_image.as_mut() {
+            image.alt_text.push_str(text);
+            return Ok(());
+        }
+
         if text.is_empty() {
             return Ok(());
         }
@@ -370,6 +492,21 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         let fill = self.current_fill().to_string();
+        if self.pending_list_marker.is_some() && !self.at_line_start {
+            if let Some(pending) = self.pending_list_marker.take() {
+                self.draw_text_at(
+                    pending.marker_x,
+                    self.cursor_y,
+                    &pending.marker,
+                    "sans-serif",
+                    self.theme.font_size_base,
+                    &fill,
+                    false,
+                    false,
+                );
+            }
+        }
+
         self.draw_text_at(
             self.cursor_x,
             self.cursor_y,
@@ -380,6 +517,18 @@ impl<T: TextMeasure> Renderer<T> {
             is_bold,
             is_italic,
         );
+
+        if self.in_strikethrough {
+            let line_y = self.cursor_y - font_size * 0.32;
+            self.svg_content.push_str(&format!(
+                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
+                self.cursor_x,
+                line_y,
+                self.cursor_x + token_width,
+                line_y,
+                fill,
+            ));
+        }
 
         self.cursor_x += token_width;
         self.at_line_start = false;
@@ -400,7 +549,8 @@ impl<T: TextMeasure> Renderer<T> {
         // Tighter background box based on font size
         let rect_height = self.theme.font_size_code + self.theme.code_padding_y;
         // Align roughly to baseline - ascent, then split padding top/bottom
-        let rect_y = self.cursor_y - self.theme.font_size_code * 0.8 - self.theme.code_padding_y / 2.0;
+        let rect_y =
+            self.cursor_y - self.theme.font_size_code * 0.8 - self.theme.code_padding_y / 2.0;
 
         self.svg_content.push_str(&format!(
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" />"#,
@@ -433,6 +583,42 @@ impl<T: TextMeasure> Renderer<T> {
         Ok(())
     }
 
+    fn render_inline_math(&mut self, math: &str) -> Result<(), String> {
+        self.render_inline_code(math)
+    }
+
+    fn render_display_math(&mut self, math: &str) -> Result<(), String> {
+        self.in_display_math = true;
+        self.pending_math_block = Some(math.to_string());
+        self.render_math_block()?;
+        Ok(())
+    }
+
+    fn append_math_text(&mut self, text: &str) {
+        if let Some(existing) = self.pending_math_block.as_mut() {
+            existing.push_str(text);
+        } else {
+            self.pending_math_block = Some(text.to_string());
+        }
+    }
+
+    fn render_math_block(&mut self) -> Result<(), String> {
+        let Some(math) = self.pending_math_block.take() else {
+            self.in_display_math = false;
+            return Ok(());
+        };
+
+        if !self.at_line_start {
+            self.new_line();
+        }
+
+        self.start_block(self.theme.margin_top, false);
+        self.render_inline_code(&math)?;
+        self.finish_block(self.theme.margin_bottom);
+        self.in_display_math = false;
+        Ok(())
+    }
+
     fn render_code_block(&mut self) -> Result<(), String> {
         let x = self.line_start_x();
         let max_content_width = (self.right_edge() - x - self.theme.code_padding_x * 2.0)
@@ -444,46 +630,64 @@ impl<T: TextMeasure> Renderer<T> {
 
         {
             let lang = self.code_block_lang.as_deref().unwrap_or("txt");
-            let syntax = self.ps.find_syntax_by_token(lang)
+            let syntax = self
+                .ps
+                .find_syntax_by_token(lang)
                 .or_else(|| self.ps.find_syntax_by_extension(lang))
                 .unwrap_or_else(|| self.ps.find_syntax_plain_text());
-            
+
             let is_dark = {
                 let hex = self.theme.code_bg_color.trim_start_matches('#');
                 if hex.len() == 6 {
-                     let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(255);
-                     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
-                     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(255);
-                     (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) < 128.0
+                    let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(255);
+                    let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
+                    let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(255);
+                    (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) < 128.0
                 } else {
-                     false
+                    false
                 }
             };
 
-            let theme_name = if is_dark { "Solarized (dark)" } else { "Solarized (light)" };
-            let theme = self.ts.themes.get(theme_name)
-                .or_else(|| self.ts.themes.get(if is_dark { "base16-ocean.dark" } else { "base16-ocean.light" }))
+            let theme_name = if is_dark {
+                "Solarized (dark)"
+            } else {
+                "Solarized (light)"
+            };
+            let theme = self
+                .ts
+                .themes
+                .get(theme_name)
+                .or_else(|| {
+                    self.ts.themes.get(if is_dark {
+                        "base16-ocean.dark"
+                    } else {
+                        "base16-ocean.light"
+                    })
+                })
                 .unwrap_or_else(|| self.ts.themes.values().next().unwrap());
 
             let mut highlighter = HighlightLines::new(syntax, theme);
-            
+
             for line in code_buffer.lines() {
-                let ranges = highlighter.highlight_line(line, &self.ps)
+                let ranges = highlighter
+                    .highlight_line(line, &self.ps)
                     .map_err(|e| format!("Highlight error: {}", e))?;
-                
-                raw_highlighted_lines.push(ranges.iter().map(|(s, t)| (*s, t.to_string())).collect());
+
+                raw_highlighted_lines
+                    .push(ranges.iter().map(|(s, t)| (*s, t.to_string())).collect());
             }
         }
 
         // 2. Wrap Phase
         let mut lines = Vec::new();
         for line_segments in raw_highlighted_lines {
-            let segments_ref: Vec<(SyntectStyle, &str)> = line_segments.iter()
+            let segments_ref: Vec<(SyntectStyle, &str)> = line_segments
+                .iter()
                 .map(|(s, t)| (*s, t.as_str()))
                 .collect();
             self.wrap_styled_line(&segments_ref, max_content_width, &mut lines);
         }
-        
+
         if lines.is_empty() {
             lines.push(vec![(SyntectStyle::default(), String::new())]);
         }
@@ -492,7 +696,7 @@ impl<T: TextMeasure> Renderer<T> {
         for line_segments in &lines {
             let mut line_w = 0.0;
             for (_style, text) in line_segments {
-                 let (w, _) = self.measure.measure_text(
+                let (w, _) = self.measure.measure_text(
                     text,
                     self.theme.font_size_code,
                     true,
@@ -530,8 +734,11 @@ impl<T: TextMeasure> Renderer<T> {
             let mut current_x = x + self.theme.code_padding_x;
 
             for (style, text) in line_segments {
-                let fill = format!("#{:02x}{:02x}{:02x}", style.foreground.r, style.foreground.g, style.foreground.b);
-                
+                let fill = format!(
+                    "#{:02x}{:02x}{:02x}",
+                    style.foreground.r, style.foreground.g, style.foreground.b
+                );
+
                 self.draw_text_at(
                     current_x,
                     y,
@@ -562,20 +769,27 @@ impl<T: TextMeasure> Renderer<T> {
         Ok(())
     }
 
-    fn wrap_styled_line(&mut self, segments: &[(SyntectStyle, &str)], max_width: f32, out: &mut Vec<Vec<(SyntectStyle, String)>>) {
+    fn wrap_styled_line(
+        &mut self,
+        segments: &[(SyntectStyle, &str)],
+        max_width: f32,
+        out: &mut Vec<Vec<(SyntectStyle, String)>>,
+    ) {
         if segments.is_empty() {
-             out.push(Vec::new());
-             return;
+            out.push(Vec::new());
+            return;
         }
 
         let mut current_line: Vec<(SyntectStyle, String)> = Vec::new();
         let mut current_line_width = 0.0;
 
         for (style, text) in segments {
-            if text.is_empty() { continue; }
-            
+            if text.is_empty() {
+                continue;
+            }
+
             let mut current_text = String::new();
-            
+
             for ch in text.chars() {
                 let candidate_str = String::from(ch);
                 let (ch_width, _) = self.measure.measure_text(
@@ -588,32 +802,49 @@ impl<T: TextMeasure> Renderer<T> {
                 );
 
                 if current_line_width + ch_width > max_width {
-                     if !current_text.is_empty() {
-                         current_line.push((*style, current_text));
-                     }
-                     out.push(current_line);
-                     current_line = Vec::new();
-                     current_line_width = 0.0;
-                     current_text = String::new();
+                    if !current_text.is_empty() {
+                        current_line.push((*style, current_text));
+                    }
+                    out.push(current_line);
+                    current_line = Vec::new();
+                    current_line_width = 0.0;
+                    current_text = String::new();
                 }
 
                 current_text.push(ch);
                 current_line_width += ch_width;
             }
-            
+
             if !current_text.is_empty() {
                 current_line.push((*style, current_text));
             }
         }
-        
+
         if !current_line.is_empty() {
             out.push(current_line);
         } else if out.is_empty() {
-             out.push(Vec::new());
+            out.push(Vec::new());
         }
     }
 
     fn render_newline(&mut self) -> Result<(), String> {
+        self.new_line();
+        Ok(())
+    }
+
+    fn render_soft_break(&mut self) -> Result<(), String> {
+        if self.at_line_start {
+            return Ok(());
+        }
+
+        let font_size = self.current_font_size();
+        if let Some(state) = self.list_stack.last() {
+            if !state.needs_ascent {
+                self.advance_line(font_size);
+                return Ok(());
+            }
+        }
+
         self.new_line();
         Ok(())
     }
@@ -639,18 +870,365 @@ impl<T: TextMeasure> Renderer<T> {
         Ok(())
     }
 
+    fn start_table(&mut self, alignments: Vec<Alignment>) {
+        if !self.at_line_start {
+            self.new_line();
+        }
+        self.start_block(self.theme.margin_top, false);
+        self.in_table = true;
+        self.table_state = Some(TableState {
+            alignments,
+            rows: Vec::new(),
+            current_row: None,
+            current_cell: None,
+            in_head: false,
+        });
+    }
+
+    fn start_table_head(&mut self) {
+        if let Some(state) = self.table_state.as_mut() {
+            state.in_head = true;
+        }
+    }
+
+    fn finish_table_head(&mut self) {
+        if let Some(state) = self.table_state.as_mut() {
+            state.in_head = false;
+        }
+    }
+
+    fn start_table_row(&mut self) {
+        if let Some(state) = self.table_state.as_mut() {
+            state.current_row = Some(TableRowData {
+                cells: Vec::new(),
+                is_header: state.in_head,
+            });
+        }
+    }
+
+    fn finish_table_row(&mut self) {
+        if let Some(state) = self.table_state.as_mut() {
+            if let Some(row) = state.current_row.take() {
+                state.rows.push(row);
+            }
+        }
+    }
+
+    fn start_table_cell(&mut self) {
+        if let Some(state) = self.table_state.as_mut() {
+            state.current_cell = Some(TableCellData {
+                text: String::new(),
+            });
+        }
+    }
+
+    fn finish_table_cell(&mut self) {
+        if let Some(state) = self.table_state.as_mut() {
+            if let Some(cell) = state.current_cell.take() {
+                if let Some(row) = state.current_row.as_mut() {
+                    row.cells.push(cell);
+                }
+            }
+        }
+    }
+
+    fn render_table_text(&mut self, text: &str) {
+        if let Some(state) = self.table_state.as_mut() {
+            if let Some(cell) = state.current_cell.as_mut() {
+                cell.text.push_str(text);
+            }
+        }
+    }
+
+    fn finish_table(&mut self) -> Result<(), String> {
+        let Some(state) = self.table_state.take() else {
+            self.in_table = false;
+            return Ok(());
+        };
+
+        self.in_table = false;
+
+        if state.rows.is_empty() {
+            self.finish_block(self.theme.margin_bottom);
+            return Ok(());
+        }
+
+        let column_count = state
+            .rows
+            .iter()
+            .map(|row| row.cells.len())
+            .max()
+            .unwrap_or(0);
+
+        if column_count == 0 {
+            self.finish_block(self.theme.margin_bottom);
+            return Ok(());
+        }
+
+        let mut column_widths: Vec<f32> = vec![0.0; column_count];
+        for row in &state.rows {
+            for (idx, cell) in row.cells.iter().enumerate() {
+                let (width, _) = self.measure.measure_text(
+                    cell.text.trim(),
+                    self.theme.font_size_base,
+                    false,
+                    row.is_header,
+                    false,
+                    None,
+                );
+                column_widths[idx] = column_widths[idx].max(width as f32);
+            }
+        }
+
+        let cell_padding_x = self.theme.font_size_base * 0.5;
+        let cell_padding_y = self.theme.font_size_base * 0.35;
+        let border_color = self.theme.quote_border_color.clone();
+        let row_height = self.theme.font_size_base * self.theme.line_height + cell_padding_y * 2.0;
+        let table_x = self.line_start_x();
+        let table_width: f32 = column_widths.iter().map(|w| w + cell_padding_x * 2.0).sum();
+
+        let mut current_y = self.cursor_y;
+        let table_height = row_height * state.rows.len() as f32;
+
+        self.svg_content.push_str(&format!(
+            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="none" stroke="{}" stroke-width="1" />"#,
+            table_x,
+            current_y,
+            table_width,
+            table_height,
+            border_color,
+        ));
+
+        for row in &state.rows {
+            let mut cell_x = table_x;
+            for (idx, cell) in row.cells.iter().enumerate() {
+                let cell_width = column_widths[idx] + cell_padding_x * 2.0;
+                let align = state
+                    .alignments
+                    .get(idx)
+                    .copied()
+                    .unwrap_or(Alignment::Left);
+
+                self.svg_content.push_str(&format!(
+                    r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="none" stroke="{}" stroke-width="1" />"#,
+                    cell_x,
+                    current_y,
+                    cell_width,
+                    row_height,
+                    border_color,
+                ));
+
+                let (text_width, _) = self.measure.measure_text(
+                    cell.text.trim(),
+                    self.theme.font_size_base,
+                    false,
+                    row.is_header,
+                    false,
+                    None,
+                );
+
+                let text_x = match align {
+                    Alignment::Left | Alignment::None => cell_x + cell_padding_x,
+                    Alignment::Center => cell_x + (cell_width - text_width) / 2.0,
+                    Alignment::Right => cell_x + cell_width - cell_padding_x - text_width,
+                };
+
+                let text_y = current_y + cell_padding_y + self.theme.font_size_base * 0.8;
+                let fill = self.current_fill().to_string();
+                self.draw_text_at(
+                    text_x,
+                    text_y,
+                    cell.text.trim(),
+                    "sans-serif",
+                    self.theme.font_size_base,
+                    &fill,
+                    row.is_header,
+                    false,
+                );
+
+                cell_x += cell_width;
+            }
+
+            current_y += row_height;
+        }
+
+        self.cursor_y += table_height;
+        self.cursor_x = self.line_start_x();
+        self.at_line_start = true;
+        self.finish_block(self.theme.margin_bottom);
+        Ok(())
+    }
+
+    fn render_task_marker(&mut self, checked: bool) -> Result<(), String> {
+        if !self.at_line_start {
+            self.new_line();
+        }
+
+        if let Some(pending) = self.pending_list_marker.take() {
+            let fill = self.current_fill().to_string();
+            self.draw_text_at(
+                pending.marker_x,
+                self.cursor_y,
+                &pending.marker,
+                "sans-serif",
+                self.theme.font_size_base,
+                &fill,
+                false,
+                false,
+            );
+        }
+
+        let size = self.theme.font_size_base * 0.85;
+        let x = self.cursor_x;
+        let y = self.cursor_y - size * 0.7;
+        self.svg_content.push_str(&format!(
+            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="2" ry="2" stroke="{}" fill="none" stroke-width="1" />"#,
+            x,
+            y,
+            size,
+            size,
+            self.current_fill(),
+        ));
+
+        if checked {
+            let inset = size * 0.2;
+            let x1 = x + inset;
+            let y1 = y + size * 0.55;
+            let x2 = x + size * 0.45;
+            let y2 = y + size - inset;
+            let x3 = x + size - inset;
+            let y3 = y + inset;
+            self.svg_content.push_str(&format!(
+                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />"#,
+                x1,
+                y1,
+                x2,
+                y2,
+                x3,
+                y3,
+                self.current_fill(),
+            ));
+        }
+
+        self.cursor_x += size + self.theme.font_size_base * 0.5;
+        self.at_line_start = false;
+        Ok(())
+    }
+
+    fn finish_image(&mut self) -> Result<(), String> {
+        let Some(image) = self.current_image.take() else {
+            return Ok(());
+        };
+
+        let src = image.src.trim();
+        if src.is_empty() {
+            return Ok(());
+        }
+
+        let image_path = if src.starts_with("http://")
+            || src.starts_with("https://")
+            || src.starts_with("data:")
+        {
+            return Ok(());
+        } else {
+            self.resolve_image_path(src)
+        };
+
+        let Some(image_path) = image_path else {
+            return Ok(());
+        };
+
+        let bytes = std::fs::read(&image_path)
+            .map_err(|e| format!("Failed to read image {}: {}", image_path.display(), e))?;
+        let extension = image_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        let mime = match extension.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            _ => return Ok(()),
+        };
+
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let data_url = format!("data:{};base64,{}", mime, encoded);
+
+        let size = imagesize::blob_size(&bytes).map_err(|e| {
+            format!(
+                "Failed to read image size for {}: {}",
+                image_path.display(),
+                e
+            )
+        })?;
+
+        if !self.at_line_start {
+            self.new_line();
+        }
+
+        let max_width = self.right_edge() - self.line_start_x();
+        let mut width = size.width as f32;
+        let mut height = size.height as f32;
+        if width > max_width {
+            let scale = max_width / width;
+            width *= scale;
+            height *= scale;
+        }
+
+        self.start_block(self.theme.margin_top, false);
+        let x = self.line_start_x();
+        let y = self.cursor_y;
+
+        self.svg_content.push_str(&format!(
+            r#"<image x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" href="{}" />"#,
+            x, y, width, height, data_url,
+        ));
+
+        self.cursor_y += height;
+        self.cursor_x = self.line_start_x();
+        self.at_line_start = true;
+        self.finish_block(self.theme.margin_bottom);
+
+        Ok(())
+    }
+
+    fn resolve_image_path(&self, src: &str) -> Option<PathBuf> {
+        let src_path = Path::new(src);
+        if src_path.is_absolute() {
+            return Some(src_path.to_path_buf());
+        }
+
+        if let Some(base) = self.base_path.as_ref() {
+            return Some(base.join(src));
+        }
+
+        Some(src_path.to_path_buf())
+    }
+
     fn start_list_item(&mut self) -> Result<(), String> {
         if self.at_line_start {
             // Move from list block top to first list-item baseline.
-            self.cursor_y += self.theme.font_size_base * 0.8;
+            if let Some(state) = self.list_stack.last_mut() {
+                if state.needs_ascent {
+                    self.cursor_y += self.theme.font_size_base * 0.8;
+                    state.needs_ascent = false;
+                }
+            }
         } else {
             self.new_line();
         }
 
         let marker = self.next_list_marker();
         let marker_x = self.list_marker_x();
+
+        self.pending_list_marker = Some(PendingListMarker { marker, marker_x });
+
         let (marker_width, _) = self.measure.measure_text(
-            &marker,
+            self.pending_list_marker
+                .as_ref()
+                .map(|pending| pending.marker.as_str())
+                .unwrap_or(""),
             self.theme.font_size_base,
             false,
             false,
@@ -658,19 +1236,8 @@ impl<T: TextMeasure> Renderer<T> {
             None,
         );
 
-        let fill = self.current_fill().to_string();
-        self.draw_text_at(
-            marker_x,
-            self.cursor_y,
-            &marker,
-            "sans-serif",
-            self.theme.font_size_base,
-            &fill,
-            false,
-            false,
-        );
-
-        self.item_continuation_indent = Some(marker_x + marker_width + self.theme.font_size_base * LIST_MARKER_GAP_RATIO);
+        self.item_continuation_indent =
+            Some(marker_x + marker_width + self.theme.font_size_base * LIST_MARKER_GAP_RATIO);
         self.cursor_x = self.item_continuation_indent.unwrap_or(self.line_start_x());
         self.at_line_start = true;
 
@@ -678,6 +1245,7 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn end_list_item(&mut self) {
+        self.pending_list_marker = None;
         self.item_continuation_indent = None;
     }
 
@@ -818,7 +1386,9 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn list_marker_x(&self) -> f32 {
-        let depth_offset = self.list_stack.len().saturating_sub(1) as f32 * self.theme.font_size_base * LIST_INDENT_RATIO;
+        let depth_offset = self.list_stack.len().saturating_sub(1) as f32
+            * self.theme.font_size_base
+            * LIST_INDENT_RATIO;
         self.base_left_indent() + depth_offset
     }
 

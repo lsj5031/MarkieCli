@@ -184,7 +184,7 @@ impl Theme {
 
     fn from_alacritty_theme(alacritty: AlacrittyTheme) -> Result<Self, String> {
         let colors = alacritty.colors;
-        
+
         Ok(Theme {
             background_color: colors.primary.background,
             text_color: colors.primary.foreground.clone(),

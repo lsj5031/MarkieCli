@@ -13,6 +13,27 @@ A pure Rust Markdown to SVG/PNG renderer that converts Markdown documents into b
 - **Adjustable Width**: Control output image width
 - **Font Support**: Includes local font directory and system font fallbacks
 
+## Markdown Support
+
+Supported today:
+
+- Headings, paragraphs, emphasis/strong, inline code
+- Fenced code blocks with syntax highlighting
+- Lists (ordered/unordered) and task lists
+- Blockquotes and horizontal rules
+- Links (colored text)
+- Strikethrough
+- Tables
+- Images (local files, relative to the input file)
+- Inline and display math (rendered as monospace text)
+
+Not yet supported:
+
+- Remote images (`http`/`https`) and data URLs
+- Footnotes, definition lists, metadata blocks
+- Raw/inline HTML
+- Mermaid or other diagram rendering (code blocks are rendered as code)
+
 ## Installation
 
 ### From source

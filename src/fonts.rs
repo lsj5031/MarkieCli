@@ -70,11 +70,7 @@ impl TextMeasure for CosmicTextMeasure {
             },
         );
 
-        buffer.set_size(
-            &mut self.font_system,
-            max_width,
-            None,
-        );
+        buffer.set_size(&mut self.font_system, max_width, None);
 
         let attrs = Attrs::new()
             .family(if is_code {

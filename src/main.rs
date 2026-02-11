@@ -37,7 +37,7 @@ fn main() -> Result<(), String> {
         if theme_path.exists() && theme_path.is_file() {
             let content = std::fs::read_to_string(theme_path)
                 .map_err(|e| format!("Failed to read theme file: {}", e))?;
-            
+
             // Try TOML first (since Alacritty is moving to TOML), then YAML
             if let Ok(theme) = theme::Theme::from_alacritty_toml(&content) {
                 theme
@@ -47,7 +47,7 @@ fn main() -> Result<(), String> {
                 return Err("Failed to parse theme file as TOML or YAML".to_string());
             }
         } else {
-             return Err(format!("Theme file not found: {}", theme_path.display()));
+            return Err(format!("Theme file not found: {}", theme_path.display()));
         }
     } else {
         theme::Theme::default()
@@ -64,9 +64,16 @@ fn main() -> Result<(), String> {
             .map_err(|e| format!("Failed to read input file: {}", e))?
     };
 
+    let base_path = if args.input.to_str() == Some("-") {
+        None
+    } else {
+        args.input.parent().map(|path| path.to_path_buf())
+    };
+
     // Render to SVG
     let measure = fonts::CosmicTextMeasure::new()?;
-    let mut renderer = renderer::Renderer::new(theme, measure, args.width)?;
+    let mut renderer =
+        renderer::Renderer::new_with_base_path(theme, measure, args.width, base_path)?;
     let svg = renderer.render(&markdown)?;
 
     // Determine output format and save
