@@ -1,4 +1,5 @@
 mod fonts;
+mod math;
 mod renderer;
 mod theme;
 
