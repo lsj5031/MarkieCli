@@ -88,21 +88,29 @@ $$
 ### Flowchart
 
 ```mermaid
-flowchart TD
-    A[Start] --> B{Working?}
-    B -->|Yes| C[Done]
-    B -->|No| D[Retry]
-    D --> B
+flowchart LR
+    A[API] --o> B[Gateway]
+    B o-- C[Cache]
+    B --x D[Rejected]
+    C x--x E[Replica]
+    E <.-> F[Sync]
+    F ==>|fast lane| G[Ready]
 ```
 
 ### Sequence
 
 ```mermaid
 sequenceDiagram
-    participant Alice
-    participant Bob
-    Alice->>Bob: Hello
-    Bob-->>Alice: Hi
+    participant Client
+    participant Service
+    Note right of Client: trigger request
+    alt happy path
+        Client->>Service: GET /items
+        Service-->>Client: 200 OK
+    else retry
+        Client->>Service: GET /items (retry)
+        Service-->>Client: 503
+    end
 ```
 
 ### Class
@@ -125,8 +133,15 @@ classDiagram
 ```mermaid
 stateDiagram
     [*] --> Idle
-    Idle --> Processing
-    Processing --> [*]
+    Idle --> Running
+    state Running {
+        state Validate
+        state Execute
+        Validate --> Execute: ok
+        Execute --> Validate: retry
+    }
+    Note right of Validate: guard checks
+    Running --> [*]
 ```
 
 ### ER

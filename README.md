@@ -9,7 +9,7 @@ A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents in
 - **Pure Rust**: Built entirely with Rust for performance and reliability
 - **Multiple Output Formats**: Export to SVG, PNG, or PDF
 - **High-Resolution PNG Output**: Use `--png-scale` for sharper raster output
-- **Native Mermaid Rendering**: Flowchart, sequence, class, state, and ER diagrams
+- **Native Mermaid Rendering**: Flowchart, sequence, class, state, and ER diagrams (including advanced edge/control syntax)
 - **Enhanced Math Rendering**: LaTeX-style math including nth roots, binomials, and matrices
 - **Customizable Themes**: Supports Alacritty theme files (`.yaml`/`.toml`)
 - **Flexible Input**: Read from file or stdin
@@ -56,10 +56,10 @@ flowchart TD
 ````
 
 Supported diagram types:
-- **Flowchart**: `flowchart TD/LR` with nodes (rect, rounded, diamond, circle) and labeled edges
-- **Sequence**: `sequenceDiagram` with participants and messages
+- **Flowchart**: `flowchart TD/LR` with nodes (rect, rounded, diamond, circle), labels, and arrow variants (circle/cross/open, bidirectional, thick, dotted)
+- **Sequence**: `sequenceDiagram` with participants, messages, notes, and control blocks (`alt`, `opt`, `loop`, `par`, `critical` + `else`/`end`)
 - **Class**: `classDiagram` with classes, attributes, methods, and relationships
-- **State**: `stateDiagram` with states and transitions
+- **State**: `stateDiagram` with states, transitions, composite state children, and notes
 - **ER**: `erDiagram` with entities and relationships
 
 ### Enhanced Math Support
