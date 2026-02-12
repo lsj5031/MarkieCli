@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUTPUT_DIR="${1:-/mnt/t/markie-smoke}"
+OUTPUT_DIR="${1:-$ROOT_DIR/target/smoke-test}"
 BIN="$ROOT_DIR/target/debug/markie"
 PNG_SCALE="${PNG_SCALE:-2.0}"
 THEME_FILE="${THEME_FILE:-$ROOT_DIR/tests/fixtures/solarized_light.toml}"

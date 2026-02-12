@@ -2,16 +2,19 @@
 
 ![Example Output](README.svg)
 
-A pure Rust Markdown to SVG/PNG renderer that converts Markdown documents into beautiful, shareable images.
+A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents into beautiful, shareable images.
 
 ## Features
 
 - **Pure Rust**: Built entirely with Rust for performance and reliability
-- **Multiple Output Formats**: Export to SVG or PNG
-- **Customizable Themes**: Support for custom themes via Alacritty configuration files (YAML/TOML)
+- **Multiple Output Formats**: Export to SVG, PNG, or PDF
+- **High-Resolution PNG Output**: Use `--png-scale` for sharper raster output
+- **Native Mermaid Rendering**: Flowchart, sequence, class, state, and ER diagrams
+- **Enhanced Math Rendering**: LaTeX-style math including nth roots, binomials, and matrices
+- **Customizable Themes**: Supports Alacritty theme files (`.yaml`/`.toml`)
 - **Flexible Input**: Read from file or stdin
 - **Adjustable Width**: Control output image width
-- **Font Support**: Includes local font directory and system font fallbacks
+- **Font Support**: Includes local font directory, system fallback, and global font caching
 
 ## Markdown Support
 
@@ -25,7 +28,7 @@ Supported today:
 - Strikethrough
 - Tables
 - Images (local files, data URLs, and remote HTTP/S sources)
-- Inline and display math (rendered with LaTeX support)
+- Inline and display math (LaTeX-style; supports nth roots, binomials, and matrices)
 - Footnotes
 - Definition lists
 - **Mermaid diagrams** (flowchart, sequence, class, state, ER)
@@ -59,6 +62,26 @@ Supported diagram types:
 - **State**: `stateDiagram` with states and transitions
 - **ER**: `erDiagram` with entities and relationships
 
+### Enhanced Math Support
+
+Math is rendered natively from LaTeX-style input, including:
+- nth roots (`\sqrt[3]{x}`)
+- binomials (`\binom{n}{k}`)
+- matrices (`\begin{bmatrix} ... \end{bmatrix}`)
+
+Example:
+
+```markdown
+Inline: $\sqrt[3]{x^3 + y^3}$ and $\binom{n}{k}$
+
+$$
+\begin{bmatrix}
+a & b \\
+c & d
+\end{bmatrix}
+$$
+```
+
 ## Installation
 
 ### From source
@@ -83,6 +106,18 @@ Render to PNG:
 markie input.md -o output.png
 ```
 
+Render to PDF:
+
+```bash
+markie input.md -o output.pdf
+```
+
+Render a sharper PNG (2x raster scale):
+
+```bash
+markie input.md -o output.png --png-scale 2
+```
+
 ### From stdin
 
 ```bash
@@ -101,7 +136,27 @@ You can use any Alacritty theme directly (both `.yaml` and `.toml` formats are s
 A great collection of themes can be found at [alacritty-theme](https://github.com/alacritty/alacritty-theme).
 
 ```bash
-markie input.md -o output.svg --theme solarized_light.toml
+markie input.md -o output.svg --theme tests/fixtures/solarized_light.toml
+```
+
+Combine theme + high-res PNG:
+
+```bash
+markie input.md -o output.png --theme tests/fixtures/solarized_light.toml --png-scale 2
+```
+
+### Smoke test script
+
+A local smoke-test helper is included to verify math, Mermaid, theme handling, and all output formats.
+
+```bash
+./scripts/smoke-test.sh ./smoke-test-output
+```
+
+Optional overrides:
+
+```bash
+THEME_FILE=tests/fixtures/solarized_light.toml PNG_SCALE=2 ./scripts/smoke-test.sh ./smoke-test-output
 ```
 
 ## Theme Format
@@ -134,12 +189,13 @@ The binary will be available at `target/release/markie`.
 
 - `cosmic-text`: Text shaping and layout
 - `pulldown-cmark`: Markdown parsing
-- `resvg`: SVG rendering
-- `tiny-skia`: Software rendering
+- `resvg` + `tiny-skia`: SVG/PNG rendering
+- `svg2pdf`: PDF export
 - `syntect`: Syntax highlighting
 - `clap`: Command-line argument parsing
 - `serde`: Serialization/Deserialization (JSON, YAML, TOML)
-- `latex2mathml`: Math rendering
+- `latex2mathml` + `quick-xml`: Math rendering
+- `lru` + `parking_lot`: Global font measurement cache
 
 ## License
 

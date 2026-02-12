@@ -1,6 +1,6 @@
 # Markie Feature Examples
 
-This document showcases all the Markdown features supported by Markie.
+This document showcases Markdown features supported by Markie, including enhanced math and native Mermaid diagrams.
 
 ## Text Formatting
 
@@ -63,6 +63,80 @@ Display math:
 $$
 \sum_{i=1}^{n} x_i
 $$
+
+## Advanced Math (nth root, binomial, matrix)
+
+Inline nth-root: $\sqrt[3]{x^3 + y^3}$
+
+Inline binomial: $\binom{n}{k}$
+
+Display matrix:
+$$
+\begin{bmatrix}
+a & b \\
+c & d
+\end{bmatrix}
+$$
+
+Mixed expression:
+$$
+\sqrt[4]{\frac{a^2 + b^2}{c^2}} + \binom{n}{2}
+$$
+
+## Mermaid Diagrams
+
+### Flowchart
+
+```mermaid
+flowchart TD
+    A[Start] --> B{Working?}
+    B -->|Yes| C[Done]
+    B -->|No| D[Retry]
+    D --> B
+```
+
+### Sequence
+
+```mermaid
+sequenceDiagram
+    participant Alice
+    participant Bob
+    Alice->>Bob: Hello
+    Bob-->>Alice: Hi
+```
+
+### Class
+
+```mermaid
+classDiagram
+    class Animal {
+        +String name
+        +int age
+        +makeSound()
+    }
+    class Dog {
+        +bark()
+    }
+    Animal <|-- Dog
+```
+
+### State
+
+```mermaid
+stateDiagram
+    [*] --> Idle
+    Idle --> Processing
+    Processing --> [*]
+```
+
+### ER
+
+```mermaid
+erDiagram
+    CUSTOMER
+    ORDER
+    CUSTOMER ||--o{ ORDER
+```
 
 ## Footnotes
 
