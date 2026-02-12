@@ -5,12 +5,19 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_DIR="${1:-/mnt/t/markie-smoke}"
 BIN="$ROOT_DIR/target/debug/markie"
 PNG_SCALE="${PNG_SCALE:-2.0}"
+THEME_FILE="${THEME_FILE:-$ROOT_DIR/tests/fixtures/solarized_light.toml}"
 
 mkdir -p "$OUTPUT_DIR"
+
+if [[ ! -f "$THEME_FILE" ]]; then
+  echo "Theme file not found: $THEME_FILE" >&2
+  exit 1
+fi
 
 echo "==> Project root: $ROOT_DIR"
 echo "==> Output dir:   $OUTPUT_DIR"
 echo "==> PNG scale:    $PNG_SCALE"
+echo "==> Theme file:   $THEME_FILE"
 
 echo "==> Running test suite"
 (
@@ -107,9 +114,9 @@ render_all_formats() {
   local input="$1"
   local stem="$2"
 
-  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.svg"
-  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.png" --png-scale "$PNG_SCALE"
-  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.pdf"
+  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.svg" --theme "$THEME_FILE"
+  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.png" --png-scale "$PNG_SCALE" --theme "$THEME_FILE"
+  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.pdf" --theme "$THEME_FILE"
 }
 
 echo "==> Rendering smoke outputs"
