@@ -4,11 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_DIR="${1:-/mnt/t/markie-smoke}"
 BIN="$ROOT_DIR/target/debug/markie"
+PNG_SCALE="${PNG_SCALE:-2.0}"
 
 mkdir -p "$OUTPUT_DIR"
 
 echo "==> Project root: $ROOT_DIR"
 echo "==> Output dir:   $OUTPUT_DIR"
+echo "==> PNG scale:    $PNG_SCALE"
 
 echo "==> Running test suite"
 (
@@ -106,7 +108,7 @@ render_all_formats() {
   local stem="$2"
 
   "$BIN" "$input" -o "$OUTPUT_DIR/$stem.svg"
-  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.png"
+  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.png" --png-scale "$PNG_SCALE"
   "$BIN" "$input" -o "$OUTPUT_DIR/$stem.pdf"
 }
 
