@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::layout::{BBox, LayoutEngine, LayoutPos};
-use super::render::{escape_xml, DiagramStyle};
+use super::render::{DiagramStyle, escape_xml};
 use super::types::{ArrowType, EdgeStyle, FlowDirection, Flowchart, NodeShape};
 
 /// Render a flowchart to SVG
@@ -367,14 +367,6 @@ fn render_arrow_head(
             format!(
                 r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" />"#,
                 x, y, p1.0, p1.1, p2.0, p2.1, style.edge_stroke
-            )
-        }
-        ArrowType::OpenArrow => {
-            let p1 = (x - cos * 10.0 + sin * 6.0, y - sin * 10.0 - cos * 6.0);
-            let p2 = (x - cos * 10.0 - sin * 6.0, y - sin * 10.0 + cos * 6.0);
-            format!(
-                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="1.5" />"#,
-                p1.0, p1.1, x, y, p2.0, p2.1, style.edge_stroke
             )
         }
         ArrowType::Circle => {

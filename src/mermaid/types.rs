@@ -28,7 +28,6 @@ pub enum EdgeStyle {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArrowType {
     Arrow,
-    OpenArrow,
     Circle,
     Cross,
     None,
@@ -139,7 +138,11 @@ pub enum SequenceElement {
     Message(SequenceMessage),
     Activation(Activation),
     Deactivation(Activation),
-    Note { participant: String, position: String, text: String },
+    Note {
+        participant: String,
+        position: String,
+        text: String,
+    },
     Block(SequenceBlock),
 }
 

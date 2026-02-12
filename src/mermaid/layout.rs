@@ -489,6 +489,10 @@ impl LayoutEngine {
     /// Layout a state diagram
     pub fn layout_state(&self, diagram: &StateDiagram) -> (HashMap<String, LayoutPos>, BBox) {
         let mut positions: HashMap<String, LayoutPos> = HashMap::new();
+        let mut state_lookup: HashMap<&str, &State> = HashMap::new();
+        for state in &diagram.states {
+            state_lookup.insert(state.id.as_str(), state);
+        }
 
         if diagram.states.is_empty() {
             return (positions, BBox::default());
@@ -566,8 +570,27 @@ impl LayoutEngine {
             .map(|state| state.id.as_str())
             .collect();
 
-        for (level, states) in level_states.iter().enumerate() {
-            let y = start_y + level as f32 * (state_height + spacing_y);
+        let mut level_y = start_y;
+        for states in &level_states {
+            let mut level_max_height: f32 = state_height;
+
+            for &state_id in states {
+                if let Some(state) = state_lookup.get(state_id)
+                    && !state.is_start
+                    && !state.is_end
+                    && state.is_composite
+                {
+                    let child_count = state
+                        .children
+                        .iter()
+                        .filter(|child| matches!(child, StateElement::State(_)))
+                        .count()
+                        .max(1);
+                    let composite_height = 60.0 + child_count as f32 * 54.0;
+                    level_max_height = level_max_height.max(composite_height);
+                }
+            }
+
             let _total_width = states.len() as f32 * state_width
                 + (states.len().saturating_sub(1)) as f32 * spacing_x;
             let mut x = start_x;
@@ -575,12 +598,26 @@ impl LayoutEngine {
             for &state_id in states {
                 let (w, h) = if special_states.contains(state_id) {
                     (24.0, 24.0)
+                } else if let Some(state) = state_lookup.get(state_id) {
+                    if state.is_composite {
+                        let child_count = state
+                            .children
+                            .iter()
+                            .filter(|child| matches!(child, StateElement::State(_)))
+                            .count()
+                            .max(1);
+                        (state_width + 80.0, 60.0 + child_count as f32 * 54.0)
+                    } else {
+                        (state_width, state_height)
+                    }
                 } else {
                     (state_width, state_height)
                 };
-                positions.insert(state_id.to_string(), LayoutPos::new(x, y, w, h));
+                positions.insert(state_id.to_string(), LayoutPos::new(x, level_y, w, h));
                 x += w + spacing_x;
             }
+
+            level_y += level_max_height + spacing_y;
         }
 
         let bbox = self.calculate_bbox(&positions);

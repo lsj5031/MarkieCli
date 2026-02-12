@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::layout::{LayoutEngine, LayoutPos};
 use super::types::*;
-use super::{parse_mermaid, MermaidDiagram};
+use super::{MermaidDiagram, parse_mermaid};
 
 /// Style configuration for diagram rendering
 #[derive(Debug, Clone)]
@@ -390,16 +390,16 @@ fn render_sequence_elements(
                     svg.push_str(&format!(
                         r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" stroke-dasharray="5,3" />"#,
                         block_left,
-                        *message_y - 8.0,
+                        *message_y - 2.0,
                         block_right,
-                        *message_y - 8.0,
+                        *message_y - 2.0,
                         style.edge_stroke
                     ));
                     if !label.is_empty() {
                         svg.push_str(&format!(
                             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
                             block_left + 6.0,
-                            *message_y + 2.0,
+                            *message_y + 6.0,
                             style.font_family,
                             style.font_size * 0.78,
                             style.edge_text,
@@ -420,7 +420,7 @@ fn render_sequence_elements(
                 }
 
                 svg.push_str(&format!(
-                    r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="none" stroke="{}" stroke-width="1" />"#,
+                    r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="none" stroke="{}" stroke-width="1" stroke-dasharray="5,3" />"#,
                     block_left,
                     start_y,
                     (block_right - block_left).max(24.0),
@@ -664,12 +664,12 @@ fn render_class_relation(
     ));
 
     let (from_marker, to_marker) = match relation.relation_type {
-        ClassRelationType::Inheritance => (None, Some("hollow_triangle")),
+        ClassRelationType::Inheritance => (Some("hollow_triangle"), None),
         ClassRelationType::Composition => (Some("filled_diamond"), None),
         ClassRelationType::Aggregation => (Some("hollow_diamond"), None),
         ClassRelationType::Association => (None, Some("arrow")),
-        ClassRelationType::Dependency => (None, Some("hollow_triangle")),
-        ClassRelationType::Realization => (None, Some("hollow_triangle")),
+        ClassRelationType::Dependency => (Some("hollow_triangle"), None),
+        ClassRelationType::Realization => (Some("hollow_triangle"), None),
     };
 
     if let Some(marker) = to_marker {
@@ -801,8 +801,23 @@ fn render_state(
     let mut svg = String::new();
     let padding = 20.0;
 
+    let mut child_state_ids: HashSet<&str> = HashSet::new();
+    for state in &diagram.states {
+        for child in &state.children {
+            if let StateElement::State(child_state) = child {
+                child_state_ids.insert(child_state.id.as_str());
+            }
+        }
+    }
+
     // Draw transitions first (behind states)
     for transition in &diagram.transitions {
+        if child_state_ids.contains(transition.from.as_str())
+            || child_state_ids.contains(transition.to.as_str())
+        {
+            continue;
+        }
+
         let from_pos = positions.get(&transition.from);
         let to_pos = positions.get(&transition.to);
 
@@ -813,8 +828,18 @@ fn render_state(
 
     // Draw states
     for state in &diagram.states {
+        if child_state_ids.contains(state.id.as_str()) {
+            continue;
+        }
+
         if let Some(pos) = positions.get(&state.id) {
-            svg.push_str(&render_state_node(state, &state.children, pos, style));
+            svg.push_str(&render_state_node(
+                state,
+                &state.children,
+                pos,
+                style,
+                &positions,
+            ));
         }
     }
 
@@ -829,10 +854,11 @@ fn render_state_node(
     children: &[StateElement],
     pos: &LayoutPos,
     style: &DiagramStyle,
+    positions: &HashMap<String, LayoutPos>,
 ) -> String {
     let mut svg = String::new();
 
-    if state.is_start || state.id == "[*]" && !state.is_end {
+    if state.is_start {
         // Start state (filled circle)
         svg.push_str(&format!(
             r#"<circle cx="{:.2}" cy="{:.2}" r="{:.2}" fill="{}" />"#,
@@ -871,62 +897,140 @@ fn render_state_node(
             text_x, text_y, style.font_family, style.font_size, style.node_text, escape_xml(&state.label)
         ));
 
-        let mut nested_states = 0;
-        let mut nested_transitions = 0;
-        let mut nested_notes = 0;
-        for child in children {
-            match child {
-                StateElement::State(s) => {
-                    if s.id != state.id {
-                        nested_states += 1;
-                    }
-                }
-                StateElement::Transition(t) => {
-                    if t.from == state.id {
-                        nested_transitions += 1;
-                    }
-                }
-                StateElement::Note {
+        if state.is_composite {
+            svg.push_str(&render_composite_state_contents(
+                state, children, pos, style, positions,
+            ));
+        } else {
+            for child in children {
+                if let StateElement::Note {
                     state: note_state,
                     text,
-                } => {
+                } = child
+                {
                     if note_state == &state.id && !text.is_empty() {
-                        nested_notes += 1;
+                        svg.push_str(&render_state_note(note_state, text, pos, style));
                     }
                 }
             }
         }
+    }
 
-        if state.is_composite || nested_states > 0 || nested_transitions > 0 {
-            let fold = 10.0;
-            let x2 = pos.x + pos.width;
-            let y1 = pos.y;
-            svg.push_str(&format!(
-                r#"<path d="M {:.2} {:.2} L {:.2} {:.2} L {:.2} {:.2} Z" fill="{}" fill-opacity="0.35" stroke="{}" stroke-width="1" />"#,
-                x2 - fold,
-                y1,
-                x2,
-                y1,
-                x2,
-                y1 + fold,
-                style.node_fill,
-                style.node_stroke
-            ));
-            svg.push_str(&format!(
-                r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="end">{}|{}|{}</text>"#,
-                x2 - 4.0,
-                pos.y + pos.height - 6.0,
-                style.font_family,
-                style.font_size * 0.6,
-                style.edge_text,
-                nested_states,
-                nested_transitions,
-                nested_notes
+    svg
+}
+
+fn render_composite_state_contents(
+    state: &State,
+    children: &[StateElement],
+    parent_pos: &LayoutPos,
+    style: &DiagramStyle,
+    positions: &HashMap<String, LayoutPos>,
+) -> String {
+    let mut svg = String::new();
+    let mut child_states: Vec<&State> = Vec::new();
+    let mut child_transitions: Vec<&StateTransition> = Vec::new();
+    let mut child_notes: Vec<(&str, &str)> = Vec::new();
+
+    for child in children {
+        match child {
+            StateElement::State(child_state) => child_states.push(child_state),
+            StateElement::Transition(transition) => child_transitions.push(transition),
+            StateElement::Note { state, text } if !text.is_empty() => {
+                child_notes.push((state.as_str(), text.as_str()))
+            }
+            StateElement::Note { .. } => {}
+        }
+    }
+
+    if child_states.is_empty() {
+        return svg;
+    }
+
+    let mut child_positions: HashMap<String, LayoutPos> = HashMap::new();
+    let inner_top = parent_pos.y + 60.0;
+    let mut child_y = inner_top;
+    let child_x = parent_pos.x + 20.0;
+    let child_width = (parent_pos.width - 40.0).max(80.0);
+    let child_height = 40.0;
+    let child_spacing = 14.0;
+
+    for child_state in child_states {
+        if child_state.id == state.id {
+            continue;
+        }
+        child_positions.insert(
+            child_state.id.clone(),
+            LayoutPos::new(child_x, child_y, child_width, child_height),
+        );
+        svg.push_str(&format!(
+            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="10.00" fill="{}" stroke="{}" stroke-width="1.5" />"#,
+            child_x, child_y, child_width, child_height, style.node_fill, style.node_stroke
+        ));
+        svg.push_str(&format!(
+            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
+            child_x + child_width / 2.0,
+            child_y + child_height / 2.0 + style.font_size / 3.0,
+            style.font_family,
+            style.font_size,
+            style.node_text,
+            escape_xml(&child_state.label)
+        ));
+
+        child_y += child_height + child_spacing;
+    }
+
+    for transition in child_transitions {
+        let from = child_positions
+            .get(&transition.from)
+            .or_else(|| positions.get(&transition.from));
+        let to = child_positions
+            .get(&transition.to)
+            .or_else(|| positions.get(&transition.to));
+        if let (Some(from_pos), Some(to_pos)) = (from, to) {
+            svg.push_str(&render_state_transition(
+                transition, from_pos, to_pos, style,
             ));
         }
     }
 
+    for (note_state, text) in child_notes {
+        if let Some(target) = child_positions
+            .get(note_state)
+            .or_else(|| positions.get(note_state))
+        {
+            svg.push_str(&render_state_note(note_state, text, target, style));
+        }
+    }
+
     svg
+}
+
+fn render_state_note(
+    _state_id: &str,
+    text: &str,
+    state_pos: &LayoutPos,
+    style: &DiagramStyle,
+) -> String {
+    let note_width = (text.chars().count() as f32 * 6.0).clamp(72.0, 180.0);
+    let note_height = 26.0;
+    let x = state_pos.x + state_pos.width + 12.0;
+    let y = state_pos.y + 4.0;
+
+    format!(
+        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="3" fill="{}" fill-opacity="0.25" stroke="{}" stroke-width="1" /><text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
+        x,
+        y,
+        note_width,
+        note_height,
+        style.node_fill,
+        style.node_stroke,
+        x + 8.0,
+        y + note_height * 0.65,
+        style.font_family,
+        style.font_size * 0.8,
+        style.edge_text,
+        escape_xml(text)
+    )
 }
 
 fn render_state_transition(
@@ -1096,6 +1200,7 @@ fn render_er_relationship(
     let y1 = from.y + from.height / 2.0;
     let x2 = to.x + to.width / 2.0;
     let y2 = to.y + to.height / 2.0;
+    let angle = (y2 - y1).atan2(x2 - x1);
 
     // Line
     svg.push_str(&format!(
@@ -1103,41 +1208,19 @@ fn render_er_relationship(
         x1, y1, x2, y2, style.edge_stroke
     ));
 
-    // Cardinality labels
-    let from_card = match relation.from_cardinality {
-        ErCardinality::ZeroOrOne => "0..1",
-        ErCardinality::ExactlyOne => "1",
-        ErCardinality::ZeroOrMore => "0..*",
-        ErCardinality::OneOrMore => "1..*",
-    };
-
-    let to_card = match relation.to_cardinality {
-        ErCardinality::ZeroOrOne => "0..1",
-        ErCardinality::ExactlyOne => "1",
-        ErCardinality::ZeroOrMore => "0..*",
-        ErCardinality::OneOrMore => "1..*",
-    };
-
-    // From cardinality
-    svg.push_str(&format!(
-        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
-        x1 + 10.0,
-        y1 - 5.0,
-        style.font_family,
-        style.font_size * 0.75,
-        style.edge_text,
-        from_card
+    svg.push_str(&render_er_cardinality_marker(
+        x1,
+        y1,
+        angle,
+        &relation.from_cardinality,
+        style,
     ));
-
-    // To cardinality
-    svg.push_str(&format!(
-        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
-        x2 - 30.0,
-        y2 - 5.0,
-        style.font_family,
-        style.font_size * 0.75,
-        style.edge_text,
-        to_card
+    svg.push_str(&render_er_cardinality_marker(
+        x2,
+        y2,
+        angle + std::f32::consts::PI,
+        &relation.to_cardinality,
+        style,
     ));
 
     if let Some(label) = &relation.label {
@@ -1153,4 +1236,81 @@ fn render_er_relationship(
     }
 
     svg
+}
+
+fn render_er_cardinality_marker(
+    x: f32,
+    y: f32,
+    angle: f32,
+    cardinality: &ErCardinality,
+    style: &DiagramStyle,
+) -> String {
+    let ux = angle.cos();
+    let uy = angle.sin();
+    let nx = -uy;
+    let ny = ux;
+
+    let mut marker = String::new();
+
+    let draw_one = |dist: f32| {
+        format!(
+            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
+            x + ux * dist + nx * 6.0,
+            y + uy * dist + ny * 6.0,
+            x + ux * dist - nx * 6.0,
+            y + uy * dist - ny * 6.0,
+            style.edge_stroke
+        )
+    };
+
+    let draw_zero = |dist: f32| {
+        format!(
+            r#"<circle cx="{:.2}" cy="{:.2}" r="4.50" fill="{}" stroke="{}" stroke-width="1.2" />"#,
+            x + ux * dist,
+            y + uy * dist,
+            style.background,
+            style.edge_stroke
+        )
+    };
+
+    let draw_many = |dist: f32| {
+        let cx = x + ux * dist;
+        let cy = y + uy * dist;
+        format!(
+            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" /><line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" /><line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
+            cx,
+            cy,
+            cx + ux * 8.0 + nx * 8.0,
+            cy + uy * 8.0 + ny * 8.0,
+            style.edge_stroke,
+            cx,
+            cy,
+            cx + ux * 10.0,
+            cy + uy * 10.0,
+            style.edge_stroke,
+            cx,
+            cy,
+            cx + ux * 8.0 - nx * 8.0,
+            cy + uy * 8.0 - ny * 8.0,
+            style.edge_stroke
+        )
+    };
+
+    match cardinality {
+        ErCardinality::ExactlyOne => marker.push_str(&draw_one(10.0)),
+        ErCardinality::ZeroOrOne => {
+            marker.push_str(&draw_zero(9.0));
+            marker.push_str(&draw_one(18.0));
+        }
+        ErCardinality::ZeroOrMore => {
+            marker.push_str(&draw_zero(9.0));
+            marker.push_str(&draw_many(18.0));
+        }
+        ErCardinality::OneOrMore => {
+            marker.push_str(&draw_one(9.0));
+            marker.push_str(&draw_many(18.0));
+        }
+    }
+
+    marker
 }

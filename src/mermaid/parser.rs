@@ -221,8 +221,8 @@ fn parse_edge_line(
         (
             "--o>",
             EdgeStyle::Solid,
-            ArrowType::OpenArrow,
-            ArrowType::None,
+            ArrowType::Arrow,
+            ArrowType::Circle,
         ),
         (
             "o==>",
@@ -323,11 +323,7 @@ fn extract_node_id(part: &str) -> Option<String> {
         .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
         .collect();
 
-    if id.is_empty() {
-        None
-    } else {
-        Some(id)
-    }
+    if id.is_empty() { None } else { Some(id) }
 }
 
 /// Extract node ID, label, and shape from a part of an edge definition
@@ -841,6 +837,9 @@ fn parse_class_relation(line: &str) -> Option<ClassRelation> {
 // ============================================
 
 fn parse_state(input: &str) -> Result<StateDiagram, String> {
+    const START_STATE_ID: &str = "__start__";
+    const END_STATE_ID: &str = "__end__";
+
     let mut lines = input.lines().skip(1); // Skip "stateDiagram"
 
     let mut states: Vec<State> = Vec::new();
@@ -849,7 +848,7 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
 
     // Add start state
     states.push(State {
-        id: "[*]".to_string(),
+        id: START_STATE_ID.to_string(),
         label: "[*]".to_string(),
         is_start: true,
         is_end: false,
@@ -907,25 +906,54 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
                     (rest.trim().to_string(), None)
                 };
 
+                let normalized_from = if from == "[*]" {
+                    START_STATE_ID.to_string()
+                } else {
+                    from.clone()
+                };
+                let normalized_to = if to == "[*]" {
+                    END_STATE_ID.to_string()
+                } else {
+                    to.clone()
+                };
+
                 // Add end state if needed
                 if to == "[*]" {
-                    ensure_state(&mut states, "[*]", "[*]", false, true, false);
+                    ensure_state(&mut states, END_STATE_ID, "[*]", false, true, false);
                 }
 
                 // Add states from transition if not already present
                 let from_state = if from != "[*]" {
-                    Some(ensure_state(&mut states, &from, &from, false, false, false))
+                    Some(ensure_state(
+                        &mut states,
+                        &normalized_from,
+                        &normalized_from,
+                        false,
+                        false,
+                        false,
+                    ))
                 } else {
-                    ensure_state(&mut states, "[*]", "[*]", true, false, false);
+                    ensure_state(&mut states, START_STATE_ID, "[*]", true, false, false);
                     None
                 };
                 let to_state = if to != "[*]" {
-                    Some(ensure_state(&mut states, &to, &to, false, false, false))
+                    Some(ensure_state(
+                        &mut states,
+                        &normalized_to,
+                        &normalized_to,
+                        false,
+                        false,
+                        false,
+                    ))
                 } else {
                     None
                 };
 
-                let transition = StateTransition { from, to, label };
+                let transition = StateTransition {
+                    from: normalized_from,
+                    to: normalized_to,
+                    label,
+                };
 
                 if let Some(parent_id) = composite_stack.last().cloned() {
                     if let Some(state) = from_state.as_ref() {
@@ -937,7 +965,9 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
                     add_state_child_transition(&mut states, &parent_id, &transition);
                 }
 
-                transitions.push(transition);
+                if composite_stack.is_empty() {
+                    transitions.push(transition);
+                }
             }
         }
     }
@@ -1096,7 +1126,34 @@ fn add_state_note(states: &mut Vec<State>, state_id: &str, text: String) {
         if !has_note {
             target_state.children.push(StateElement::Note {
                 state: state_id.to_string(),
-                text,
+                text: text.clone(),
+            });
+        }
+    }
+
+    for parent in states.iter_mut() {
+        let contains_state = parent
+            .children
+            .iter()
+            .any(|element| matches!(element, StateElement::State(s) if s.id == state_id));
+        if !contains_state {
+            continue;
+        }
+
+        let has_note = parent.children.iter().any(|element| {
+            matches!(
+                element,
+                StateElement::Note {
+                    state,
+                    text: existing_text,
+                } if state == state_id && existing_text == &text
+            )
+        });
+
+        if !has_note {
+            parent.children.push(StateElement::Note {
+                state: state_id.to_string(),
+                text: text.clone(),
             });
         }
     }
@@ -1662,10 +1719,12 @@ stateDiagram
         if let MermaidDiagram::StateDiagram(st) = result {
             let parent = st.states.iter().find(|s| s.id == "Parent").unwrap();
             assert!(parent.is_composite);
-            assert!(parent
-                .children
-                .iter()
-                .any(|e| matches!(e, StateElement::State(s) if s.id == "Child")));
+            assert!(
+                parent
+                    .children
+                    .iter()
+                    .any(|e| matches!(e, StateElement::State(s) if s.id == "Child"))
+            );
             assert!(parent.children.iter().any(
                 |e| matches!(e, StateElement::Transition(t) if t.from == "Child" && t.to == "Child")
             ));
@@ -1837,8 +1896,8 @@ flowchart TD
             let edge = &fc.edges[0];
             assert_eq!(edge.from, "A");
             assert_eq!(edge.to, "B");
-            assert_eq!(edge.arrow_head, ArrowType::OpenArrow);
-            assert_eq!(edge.arrow_tail, ArrowType::None);
+            assert_eq!(edge.arrow_head, ArrowType::Arrow);
+            assert_eq!(edge.arrow_tail, ArrowType::Circle);
         } else {
             panic!("Expected flowchart");
         }
