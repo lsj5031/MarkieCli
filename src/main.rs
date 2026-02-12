@@ -8,16 +8,16 @@ use resvg::usvg;
 use std::path::{Path, PathBuf};
 use tiny_skia::{Pixmap, Transform};
 
-/// A pure Rust Markdown to SVG/PNG renderer
+/// A pure Rust Markdown to SVG/PNG/PDF renderer
 #[derive(Parser, Debug)]
 #[command(name = "markie")]
-#[command(about = "Render Markdown to beautiful SVG or PNG images", long_about = None)]
+#[command(about = "Render Markdown to beautiful SVG, PNG or PDF images", long_about = None)]
 struct Args {
     /// Input markdown file (use "-" for stdin)
     #[arg(value_name = "INPUT")]
     input: PathBuf,
 
-    /// Output file path (extension determines format: .svg or .png)
+    /// Output file path (extension determines format: .svg, .png or .pdf)
     #[arg(short, long, value_name = "OUTPUT")]
     output: PathBuf,
 
@@ -96,9 +96,15 @@ fn main() -> Result<(), String> {
                 .map_err(|e| format!("Failed to write PNG: {}", e))?;
             eprintln!("PNG saved to: {}", args.output.display());
         }
+        "pdf" => {
+            let pdf_data = svg_to_pdf(&svg)?;
+            std::fs::write(&args.output, pdf_data)
+                .map_err(|e| format!("Failed to write PDF: {}", e))?;
+            eprintln!("PDF saved to: {}", args.output.display());
+        }
         _ => {
             return Err(format!(
-                "Unsupported output format: .{} (use .svg or .png)",
+                "Unsupported output format: .{} (use .svg, .png or .pdf)",
                 output_ext
             ));
         }
@@ -135,6 +141,33 @@ fn svg_to_png(svg: &str) -> Result<Vec<u8>, String> {
     pixmap
         .encode_png()
         .map_err(|e| format!("Failed to encode PNG: {}", e))
+}
+
+fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, String> {
+    use svg2pdf::usvg::fontdb;
+
+    // Configure font options
+    let mut fontdb = fontdb::Database::new();
+    fontdb.load_system_fonts();
+
+    let local_fonts = Path::new("fonts");
+    if local_fonts.is_dir() {
+        fontdb.load_fonts_dir(local_fonts);
+    }
+
+    let mut opts = svg2pdf::usvg::Options::default();
+    opts.fontdb = std::sync::Arc::new(fontdb);
+
+    // Parse the SVG
+    let tree = svg2pdf::usvg::Tree::from_str(svg, &opts)
+        .map_err(|e| format!("Failed to parse SVG: {}", e))?;
+
+    // Convert to PDF
+    let options = svg2pdf::ConversionOptions::default();
+    let page_options = svg2pdf::PageOptions::default();
+
+    svg2pdf::to_pdf(&tree, options, page_options)
+        .map_err(|e| format!("Failed to convert SVG to PDF: {}", e))
 }
 
 fn configure_font_fallbacks(fontdb: &mut usvg::fontdb::Database) {
