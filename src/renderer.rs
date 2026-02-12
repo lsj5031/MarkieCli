@@ -953,6 +953,11 @@ impl<T: TextMeasure> Renderer<T> {
         code_buffer: &str,
         lang: Option<&str>,
     ) -> Result<(), String> {
+        // Check for mermaid diagram
+        if lang.map_or(false, |l| l == "mermaid") {
+            return self.render_mermaid_block(code_buffer);
+        }
+
         let x = self.line_start_x();
         let max_content_width = (self.right_edge() - x - self.theme.code_padding_x * 2.0)
             .max(self.theme.font_size_code);
@@ -1095,6 +1100,53 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         self.cursor_y += block_height;
+        self.cursor_x = self.line_start_x();
+        self.at_line_start = true;
+
+        Ok(())
+    }
+
+    fn render_mermaid_block(&mut self, source: &str) -> Result<(), String> {
+        use crate::mermaid::{render_diagram, DiagramStyle};
+
+        let x = self.line_start_x();
+        let style = DiagramStyle::from_theme(
+            &self.theme.text_color,
+            &self.theme.background_color,
+            &self.theme.code_bg_color,
+        );
+
+        let (svg, width, height) = render_diagram(source, &style)?;
+
+        // Center the diagram if smaller than available width
+        let available_width = self.right_edge() - x;
+        let offset_x = if width < available_width {
+            (available_width - width) / 2.0
+        } else {
+            0.0
+        };
+
+        // Add background
+        let bg_height = height + 20.0;
+        self.svg_content.push_str(&format!(
+            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" />"#,
+            x,
+            self.cursor_y,
+            available_width,
+            bg_height,
+            self.theme.code_radius,
+            self.theme.code_bg_color,
+        ));
+
+        // Add diagram SVG (wrapped in a group with translation)
+        let svg_x = x + offset_x + 10.0;
+        let svg_y = self.cursor_y + 10.0;
+        self.svg_content.push_str(&format!(
+            r#"<g transform="translate({:.2}, {:.2})">{}</g>"#,
+            svg_x, svg_y, svg
+        ));
+
+        self.cursor_y += bg_height;
         self.cursor_x = self.line_start_x();
         self.at_line_start = true;
 

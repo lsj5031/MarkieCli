@@ -1,5 +1,6 @@
 mod fonts;
 mod math;
+mod mermaid;
 mod renderer;
 mod theme;
 

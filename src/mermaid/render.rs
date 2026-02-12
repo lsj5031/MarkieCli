@@ -1,0 +1,703 @@
+use super::layout::{LayoutEngine, LayoutPos};
+use super::types::*;
+use super::{MermaidDiagram, parse_mermaid};
+
+/// Style configuration for diagram rendering
+#[derive(Debug, Clone)]
+pub struct DiagramStyle {
+    pub node_fill: String,
+    pub node_stroke: String,
+    pub node_text: String,
+    pub edge_stroke: String,
+    pub edge_text: String,
+    pub background: String,
+    pub font_family: String,
+    pub font_size: f32,
+}
+
+impl Default for DiagramStyle {
+    fn default() -> Self {
+        Self {
+            node_fill: "#f5f5f5".to_string(),
+            node_stroke: "#333333".to_string(),
+            node_text: "#333333".to_string(),
+            edge_stroke: "#333333".to_string(),
+            edge_text: "#666666".to_string(),
+            background: "transparent".to_string(),
+            font_family: "sans-serif".to_string(),
+            font_size: 14.0,
+        }
+    }
+}
+
+impl DiagramStyle {
+    pub fn from_theme(
+        text_color: &str,
+        background: &str,
+        code_bg: &str,
+    ) -> Self {
+        Self {
+            node_fill: code_bg.to_string(),
+            node_stroke: text_color.to_string(),
+            node_text: text_color.to_string(),
+            edge_stroke: text_color.to_string(),
+            edge_text: text_color.to_string(),
+            background: background.to_string(),
+            font_family: "sans-serif".to_string(),
+            font_size: 14.0,
+        }
+    }
+}
+
+/// Render any mermaid diagram to SVG
+pub fn render_diagram(source: &str, style: &DiagramStyle) -> Result<(String, f32, f32), String> {
+    let diagram = parse_mermaid(source)?;
+
+    match diagram {
+        MermaidDiagram::Flowchart(fc) => {
+            let svg = super::flowchart::render_flowchart(&fc, style)?;
+            Ok(svg)
+        }
+        MermaidDiagram::Sequence(seq) => {
+            let svg = render_sequence(&seq, style)?;
+            Ok(svg)
+        }
+        MermaidDiagram::ClassDiagram(cls) => {
+            let svg = render_class(&cls, style)?;
+            Ok(svg)
+        }
+        MermaidDiagram::StateDiagram(st) => {
+            let svg = render_state(&st, style)?;
+            Ok(svg)
+        }
+        MermaidDiagram::ErDiagram(er) => {
+            let svg = render_er(&er, style)?;
+            Ok(svg)
+        }
+    }
+}
+
+/// Escape XML special characters
+pub fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+// ============================================
+// FLOWCHART RENDERING (moved to flowchart.rs)
+// ============================================
+
+// Note: render_flowchart is in flowchart.rs
+
+// ============================================
+// SEQUENCE DIAGRAM RENDERING
+// ============================================
+
+fn render_sequence(diagram: &SequenceDiagram, style: &DiagramStyle) -> Result<(String, f32, f32), String> {
+    if diagram.participants.is_empty() {
+        return Ok(("<g></g>".to_string(), 100.0, 50.0));
+    }
+
+    let layout = LayoutEngine::new();
+    let (positions, _, bbox) = layout.layout_sequence(diagram);
+
+    let mut svg = String::new();
+    let padding = 20.0;
+
+    // Draw participants
+    for participant in &diagram.participants {
+        if let Some(pos) = positions.get(&participant.id) {
+            let display_name = participant.alias.as_ref().unwrap_or(&participant.id);
+            let label = escape_xml(display_name);
+
+            // Participant box
+            svg.push_str(&format!(
+                r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" stroke="{}" stroke-width="1" rx="4" />"#,
+                pos.x, pos.y, pos.width, pos.height,
+                style.node_fill, style.node_stroke
+            ));
+
+            // Label
+            let text_x = pos.x + pos.width / 2.0;
+            let text_y = pos.y + pos.height / 2.0 + style.font_size / 3.0;
+            svg.push_str(&format!(
+                r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
+                text_x, text_y, style.font_family, style.font_size, style.node_text, label
+            ));
+        }
+    }
+
+    // Draw lifelines
+    let lifeline_start_y = bbox.y + 50.0;
+    let lifeline_end_y = bbox.y + bbox.height - 20.0;
+
+    for participant in &diagram.participants {
+        if let Some(pos) = positions.get(&participant.id) {
+            let x = pos.x + pos.width / 2.0;
+            svg.push_str(&format!(
+                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" stroke-dasharray="4,4" />"#,
+                x, lifeline_start_y, x, lifeline_end_y, style.edge_stroke
+            ));
+        }
+    }
+
+    // Draw messages
+    let mut message_y = lifeline_start_y + 30.0;
+    let msg_spacing = 50.0;
+
+    for element in &diagram.elements {
+        if let SequenceElement::Message(msg) = element {
+            let from_pos = positions.get(&msg.from);
+            let to_pos = positions.get(&msg.to);
+
+            if let (Some(from), Some(to)) = (from_pos, to_pos) {
+                let x1 = from.x + from.width / 2.0;
+                let x2 = to.x + to.width / 2.0;
+                let is_right = x2 > x1;
+
+                let (start_x, end_x) = if is_right { (x1, x2) } else { (x2, x1) };
+
+                // Line
+                let dash = if msg.msg_type == MessageType::Dotted {
+                    " stroke-dasharray=\"4,4\""
+                } else {
+                    ""
+                };
+
+                svg.push_str(&format!(
+                    r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5"{} />"#,
+                    if is_right { start_x } else { end_x },
+                    message_y,
+                    if is_right { end_x } else { start_x },
+                    message_y,
+                    style.edge_stroke,
+                    dash
+                ));
+
+                // Arrow head
+                let arrow_dir = if is_right { -1.0 } else { 1.0 };
+                let arrow_x = if is_right { end_x } else { start_x };
+                let arrow_points = format!(
+                    "{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}",
+                    arrow_x,
+                    message_y,
+                    arrow_x + arrow_dir * 10.0,
+                    message_y - 5.0,
+                    arrow_x + arrow_dir * 10.0,
+                    message_y + 5.0
+                );
+
+                svg.push_str(&format!(
+                    r#"<polygon points="{}" fill="{}" />"#,
+                    arrow_points, style.edge_stroke
+                ));
+
+                // Label
+                if !msg.label.is_empty() {
+                    let label_x = (x1 + x2) / 2.0;
+                    let label_y = message_y - 8.0;
+                    svg.push_str(&format!(
+                        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
+                        label_x, label_y, style.font_family, style.font_size * 0.85, style.edge_text, escape_xml(&msg.label)
+                    ));
+                }
+
+                message_y += msg_spacing;
+            }
+        }
+    }
+
+    let total_width = bbox.width + padding * 2.0;
+    let total_height = bbox.height + padding * 2.0;
+
+    Ok((svg, total_width, total_height))
+}
+
+// ============================================
+// CLASS DIAGRAM RENDERING
+// ============================================
+
+fn render_class(diagram: &ClassDiagram, style: &DiagramStyle) -> Result<(String, f32, f32), String> {
+    if diagram.classes.is_empty() {
+        return Ok(("<g></g>".to_string(), 100.0, 50.0));
+    }
+
+    let layout = LayoutEngine::new();
+    let (positions, bbox) = layout.layout_class(diagram);
+
+    let mut svg = String::new();
+    let padding = 20.0;
+
+    // Draw classes
+    for class in &diagram.classes {
+        if let Some(pos) = positions.get(&class.name) {
+            svg.push_str(&render_class_box(class, pos, style));
+        }
+    }
+
+    // Draw relations
+    for relation in &diagram.relations {
+        let from_pos = positions.get(&relation.from);
+        let to_pos = positions.get(&relation.to);
+
+        if let (Some(from), Some(to)) = (from_pos, to_pos) {
+            svg.push_str(&render_class_relation(relation, from, to, style));
+        }
+    }
+
+    let total_width = bbox.width + padding * 2.0;
+    let total_height = bbox.height + padding * 2.0;
+
+    Ok((svg, total_width, total_height))
+}
+
+fn render_class_box(class: &ClassDefinition, pos: &LayoutPos, style: &DiagramStyle) -> String {
+    let mut svg = String::new();
+
+    // Main box
+    svg.push_str(&format!(
+        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" stroke="{}" stroke-width="1.5" />"#,
+        pos.x, pos.y, pos.width, pos.height,
+        style.node_fill, style.node_stroke
+    ));
+
+    let mut y = pos.y + style.font_size + 8.0;
+
+    // Class name
+    let name_text = if let Some(ref stereo) = class.stereotype {
+        format!("&lt;&lt;{}&gt;&gt; {}", stereo, class.name)
+    } else {
+        escape_xml(&class.name)
+    };
+
+    svg.push_str(&format!(
+        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle" font-weight="bold">{}</text>"#,
+        pos.x + pos.width / 2.0, y, style.font_family, style.font_size, style.node_text, name_text
+    ));
+
+    // Divider line after name
+    y += 6.0;
+    svg.push_str(&format!(
+        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
+        pos.x, y, pos.x + pos.width, y, style.node_stroke
+    ));
+
+    // Attributes
+    y += style.font_size + 4.0;
+    for attr in &class.attributes {
+        let vis = match attr.member.visibility {
+            Visibility::Public => "+",
+            Visibility::Private => "-",
+            Visibility::Protected => "#",
+            Visibility::Package => "~",
+        };
+        let attr_text = if let Some(ref t) = attr.type_annotation {
+            format!("{} {}: {}", vis, attr.member.name, t)
+        } else {
+            format!("{} {}", vis, attr.member.name)
+        };
+
+        svg.push_str(&format!(
+            r#"<text x="{:.2}" y="{:.2}" font-family="monospace" font-size="{:.1}" fill="{}">{}</text>"#,
+            pos.x + 8.0, y, style.font_size * 0.85, style.node_text, escape_xml(&attr_text)
+        ));
+        y += style.font_size * 0.9;
+    }
+
+    // Divider line before methods
+    if !class.methods.is_empty() {
+        y += 2.0;
+        svg.push_str(&format!(
+            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
+            pos.x, y, pos.x + pos.width, y, style.node_stroke
+        ));
+        y += style.font_size + 2.0;
+    }
+
+    // Methods
+    for method in &class.methods {
+        let vis = match method.member.visibility {
+            Visibility::Public => "+",
+            Visibility::Private => "-",
+            Visibility::Protected => "#",
+            Visibility::Package => "~",
+        };
+
+        let params: Vec<String> = method.parameters.iter()
+            .map(|(name, t)| {
+                if let Some(ty) = t {
+                    format!("{}: {}", name, ty)
+                } else {
+                    name.clone()
+                }
+            })
+            .collect();
+
+        let method_text = if let Some(ref ret) = method.return_type {
+            format!("{} {}({}): {}", vis, method.member.name, params.join(", "), ret)
+        } else {
+            format!("{} {}({})", vis, method.member.name, params.join(", "))
+        };
+
+        svg.push_str(&format!(
+            r#"<text x="{:.2}" y="{:.2}" font-family="monospace" font-size="{:.1}" fill="{}">{}</text>"#,
+            pos.x + 8.0, y, style.font_size * 0.85, style.node_text, escape_xml(&method_text)
+        ));
+        y += style.font_size * 0.9;
+    }
+
+    svg
+}
+
+fn render_class_relation(relation: &ClassRelation, from: &LayoutPos, to: &LayoutPos, style: &DiagramStyle) -> String {
+    let mut svg = String::new();
+
+    // Calculate connection points
+    let (x1, y1) = (from.x + from.width / 2.0, from.y + from.height / 2.0);
+    let (x2, y2) = (to.x + to.width / 2.0, to.y + to.height / 2.0);
+
+    // Draw line
+    let line_style = match relation.relation_type {
+        ClassRelationType::Dependency | ClassRelationType::Realization => " stroke-dasharray=\"6,3\"",
+        _ => "",
+    };
+
+    svg.push_str(&format!(
+        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5"{} />"#,
+        x1, y1, x2, y2, style.edge_stroke, line_style
+    ));
+
+    // Draw arrow heads based on relation type
+    let (from_marker, to_marker) = match relation.relation_type {
+        ClassRelationType::Inheritance => (None, Some("hollow_triangle")),
+        ClassRelationType::Composition => (Some("filled_diamond"), None),
+        ClassRelationType::Aggregation => (Some("hollow_diamond"), None),
+        ClassRelationType::Association => (None, Some("arrow")),
+        ClassRelationType::Dependency => (None, Some("hollow_triangle")),
+        ClassRelationType::Realization => (None, Some("hollow_triangle")),
+    };
+
+    // Draw markers
+    if let Some(marker) = to_marker {
+        let angle = (y2 - y1).atan2(x2 - x1);
+        svg.push_str(&draw_marker(marker, x2, y2, angle, style));
+    }
+
+    if let Some(marker) = from_marker {
+        let angle = (y1 - y2).atan2(x1 - x2);
+        svg.push_str(&draw_marker(marker, x1, y1, angle, style));
+    }
+
+    svg
+}
+
+fn draw_marker(marker_type: &str, x: f32, y: f32, angle: f32, style: &DiagramStyle) -> String {
+    let cos = angle.cos();
+    let sin = angle.sin();
+
+    match marker_type {
+        "arrow" => {
+            let p1 = (x - cos * 12.0 + sin * 5.0, y - sin * 12.0 - cos * 5.0);
+            let p2 = (x - cos * 12.0 - sin * 5.0, y - sin * 12.0 + cos * 5.0);
+            format!(
+                r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" />"#,
+                x, y, p1.0, p1.1, p2.0, p2.1, style.edge_stroke
+            )
+        }
+        "hollow_triangle" => {
+            let p1 = (x - cos * 14.0 + sin * 7.0, y - sin * 14.0 - cos * 7.0);
+            let p2 = (x - cos * 14.0 - sin * 7.0, y - sin * 14.0 + cos * 7.0);
+            let base = (x - cos * 10.0, y - sin * 10.0);
+            format!(
+                r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" stroke="{}" stroke-width="1" />"#,
+                x, y, p1.0, p1.1, p2.0, p2.1, base.0, base.1,
+                style.node_fill, style.edge_stroke
+            )
+        }
+        "filled_diamond" => {
+            let p1 = (x - cos * 16.0 + sin * 6.0, y - sin * 16.0 - cos * 6.0);
+            let p2 = (x - cos * 16.0 - sin * 6.0, y - sin * 16.0 + cos * 6.0);
+            let back = (x - cos * 24.0, y - sin * 24.0);
+            format!(
+                r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" />"#,
+                x, y, p1.0, p1.1, back.0, back.1, p2.0, p2.1,
+                style.edge_stroke
+            )
+        }
+        "hollow_diamond" => {
+            let p1 = (x - cos * 16.0 + sin * 6.0, y - sin * 16.0 - cos * 6.0);
+            let p2 = (x - cos * 16.0 - sin * 6.0, y - sin * 16.0 + cos * 6.0);
+            let back = (x - cos * 24.0, y - sin * 24.0);
+            format!(
+                r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" stroke="{}" stroke-width="1" />"#,
+                x, y, p1.0, p1.1, back.0, back.1, p2.0, p2.1,
+                style.node_fill, style.edge_stroke
+            )
+        }
+        _ => String::new(),
+    }
+}
+
+// ============================================
+// STATE DIAGRAM RENDERING
+// ============================================
+
+fn render_state(diagram: &StateDiagram, style: &DiagramStyle) -> Result<(String, f32, f32), String> {
+    if diagram.states.is_empty() {
+        return Ok(("<g></g>".to_string(), 100.0, 50.0));
+    }
+
+    let layout = LayoutEngine::new();
+    let (positions, bbox) = layout.layout_state(diagram);
+
+    let mut svg = String::new();
+    let padding = 20.0;
+
+    // Draw transitions first (behind states)
+    for transition in &diagram.transitions {
+        let from_pos = positions.get(&transition.from);
+        let to_pos = positions.get(&transition.to);
+
+        if let (Some(from), Some(to)) = (from_pos, to_pos) {
+            svg.push_str(&render_state_transition(transition, from, to, style));
+        }
+    }
+
+    // Draw states
+    for state in &diagram.states {
+        if let Some(pos) = positions.get(&state.id) {
+            svg.push_str(&render_state_node(state, pos, style));
+        }
+    }
+
+    let total_width = bbox.width + padding * 2.0;
+    let total_height = bbox.height + padding * 2.0;
+
+    Ok((svg, total_width, total_height))
+}
+
+fn render_state_node(state: &State, pos: &LayoutPos, style: &DiagramStyle) -> String {
+    let mut svg = String::new();
+
+    if state.is_start || state.id == "[*]" && !state.is_end {
+        // Start state (filled circle)
+        svg.push_str(&format!(
+            r#"<circle cx="{:.2}" cy="{:.2}" r="{:.2}" fill="{}" />"#,
+            pos.x + pos.width / 2.0,
+            pos.y + pos.height / 2.0,
+            pos.width / 2.0,
+            style.node_stroke
+        ));
+    } else if state.is_end {
+        // End state (circle with ring)
+        let cx = pos.x + pos.width / 2.0;
+        let cy = pos.y + pos.height / 2.0;
+        svg.push_str(&format!(
+            r#"<circle cx="{:.2}" cy="{:.2}" r="{:.2}" fill="{}" stroke="{}" stroke-width="2" />"#,
+            cx, cy, pos.width / 2.0 - 3.0, style.node_stroke, style.node_stroke
+        ));
+        svg.push_str(&format!(
+            r#"<circle cx="{:.2}" cy="{:.2}" r="{:.2}" fill="none" stroke="{}" stroke-width="2" />"#,
+            cx, cy, pos.width / 2.0, style.node_stroke
+        ));
+    } else {
+        // Normal state (rounded rectangle)
+        svg.push_str(&format!(
+            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" stroke="{}" stroke-width="1.5" />"#,
+            pos.x, pos.y, pos.width, pos.height,
+            10.0, style.node_fill, style.node_stroke
+        ));
+
+        // Label
+        let text_x = pos.x + pos.width / 2.0;
+        let text_y = pos.y + pos.height / 2.0 + style.font_size / 3.0;
+        svg.push_str(&format!(
+            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
+            text_x, text_y, style.font_family, style.font_size, style.node_text, escape_xml(&state.label)
+        ));
+    }
+
+    svg
+}
+
+fn render_state_transition(transition: &StateTransition, from: &LayoutPos, to: &LayoutPos, style: &DiagramStyle) -> String {
+    let mut svg = String::new();
+
+    // Calculate edge points
+    let (x1, y1) = (from.x + from.width / 2.0, from.y + from.height / 2.0);
+    let (x2, y2) = (to.x + to.width / 2.0, to.y + to.height / 2.0);
+
+    // Adjust to edge of shapes
+    let angle = (y2 - y1).atan2(x2 - x1);
+
+    let start_offset = if from.width == from.height && from.width < 30.0 {
+        // Circle
+        from.width / 2.0
+    } else {
+        // Rounded rect - approximate
+        (from.width / 2.0).min(from.height / 2.0) * 0.8
+    };
+
+    let end_offset = if to.width == to.height && to.width < 30.0 {
+        to.width / 2.0 + 5.0 // Extra for arrow
+    } else {
+        (to.width / 2.0).min(to.height / 2.0) * 0.8 + 5.0
+    };
+
+    let px1 = x1 + angle.cos() * start_offset;
+    let py1 = y1 + angle.sin() * start_offset;
+    let px2 = x2 - angle.cos() * end_offset;
+    let py2 = y2 - angle.sin() * end_offset;
+
+    // Line
+    svg.push_str(&format!(
+        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
+        px1, py1, px2, py2, style.edge_stroke
+    ));
+
+    // Arrow
+    let arrow_angle = (py1 - py2).atan2(px1 - px2);
+    let ax = px2;
+    let ay = py2;
+    let p1 = (ax + arrow_angle.cos() * 10.0 - arrow_angle.sin() * 5.0,
+              ay + arrow_angle.sin() * 10.0 + arrow_angle.cos() * 5.0);
+    let p2 = (ax + arrow_angle.cos() * 10.0 + arrow_angle.sin() * 5.0,
+              ay + arrow_angle.sin() * 10.0 - arrow_angle.cos() * 5.0);
+
+    svg.push_str(&format!(
+        r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" />"#,
+        ax, ay, p1.0, p1.1, p2.0, p2.1, style.edge_stroke
+    ));
+
+    // Label
+    if let Some(ref label) = transition.label {
+        let label_x = (px1 + px2) / 2.0;
+        let label_y = (py1 + py2) / 2.0 - 8.0;
+
+        // Background for label
+        svg.push_str(&format!(
+            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
+            label_x, label_y, style.font_family, style.font_size * 0.85, style.edge_text, escape_xml(label)
+        ));
+    }
+
+    svg
+}
+
+// ============================================
+// ER DIAGRAM RENDERING
+// ============================================
+
+fn render_er(diagram: &ErDiagram, style: &DiagramStyle) -> Result<(String, f32, f32), String> {
+    if diagram.entities.is_empty() {
+        return Ok(("<g></g>".to_string(), 100.0, 50.0));
+    }
+
+    let layout = LayoutEngine::new();
+    let (positions, bbox) = layout.layout_er(diagram);
+
+    let mut svg = String::new();
+    let padding = 20.0;
+
+    // Draw relationships first
+    for relation in &diagram.relationships {
+        let from_pos = positions.get(&relation.from);
+        let to_pos = positions.get(&relation.to);
+
+        if let (Some(from), Some(to)) = (from_pos, to_pos) {
+            svg.push_str(&render_er_relationship(relation, from, to, style));
+        }
+    }
+
+    // Draw entities
+    for entity in &diagram.entities {
+        if let Some(pos) = positions.get(&entity.name) {
+            svg.push_str(&render_er_entity(entity, pos, style));
+        }
+    }
+
+    let total_width = bbox.width + padding * 2.0;
+    let total_height = bbox.height + padding * 2.0;
+
+    Ok((svg, total_width, total_height))
+}
+
+fn render_er_entity(entity: &ErEntity, pos: &LayoutPos, style: &DiagramStyle) -> String {
+    let mut svg = String::new();
+
+    // Entity box
+    svg.push_str(&format!(
+        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" stroke="{}" stroke-width="1.5" />"#,
+        pos.x, pos.y, pos.width, pos.height,
+        style.node_fill, style.node_stroke
+    ));
+
+    let mut y = pos.y + style.font_size + 6.0;
+
+    // Entity name (bold)
+    svg.push_str(&format!(
+        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle" font-weight="bold">{}</text>"#,
+        pos.x + pos.width / 2.0, y, style.font_family, style.font_size, style.node_text, escape_xml(&entity.name)
+    ));
+
+    // Attributes
+    y += style.font_size + 4.0;
+    for attr in &entity.attributes {
+        let marker = if attr.is_key { "*" } else { "" };
+        let attr_text = format!("{}{}", marker, attr.name);
+
+        svg.push_str(&format!(
+            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
+            pos.x + 8.0, y, style.font_family, style.font_size * 0.9, style.node_text, escape_xml(&attr_text)
+        ));
+        y += style.font_size;
+    }
+
+    svg
+}
+
+fn render_er_relationship(relation: &ErRelationship, from: &LayoutPos, to: &LayoutPos, style: &DiagramStyle) -> String {
+    let mut svg = String::new();
+
+    let x1 = from.x + from.width / 2.0;
+    let y1 = from.y + from.height / 2.0;
+    let x2 = to.x + to.width / 2.0;
+    let y2 = to.y + to.height / 2.0;
+
+    // Line
+    svg.push_str(&format!(
+        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
+        x1, y1, x2, y2, style.edge_stroke
+    ));
+
+    // Cardinality labels
+    let from_card = match relation.from_cardinality {
+        ErCardinality::ZeroOrOne => "0..1",
+        ErCardinality::ExactlyOne => "1",
+        ErCardinality::ZeroOrMore => "0..*",
+        ErCardinality::OneOrMore => "1..*",
+    };
+
+    let to_card = match relation.to_cardinality {
+        ErCardinality::ZeroOrOne => "0..1",
+        ErCardinality::ExactlyOne => "1",
+        ErCardinality::ZeroOrMore => "0..*",
+        ErCardinality::OneOrMore => "1..*",
+    };
+
+    // From cardinality
+    svg.push_str(&format!(
+        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
+        x1 + 10.0, y1 - 5.0, style.font_family, style.font_size * 0.75, style.edge_text, from_card
+    ));
+
+    // To cardinality
+    svg.push_str(&format!(
+        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
+        x2 - 30.0, y2 - 5.0, style.font_family, style.font_size * 0.75, style.edge_text, to_card
+    ));
+
+    svg
+}

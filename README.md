@@ -25,9 +25,10 @@ Supported today:
 - Strikethrough
 - Tables
 - Images (local files, data URLs, and remote HTTP/S sources)
-- Inline and display math (rendered as monospace text)
+- Inline and display math (rendered with LaTeX support)
 - Footnotes
 - Definition lists
+- **Mermaid diagrams** (flowchart, sequence, class, state, ER)
 - Inline HTML and HTML blocks (rendered as code)
 - **Improved typography and spacing** for better visual consistency
 
@@ -36,8 +37,27 @@ See [examples.md](examples.md) for comprehensive examples of all supported featu
 Not yet supported:
 
 - Metadata blocks are parsed but ignored
-- Mermaid or other diagram rendering (code blocks are rendered as code)
 - Rich HTML rendering (HTML is rendered as inline code or code blocks)
+
+### Mermaid Diagram Support
+
+Markie supports Mermaid diagrams natively in Rust. Use `mermaid` code blocks:
+
+````markdown
+```mermaid
+flowchart TD
+    A[Start] --> B{Decision}
+    B -->|Yes| C[Continue]
+    B -->|No| D[Retry]
+```
+````
+
+Supported diagram types:
+- **Flowchart**: `flowchart TD/LR` with nodes (rect, rounded, diamond, circle) and labeled edges
+- **Sequence**: `sequenceDiagram` with participants and messages
+- **Class**: `classDiagram` with classes, attributes, methods, and relationships
+- **State**: `stateDiagram` with states and transitions
+- **ER**: `erDiagram` with entities and relationships
 
 ## Installation
 
@@ -119,6 +139,7 @@ The binary will be available at `target/release/markie`.
 - `syntect`: Syntax highlighting
 - `clap`: Command-line argument parsing
 - `serde`: Serialization/Deserialization (JSON, YAML, TOML)
+- `latex2mathml`: Math rendering
 
 ## License
 
