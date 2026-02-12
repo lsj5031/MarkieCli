@@ -238,7 +238,7 @@ fn render_sequence_elements(
                     ));
 
                     let arrow_dir = if is_right { -1.0 } else { 1.0 };
-                    let arrow_x = if is_right { *x2 } else { *x1 };
+                    let arrow_x = *x2;
                     match msg.kind {
                         MessageKind::Async => {
                             let p1 = (arrow_x + arrow_dir * 10.0, *message_y - 5.0);
@@ -248,7 +248,7 @@ fn render_sequence_elements(
                                 p1.0, p1.1, arrow_x, *message_y, p2.0, p2.1, style.edge_stroke
                             ));
                         }
-                        MessageKind::Sync | MessageKind::Reply => {
+                        MessageKind::Sync => {
                             svg.push_str(&format!(
                                 r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" />"#,
                                 arrow_x,
@@ -258,6 +258,14 @@ fn render_sequence_elements(
                                 arrow_x + arrow_dir * 10.0,
                                 *message_y + 5.0,
                                 style.edge_stroke
+                            ));
+                        }
+                        MessageKind::Reply => {
+                            let p1 = (arrow_x + arrow_dir * 10.0, *message_y - 5.0);
+                            let p2 = (arrow_x + arrow_dir * 10.0, *message_y + 5.0);
+                            svg.push_str(&format!(
+                                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="1.5" />"#,
+                                p1.0, p1.1, arrow_x, *message_y, p2.0, p2.1, style.edge_stroke
                             ));
                         }
                     }
@@ -648,8 +656,12 @@ fn render_class_relation(
 ) -> String {
     let mut svg = String::new();
 
-    let (x1, y1) = from.center();
-    let (x2, y2) = to.center();
+    let (from_cx, from_cy) = from.center();
+    let (to_cx, to_cy) = to.center();
+    let angle = (to_cy - from_cy).atan2(to_cx - from_cx);
+
+    let (x1, y1) = rect_boundary_point(from, angle);
+    let (x2, y2) = rect_boundary_point(to, angle + std::f32::consts::PI);
 
     let line_style = match relation.relation_type {
         ClassRelationType::Dependency | ClassRelationType::Realization => {
@@ -891,7 +903,11 @@ fn render_state_node(
         ));
 
         let text_x = pos.x + pos.width / 2.0;
-        let text_y = pos.y + pos.height / 2.0 + style.font_size / 3.0;
+        let text_y = if state.is_composite {
+            pos.y + style.font_size + 8.0
+        } else {
+            pos.y + pos.height / 2.0 + style.font_size / 3.0
+        };
         svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
             text_x, text_y, style.font_family, style.font_size, style.node_text, escape_xml(&state.label)
@@ -1041,31 +1057,28 @@ fn render_state_transition(
 ) -> String {
     let mut svg = String::new();
 
-    // Calculate edge points
-    let (x1, y1) = (from.x + from.width / 2.0, from.y + from.height / 2.0);
-    let (x2, y2) = (to.x + to.width / 2.0, to.y + to.height / 2.0);
+    let (from_cx, from_cy) = from.center();
+    let (to_cx, to_cy) = to.center();
+    let center_angle = (to_cy - from_cy).atan2(to_cx - from_cx);
 
-    // Adjust to edge of shapes
-    let angle = (y2 - y1).atan2(x2 - x1);
-
-    let start_offset = if from.width == from.height && from.width < 30.0 {
-        // Circle
-        from.width / 2.0
+    let (px1, py1) = if from.width == from.height && from.width < 30.0 {
+        (
+            from_cx + center_angle.cos() * (from.width / 2.0),
+            from_cy + center_angle.sin() * (from.width / 2.0),
+        )
     } else {
-        // Rounded rect - approximate
-        (from.width / 2.0).min(from.height / 2.0) * 0.8
+        rect_boundary_point(from, center_angle)
     };
 
-    let end_offset = if to.width == to.height && to.width < 30.0 {
-        to.width / 2.0 + 5.0 // Extra for arrow
+    let (px2, py2) = if to.width == to.height && to.width < 30.0 {
+        (
+            to_cx + (center_angle + std::f32::consts::PI).cos() * (to.width / 2.0 + 5.0),
+            to_cy + (center_angle + std::f32::consts::PI).sin() * (to.width / 2.0 + 5.0),
+        )
     } else {
-        (to.width / 2.0).min(to.height / 2.0) * 0.8 + 5.0
+        let (x, y) = rect_boundary_point(to, center_angle + std::f32::consts::PI);
+        (x + center_angle.cos() * 5.0, y + center_angle.sin() * 5.0)
     };
-
-    let px1 = x1 + angle.cos() * start_offset;
-    let py1 = y1 + angle.sin() * start_offset;
-    let px2 = x2 - angle.cos() * end_offset;
-    let py2 = y2 - angle.sin() * end_offset;
 
     // Line
     svg.push_str(&format!(
@@ -1094,12 +1107,31 @@ fn render_state_transition(
     // Label
     if let Some(ref label) = transition.label {
         let label_x = (px1 + px2) / 2.0;
-        let label_y = (py1 + py2) / 2.0 - 8.0;
+        let is_upward = py2 < py1;
+        let label_y = if is_upward {
+            (py1 + py2) / 2.0 - 10.0
+        } else {
+            (py1 + py2) / 2.0 + 14.0
+        };
+        let label_width = label.chars().count() as f32 * 6.8 + 8.0;
+        let label_height = style.font_size * 0.8 + 6.0;
 
-        // Background for label
+        svg.push_str(&format!(
+            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="2" fill="{}" />"#,
+            label_x - label_width / 2.0,
+            label_y - label_height + 2.0,
+            label_width,
+            label_height,
+            style.background
+        ));
         svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
-            label_x, label_y, style.font_family, style.font_size * 0.85, style.edge_text, escape_xml(label)
+            label_x,
+            label_y,
+            style.font_family,
+            style.font_size * 0.85,
+            style.edge_text,
+            escape_xml(label)
         ));
     }
 
@@ -1196,11 +1228,11 @@ fn render_er_relationship(
 ) -> String {
     let mut svg = String::new();
 
-    let x1 = from.x + from.width / 2.0;
-    let y1 = from.y + from.height / 2.0;
-    let x2 = to.x + to.width / 2.0;
-    let y2 = to.y + to.height / 2.0;
-    let angle = (y2 - y1).atan2(x2 - x1);
+    let (from_cx, from_cy) = from.center();
+    let (to_cx, to_cy) = to.center();
+    let angle = (to_cy - from_cy).atan2(to_cx - from_cx);
+    let (x1, y1) = rect_boundary_point(from, angle);
+    let (x2, y2) = rect_boundary_point(to, angle + std::f32::consts::PI);
 
     // Line
     svg.push_str(&format!(
@@ -1236,6 +1268,28 @@ fn render_er_relationship(
     }
 
     svg
+}
+
+fn rect_boundary_point(rect: &LayoutPos, angle: f32) -> (f32, f32) {
+    let (cx, cy) = rect.center();
+    let dx = angle.cos();
+    let dy = angle.sin();
+    let half_w = rect.width / 2.0;
+    let half_h = rect.height / 2.0;
+
+    let tx = if dx.abs() > 1e-5 {
+        half_w / dx.abs()
+    } else {
+        f32::INFINITY
+    };
+    let ty = if dy.abs() > 1e-5 {
+        half_h / dy.abs()
+    } else {
+        f32::INFINITY
+    };
+    let t = tx.min(ty);
+
+    (cx + dx * t, cy + dy * t)
 }
 
 fn render_er_cardinality_marker(
@@ -1297,18 +1351,21 @@ fn render_er_cardinality_marker(
     };
 
     match cardinality {
-        ErCardinality::ExactlyOne => marker.push_str(&draw_one(10.0)),
+        ErCardinality::ExactlyOne => {
+            marker.push_str(&draw_one(8.0));
+            marker.push_str(&draw_one(14.0));
+        }
         ErCardinality::ZeroOrOne => {
-            marker.push_str(&draw_zero(9.0));
-            marker.push_str(&draw_one(18.0));
+            marker.push_str(&draw_zero(8.0));
+            marker.push_str(&draw_one(16.0));
         }
         ErCardinality::ZeroOrMore => {
-            marker.push_str(&draw_zero(9.0));
-            marker.push_str(&draw_many(18.0));
+            marker.push_str(&draw_zero(8.0));
+            marker.push_str(&draw_many(16.0));
         }
         ErCardinality::OneOrMore => {
-            marker.push_str(&draw_one(9.0));
-            marker.push_str(&draw_many(18.0));
+            marker.push_str(&draw_one(8.0));
+            marker.push_str(&draw_many(16.0));
         }
     }
 
