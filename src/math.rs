@@ -26,9 +26,14 @@ enum MathNode {
     Frac {
         num: Box<MathNode>,
         den: Box<MathNode>,
+        line_thickness: Option<f32>, // None = default, Some(0.0) = no line
     },
     Sqrt {
         radicand: Box<MathNode>,
+    },
+    Root {
+        radicand: Box<MathNode>,
+        index: Box<MathNode>,
     },
     UnderOver {
         base: Box<MathNode>,
@@ -36,6 +41,17 @@ enum MathNode {
         over: Option<Box<MathNode>>,
     },
     Space(f32),
+    /// Table for matrices, cases, aligned equations
+    Table {
+        rows: Vec<Vec<MathNode>>,
+        column_align: Vec<String>, // "left", "center", "right"
+    },
+    /// Stretchy operator (parentheses, brackets that scale)
+    StretchyOp {
+        op: String,
+        #[allow(dead_code)]
+        form: String, // "prefix", "postfix", "infix"
+    },
 }
 
 pub struct MathResult {
@@ -91,51 +107,120 @@ struct MathBox {
     svg: String,
 }
 
+type Attrs = Vec<(String, String)>;
+
 fn parse_mathml(mathml: &str) -> Result<MathNode, String> {
     let mut reader = XmlReader::from_str(mathml);
     reader.config_mut().trim_text(true);
 
-    let mut stack: Vec<(String, Vec<MathNode>)> = Vec::new();
+    // Stack now stores: (tag_name, children, attributes)
+    let mut stack: Vec<(String, Vec<MathNode>, Attrs)> = Vec::new();
     let mut buf = Vec::new();
+
+    // Track table row context for mtable parsing
+    let mut current_table_rows: Vec<Vec<MathNode>> = Vec::new();
+    let mut current_row_cells: Vec<MathNode> = Vec::new();
+    let mut in_table = 0i32; // nesting counter
+    let mut in_row = 0i32;
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvent::Start(ref e)) => {
                 let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                stack.push((name, Vec::new()));
+                let attrs: Attrs = e
+                    .attributes()
+                    .filter_map(|a| a.ok())
+                    .map(|a| {
+                        (
+                            String::from_utf8_lossy(a.key.as_ref()).to_string(),
+                            String::from_utf8_lossy(&a.value).to_string(),
+                        )
+                    })
+                    .collect();
+
+                if name == "mtable" {
+                    in_table += 1;
+                    if in_table == 1 {
+                        current_table_rows.clear();
+                    }
+                } else if name == "mtr" && in_table == 1 {
+                    in_row += 1;
+                    current_row_cells.clear();
+                } else if name == "mtd" && in_table == 1 && in_row == 1 {
+                    // mtd content goes on stack
+                }
+
+                stack.push((name, Vec::new(), attrs));
             }
             Ok(XmlEvent::Text(ref e)) => {
                 let text = e.decode().unwrap_or_default().to_string();
                 if !text.is_empty() {
-                    if let Some((_, children)) = stack.last_mut() {
+                    if let Some((_, children, _)) = stack.last_mut() {
                         children.push(MathNode::Text(text));
                     }
                 }
             }
-            Ok(XmlEvent::End(_)) => {
-                if let Some((tag, children)) = stack.pop() {
-                    let node = build_node(&tag, children);
-                    if let Some((_, parent_children)) = stack.last_mut() {
-                        parent_children.push(node);
+            Ok(XmlEvent::End(ref e)) => {
+                let _name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if let Some((tag, children, attrs)) = stack.pop() {
+                    // Handle table elements specially
+                    if tag == "mtd" && in_table == 1 && in_row == 1 {
+                        let cell = if children.len() == 1 {
+                            children.into_iter().next().unwrap()
+                        } else {
+                            MathNode::Row(children)
+                        };
+                        current_row_cells.push(cell);
+                    } else if tag == "mtr" && in_table == 1 {
+                        in_row -= 1;
+                        if !current_row_cells.is_empty() {
+                            current_table_rows.push(std::mem::take(&mut current_row_cells));
+                        }
+                    } else if tag == "mtable" && in_table == 1 {
+                        in_table -= 1;
+                        let table_node = MathNode::Table {
+                            rows: std::mem::take(&mut current_table_rows),
+                            column_align: vec!["center".to_string()], // default center
+                        };
+                        if let Some((_, parent_children, _)) = stack.last_mut() {
+                            parent_children.push(table_node);
+                        } else {
+                            return Ok(table_node);
+                        }
                     } else {
-                        return Ok(node);
+                        let node = build_node(&tag, children, &attrs);
+                        if let Some((_, parent_children, _)) = stack.last_mut() {
+                            parent_children.push(node);
+                        } else {
+                            return Ok(node);
+                        }
                     }
                 }
             }
             Ok(XmlEvent::Empty(ref e)) => {
                 let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let attrs: Attrs = e
+                    .attributes()
+                    .filter_map(|a| a.ok())
+                    .map(|a| {
+                        (
+                            String::from_utf8_lossy(a.key.as_ref()).to_string(),
+                            String::from_utf8_lossy(&a.value).to_string(),
+                        )
+                    })
+                    .collect();
+
                 if name == "mspace" {
                     let mut width_em = 0.0;
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"width" {
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                    for (key, val) in &attrs {
+                        if key == "width" {
                             if let Some(stripped) = val.strip_suffix("em") {
                                 width_em = stripped.parse().unwrap_or(0.0);
                             }
                         }
                     }
                     let node = MathNode::Space(width_em);
-                    if let Some((_, parent_children)) = stack.last_mut() {
+                    if let Some((_, parent_children, _)) = stack.last_mut() {
                         parent_children.push(node);
                     }
                 }
@@ -150,7 +235,11 @@ fn parse_mathml(mathml: &str) -> Result<MathNode, String> {
     Ok(MathNode::Row(Vec::new()))
 }
 
-fn build_node(tag: &str, mut children: Vec<MathNode>) -> MathNode {
+fn get_attr(attrs: &[(String, String)], name: &str) -> Option<String> {
+    attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+}
+
+fn build_node(tag: &str, mut children: Vec<MathNode>, attrs: &Attrs) -> MathNode {
     match tag {
         "mi" => {
             let text = extract_text(&children);
@@ -162,7 +251,15 @@ fn build_node(tag: &str, mut children: Vec<MathNode>) -> MathNode {
         }
         "mo" => {
             let text = extract_text(&children);
-            MathNode::Operator(text)
+            // Check for stretchy attribute
+            let stretchy = get_attr(attrs, "stretchy").map(|v| v == "true").unwrap_or(false);
+            let form = get_attr(attrs, "form").unwrap_or_else(|| "infix".to_string());
+
+            if stretchy && !text.is_empty() {
+                MathNode::StretchyOp { op: text, form }
+            } else {
+                MathNode::Operator(text)
+            }
         }
         "mtext" => {
             let text = extract_text(&children);
@@ -197,9 +294,18 @@ fn build_node(tag: &str, mut children: Vec<MathNode>) -> MathNode {
         "mfrac" if children.len() >= 2 => {
             let den = children.pop().unwrap();
             let num = children.pop().unwrap();
+            // Check for linethickness attribute (used by binomial)
+            let line_thickness = get_attr(attrs, "linethickness").and_then(|v| {
+                if v == "0" {
+                    Some(0.0)
+                } else {
+                    v.parse::<f32>().ok()
+                }
+            });
             MathNode::Frac {
                 num: Box::new(num),
                 den: Box::new(den),
+                line_thickness,
             }
         }
         "msqrt" => {
@@ -210,6 +316,15 @@ fn build_node(tag: &str, mut children: Vec<MathNode>) -> MathNode {
             };
             MathNode::Sqrt {
                 radicand: Box::new(radicand),
+            }
+        }
+        "mroot" if children.len() >= 2 => {
+            // Note: in MathML mroot, the index comes AFTER the radicand
+            let index = children.pop().unwrap();
+            let radicand = children.pop().unwrap();
+            MathNode::Root {
+                radicand: Box::new(radicand),
+                index: Box::new(index),
             }
         }
         "mover" if children.len() >= 2 => {
@@ -483,7 +598,11 @@ fn layout_node<T: TextMeasure>(
             x,
             baseline_y,
         ),
-        MathNode::Frac { num, den } => {
+        MathNode::Frac {
+            num,
+            den,
+            line_thickness,
+        } => {
             let frac_size = font_size * 0.85;
 
             let num_box = layout_node(num, frac_size, color, measure, 0.0, 0.0);
@@ -505,10 +624,15 @@ fn layout_node<T: TextMeasure>(
             let num_rendered = layout_node(num, frac_size, color, measure, num_x, num_baseline);
             let den_rendered = layout_node(den, frac_size, color, measure, den_x, den_baseline);
 
-            let rule_svg = format!(
-                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
-                x, rule_y, x + frac_width, rule_y, color
-            );
+            // Only draw line if line_thickness is not Some(0.0) (for binomials)
+            let rule_svg = if line_thickness != &Some(0.0) {
+                format!(
+                    r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
+                    x, rule_y, x + frac_width, rule_y, color
+                )
+            } else {
+                String::new()
+            };
 
             let ascent =
                 (baseline_y - num_baseline + num_rendered.ascent).max(font_size * 0.75);
@@ -563,6 +687,84 @@ fn layout_node<T: TextMeasure>(
                 ascent,
                 descent,
                 svg: format!("{}{}", radical_svg, inner_box.svg),
+            }
+        }
+        MathNode::Root { radicand, index } => {
+            let inner = layout_node(radicand, font_size, color, measure, 0.0, 0.0);
+            let index_size = font_size * 0.6;
+
+            let radical_width = font_size * 0.6;
+            let index_width = font_size * 0.5;
+            let padding = font_size * 0.1;
+            let overbar_gap = font_size * 0.15;
+            let total_width = index_width + radical_width + inner.width + padding;
+
+            let inner_box = layout_node(
+                radicand,
+                font_size,
+                color,
+                measure,
+                x + index_width + radical_width,
+                baseline_y,
+            );
+
+            let top_y = baseline_y - inner_box.ascent - overbar_gap;
+            let bottom_y = baseline_y + inner_box.descent;
+
+            // Render the index (nth root degree) in the notch
+            let index_baseline = baseline_y - inner_box.ascent * 0.3;
+            let index_box = layout_node(
+                index,
+                index_size,
+                color,
+                measure,
+                x,
+                index_baseline,
+            );
+
+            // Radical symbol with notch for index
+            let radical_svg = format!(
+                r#"<path d="M {:.2} {:.2} L {:.2} {:.2} L {:.2} {:.2} L {:.2} {:.2} L {:.2} {:.2}" stroke="{}" stroke-width="1.2" fill="none" />"#,
+                x + index_width,
+                baseline_y - font_size * 0.15,
+                x + index_width + radical_width * 0.35,
+                baseline_y,
+                x + index_width + radical_width * 0.6,
+                top_y,
+                x + index_width + radical_width + inner_box.width + padding,
+                top_y,
+                x + index_width + radical_width + inner_box.width + padding - font_size * 0.1,
+                top_y - font_size * 0.05,
+                color
+            );
+
+            let ascent = (baseline_y - top_y).max(inner_box.ascent + overbar_gap);
+            let descent = inner_box.descent.max(bottom_y - baseline_y);
+
+            MathBox {
+                width: total_width,
+                ascent,
+                descent,
+                svg: format!("{}{}{}", index_box.svg, radical_svg, inner_box.svg),
+            }
+        }
+        MathNode::Table { rows, column_align } => {
+            layout_table(rows, column_align, font_size, color, measure, x, baseline_y)
+        }
+        MathNode::StretchyOp { op, form: _ } => {
+            // For stretchy operators, we render them at normal size
+            // The actual stretching would require knowing the content height
+            // For now, treat as regular operator - stretching is handled by the wrapping Row
+            let (w, _h) = measure_token(op, font_size, false, measure);
+            let svg = format!(
+                r#"<text x="{:.2}" y="{:.2}" font-family="serif" font-size="{:.2}" fill="{}">{}</text>"#,
+                x, baseline_y, font_size, color, escape_xml(op)
+            );
+            MathBox {
+                width: w,
+                ascent: font_size * 0.75,
+                descent: font_size * 0.25,
+                svg,
             }
         }
     }
@@ -652,6 +854,92 @@ fn layout_underover<T: TextMeasure>(
         width: max_width,
         ascent: total_ascent,
         descent: total_descent,
+        svg,
+    }
+}
+
+fn layout_table<T: TextMeasure>(
+    rows: &[Vec<MathNode>],
+    _column_align: &[String],
+    font_size: f32,
+    color: &str,
+    measure: &mut T,
+    x: f32,
+    baseline_y: f32,
+) -> MathBox {
+    if rows.is_empty() {
+        return MathBox {
+            width: 0.0,
+            ascent: font_size * 0.75,
+            descent: font_size * 0.25,
+            svg: String::new(),
+        };
+    }
+
+    let cell_size = font_size * 0.9;
+    let row_gap = font_size * 0.3;
+    let col_gap = font_size * 0.4;
+
+    // First pass: measure all cells to determine column widths and row heights
+    let mut col_widths: Vec<f32> = Vec::new();
+    let mut row_heights: Vec<(f32, f32)> = Vec::new(); // (ascent, descent) per row
+
+    for row in rows {
+        let mut row_ascent = cell_size * 0.75;
+        let mut row_descent = cell_size * 0.25;
+
+        for (col_idx, cell) in row.iter().enumerate() {
+            let cell_box = layout_node(cell, cell_size, color, measure, 0.0, 0.0);
+
+            // Expand column width if needed
+            while col_widths.len() <= col_idx {
+                col_widths.push(0.0);
+            }
+            col_widths[col_idx] = col_widths[col_idx].max(cell_box.width);
+
+            row_ascent = row_ascent.max(cell_box.ascent);
+            row_descent = row_descent.max(cell_box.descent);
+        }
+        row_heights.push((row_ascent, row_descent));
+    }
+
+    // Calculate total table dimensions
+    let total_width: f32 = col_widths.iter().sum::<f32>() + col_gap * (col_widths.len().max(1) - 1) as f32;
+    let total_height: f32 = row_heights.iter().map(|(a, d)| a + d).sum::<f32>()
+        + row_gap * (rows.len() - 1) as f32;
+
+    // Center the table vertically around baseline
+    let table_top = baseline_y - total_height / 2.0;
+
+    // Second pass: render all cells
+    let mut svg = String::new();
+    let mut current_y = table_top;
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        let (row_ascent, row_descent) = row_heights[row_idx];
+        let row_baseline = current_y + row_ascent;
+        let mut current_x = x;
+
+        for (col_idx, cell) in row.iter().enumerate() {
+            let col_width = col_widths.get(col_idx).copied().unwrap_or(0.0);
+            let cell_box = layout_node(cell, cell_size, color, measure, 0.0, 0.0);
+
+            // Center cell in column
+            let cell_x = current_x + (col_width - cell_box.width) / 2.0;
+
+            let rendered = layout_node(cell, cell_size, color, measure, cell_x, row_baseline);
+            svg.push_str(&rendered.svg);
+
+            current_x += col_width + col_gap;
+        }
+
+        current_y += row_ascent + row_descent + row_gap;
+    }
+
+    MathBox {
+        width: total_width,
+        ascent: total_height / 2.0,
+        descent: total_height / 2.0,
         svg,
     }
 }
