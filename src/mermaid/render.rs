@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use super::layout::{LayoutEngine, LayoutPos};
 use super::types::*;
-use super::{MermaidDiagram, parse_mermaid};
+use super::{parse_mermaid, MermaidDiagram};
 
 /// Style configuration for diagram rendering
 #[derive(Debug, Clone)]
@@ -31,11 +33,7 @@ impl Default for DiagramStyle {
 }
 
 impl DiagramStyle {
-    pub fn from_theme(
-        text_color: &str,
-        background: &str,
-        code_bg: &str,
-    ) -> Self {
+    pub fn from_theme(text_color: &str, background: &str, code_bg: &str) -> Self {
         Self {
             node_fill: code_bg.to_string(),
             node_stroke: text_color.to_string(),
@@ -95,47 +93,68 @@ pub fn escape_xml(s: &str) -> String {
 // SEQUENCE DIAGRAM RENDERING
 // ============================================
 
-fn render_sequence(diagram: &SequenceDiagram, style: &DiagramStyle) -> Result<(String, f32, f32), String> {
+fn render_sequence(
+    diagram: &SequenceDiagram,
+    style: &DiagramStyle,
+) -> Result<(String, f32, f32), String> {
     if diagram.participants.is_empty() {
         return Ok(("<g></g>".to_string(), 100.0, 50.0));
     }
 
     let layout = LayoutEngine::new();
-    let (positions, _, bbox) = layout.layout_sequence(diagram);
+    let (positions, layout_elements, bbox) = layout.layout_sequence(diagram);
 
     let mut svg = String::new();
     let padding = 20.0;
 
-    // Draw participants
+    let mut participant_centers: HashMap<&str, f32> = HashMap::new();
+    for participant in &diagram.participants {
+        if let Some(pos) = positions.get(&participant.id) {
+            let (cx, _) = pos.center();
+            participant_centers.insert(participant.id.as_str(), cx);
+        }
+    }
+
+    let left_edge = participant_centers
+        .values()
+        .copied()
+        .fold(f32::MAX, f32::min)
+        .min(40.0);
+    let right_edge = participant_centers
+        .values()
+        .copied()
+        .fold(f32::MIN, f32::max)
+        .max(120.0);
+
     for participant in &diagram.participants {
         if let Some(pos) = positions.get(&participant.id) {
             let display_name = participant.alias.as_ref().unwrap_or(&participant.id);
             let label = escape_xml(display_name);
+            let text_x = participant_centers
+                .get(participant.id.as_str())
+                .copied()
+                .unwrap_or(pos.x + pos.width / 2.0);
 
-            // Participant box
             svg.push_str(&format!(
                 r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" stroke="{}" stroke-width="1" rx="4" />"#,
-                pos.x, pos.y, pos.width, pos.height,
-                style.node_fill, style.node_stroke
+                pos.x, pos.y, pos.width, pos.height, style.node_fill, style.node_stroke
             ));
-
-            // Label
-            let text_x = pos.x + pos.width / 2.0;
-            let text_y = pos.y + pos.height / 2.0 + style.font_size / 3.0;
             svg.push_str(&format!(
                 r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
-                text_x, text_y, style.font_family, style.font_size, style.node_text, label
+                text_x,
+                pos.y + pos.height / 2.0 + style.font_size / 3.0,
+                style.font_family,
+                style.font_size,
+                style.node_text,
+                label
             ));
         }
     }
 
-    // Draw lifelines
     let lifeline_start_y = bbox.y + 50.0;
-    let lifeline_end_y = bbox.y + bbox.height - 20.0;
-
+    let lifeline_end_y = bbox.bottom() - 20.0;
     for participant in &diagram.participants {
-        if let Some(pos) = positions.get(&participant.id) {
-            let x = pos.x + pos.width / 2.0;
+        if let Some(x) = participant_centers.get(participant.id.as_str()) {
             svg.push_str(&format!(
                 r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" stroke-dasharray="4,4" />"#,
                 x, lifeline_start_y, x, lifeline_end_y, style.edge_stroke
@@ -143,83 +162,286 @@ fn render_sequence(diagram: &SequenceDiagram, style: &DiagramStyle) -> Result<(S
         }
     }
 
-    // Draw messages
     let mut message_y = lifeline_start_y + 30.0;
-    let msg_spacing = 50.0;
-
-    for element in &diagram.elements {
-        if let SequenceElement::Message(msg) = element {
-            let from_pos = positions.get(&msg.from);
-            let to_pos = positions.get(&msg.to);
-
-            if let (Some(from), Some(to)) = (from_pos, to_pos) {
-                let x1 = from.x + from.width / 2.0;
-                let x2 = to.x + to.width / 2.0;
-                let is_right = x2 > x1;
-
-                let (start_x, end_x) = if is_right { (x1, x2) } else { (x2, x1) };
-
-                // Line
-                let dash = if msg.msg_type == MessageType::Dotted {
-                    " stroke-dasharray=\"4,4\""
-                } else {
-                    ""
-                };
-
-                svg.push_str(&format!(
-                    r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5"{} />"#,
-                    if is_right { start_x } else { end_x },
-                    message_y,
-                    if is_right { end_x } else { start_x },
-                    message_y,
-                    style.edge_stroke,
-                    dash
-                ));
-
-                // Arrow head
-                let arrow_dir = if is_right { -1.0 } else { 1.0 };
-                let arrow_x = if is_right { end_x } else { start_x };
-                let arrow_points = format!(
-                    "{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}",
-                    arrow_x,
-                    message_y,
-                    arrow_x + arrow_dir * 10.0,
-                    message_y - 5.0,
-                    arrow_x + arrow_dir * 10.0,
-                    message_y + 5.0
-                );
-
-                svg.push_str(&format!(
-                    r#"<polygon points="{}" fill="{}" />"#,
-                    arrow_points, style.edge_stroke
-                ));
-
-                // Label
-                if !msg.label.is_empty() {
-                    let label_x = (x1 + x2) / 2.0;
-                    let label_y = message_y - 8.0;
-                    svg.push_str(&format!(
-                        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
-                        label_x, label_y, style.font_family, style.font_size * 0.85, style.edge_text, escape_xml(&msg.label)
-                    ));
+    for el in &layout_elements {
+        match el {
+            super::layout::SequenceLayoutElement::Message {
+                from_x,
+                to_x,
+                y,
+                label,
+            } => {
+                let label_span = (label.chars().count() as f32 * 3.5).max(8.0);
+                let _max_edge = from_x.max(*to_x) + label_span;
+                if *y > message_y {
+                    message_y = *y;
                 }
-
-                message_y += msg_spacing;
+            }
+            super::layout::SequenceLayoutElement::Activation { x, y, height } => {
+                let _ = x;
+                let bottom = y + height;
+                if bottom > message_y {
+                    message_y = bottom;
+                }
             }
         }
     }
 
-    let total_width = bbox.width + padding * 2.0;
-    let total_height = bbox.height + padding * 2.0;
+    let mut activation_starts: HashMap<String, Vec<f32>> = HashMap::new();
+    svg.push_str(&render_sequence_elements(
+        &diagram.elements,
+        &participant_centers,
+        style,
+        &mut message_y,
+        0,
+        left_edge,
+        right_edge,
+        &mut activation_starts,
+    ));
 
-    Ok((svg, total_width, total_height))
+    Ok((
+        svg,
+        bbox.right() + padding,
+        bbox.bottom().max(message_y + 20.0) + padding,
+    ))
+}
+
+fn render_sequence_elements(
+    elements: &[SequenceElement],
+    participant_centers: &HashMap<&str, f32>,
+    style: &DiagramStyle,
+    message_y: &mut f32,
+    block_depth: usize,
+    left_edge: f32,
+    right_edge: f32,
+    activation_starts: &mut HashMap<String, Vec<f32>>,
+) -> String {
+    let mut svg = String::new();
+    for element in elements {
+        match element {
+            SequenceElement::Message(msg) => {
+                if let (Some(x1), Some(x2)) = (
+                    participant_centers.get(msg.from.as_str()),
+                    participant_centers.get(msg.to.as_str()),
+                ) {
+                    let is_right = x2 > x1;
+                    let dash =
+                        if msg.msg_type == MessageType::Dotted || msg.kind == MessageKind::Reply {
+                            " stroke-dasharray=\"4,4\""
+                        } else {
+                            ""
+                        };
+
+                    svg.push_str(&format!(
+                        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5"{} />"#,
+                        x1, *message_y, x2, *message_y, style.edge_stroke, dash
+                    ));
+
+                    let arrow_dir = if is_right { -1.0 } else { 1.0 };
+                    let arrow_x = if is_right { *x2 } else { *x1 };
+                    match msg.kind {
+                        MessageKind::Async => {
+                            let p1 = (arrow_x + arrow_dir * 10.0, *message_y - 5.0);
+                            let p2 = (arrow_x + arrow_dir * 10.0, *message_y + 5.0);
+                            svg.push_str(&format!(
+                                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="1.5" />"#,
+                                p1.0, p1.1, arrow_x, *message_y, p2.0, p2.1, style.edge_stroke
+                            ));
+                        }
+                        MessageKind::Sync | MessageKind::Reply => {
+                            svg.push_str(&format!(
+                                r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" />"#,
+                                arrow_x,
+                                *message_y,
+                                arrow_x + arrow_dir * 10.0,
+                                *message_y - 5.0,
+                                arrow_x + arrow_dir * 10.0,
+                                *message_y + 5.0,
+                                style.edge_stroke
+                            ));
+                        }
+                    }
+
+                    if !msg.label.is_empty() {
+                        svg.push_str(&format!(
+                            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
+                            (x1 + x2) / 2.0,
+                            *message_y - 8.0,
+                            style.font_family,
+                            style.font_size * 0.85,
+                            style.edge_text,
+                            escape_xml(&msg.label)
+                        ));
+                    }
+                }
+                *message_y += 50.0;
+            }
+            SequenceElement::Activation(activation) => {
+                if let Some(cx) = participant_centers.get(activation.participant.as_str()) {
+                    activation_starts
+                        .entry(activation.participant.clone())
+                        .or_default()
+                        .push(*message_y - 10.0);
+                    svg.push_str(&format!(
+                        r#"<rect x="{:.2}" y="{:.2}" width="8" height="16" fill="{}" stroke="{}" stroke-width="1" />"#,
+                        cx - 4.0,
+                        *message_y - 10.0,
+                        style.node_fill,
+                        style.node_stroke
+                    ));
+                }
+                *message_y += 24.0;
+            }
+            SequenceElement::Deactivation(activation) => {
+                if let Some(cx) = participant_centers.get(activation.participant.as_str()) {
+                    if let Some(start) = activation_starts
+                        .entry(activation.participant.clone())
+                        .or_default()
+                        .pop()
+                    {
+                        svg.push_str(&format!(
+                            r#"<rect x="{:.2}" y="{:.2}" width="8" height="{:.2}" fill="{}" fill-opacity="0.35" stroke="{}" stroke-width="1" />"#,
+                            cx - 4.0,
+                            start,
+                            (*message_y - start).max(16.0),
+                            style.node_fill,
+                            style.node_stroke
+                        ));
+                    }
+                }
+                *message_y += 24.0;
+            }
+            SequenceElement::Note {
+                participant,
+                position,
+                text,
+            } => {
+                if let Some(cx) = participant_centers.get(participant.as_str()) {
+                    let note_width = (text.chars().count() as f32 * 6.0 + 20.0)
+                        .min(220.0)
+                        .max(80.0);
+                    let x = match position.as_str() {
+                        "left" => cx - note_width - 12.0,
+                        "right" => cx + 12.0,
+                        _ => cx - note_width / 2.0,
+                    };
+                    let y = *message_y - 18.0;
+                    svg.push_str(&format!(
+                        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="28" rx="3" fill="{}" fill-opacity="0.25" stroke="{}" stroke-width="1" />"#,
+                        x,
+                        y,
+                        note_width,
+                        style.node_fill,
+                        style.node_stroke
+                    ));
+                    svg.push_str(&format!(
+                        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
+                        x + 8.0,
+                        y + 18.0,
+                        style.font_family,
+                        style.font_size * 0.8,
+                        style.node_text,
+                        escape_xml(text)
+                    ));
+                }
+                *message_y += 42.0;
+            }
+            SequenceElement::Block(block) => {
+                let start_y = *message_y - 14.0;
+                let inset = block_depth as f32 * 8.0;
+                let block_left = left_edge - 36.0 + inset;
+                let block_right = right_edge + 36.0 - inset;
+                let block_kind = match block.block_type {
+                    SequenceBlockType::Alt => "alt",
+                    SequenceBlockType::Opt => "opt",
+                    SequenceBlockType::Loop => "loop",
+                    SequenceBlockType::Par => "par",
+                    SequenceBlockType::Critical => "critical",
+                };
+                let title = if block.label.is_empty() {
+                    block_kind.to_string()
+                } else {
+                    format!("{} {}", block_kind, block.label)
+                };
+
+                svg.push_str(&format!(
+                    r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" font-weight="bold">{}</text>"#,
+                    block_left + 6.0,
+                    *message_y,
+                    style.font_family,
+                    style.font_size * 0.8,
+                    style.edge_text,
+                    escape_xml(&title)
+                ));
+                *message_y += 18.0;
+
+                svg.push_str(&render_sequence_elements(
+                    &block.messages,
+                    participant_centers,
+                    style,
+                    message_y,
+                    block_depth + 1,
+                    left_edge,
+                    right_edge,
+                    activation_starts,
+                ));
+
+                for (label, branch_elements) in &block.else_branches {
+                    svg.push_str(&format!(
+                        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" stroke-dasharray="5,3" />"#,
+                        block_left,
+                        *message_y - 8.0,
+                        block_right,
+                        *message_y - 8.0,
+                        style.edge_stroke
+                    ));
+                    if !label.is_empty() {
+                        svg.push_str(&format!(
+                            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
+                            block_left + 6.0,
+                            *message_y + 2.0,
+                            style.font_family,
+                            style.font_size * 0.78,
+                            style.edge_text,
+                            escape_xml(label)
+                        ));
+                    }
+                    *message_y += 14.0;
+                    svg.push_str(&render_sequence_elements(
+                        branch_elements,
+                        participant_centers,
+                        style,
+                        message_y,
+                        block_depth + 1,
+                        left_edge,
+                        right_edge,
+                        activation_starts,
+                    ));
+                }
+
+                svg.push_str(&format!(
+                    r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="none" stroke="{}" stroke-width="1" />"#,
+                    block_left,
+                    start_y,
+                    (block_right - block_left).max(24.0),
+                    (*message_y - start_y + 8.0).max(28.0),
+                    style.edge_stroke
+                ));
+                *message_y += 10.0;
+            }
+        }
+    }
+    svg
 }
 
 // ============================================
 // CLASS DIAGRAM RENDERING
 // ============================================
 
-fn render_class(diagram: &ClassDiagram, style: &DiagramStyle) -> Result<(String, f32, f32), String> {
+fn render_class(
+    diagram: &ClassDiagram,
+    style: &DiagramStyle,
+) -> Result<(String, f32, f32), String> {
     if diagram.classes.is_empty() {
         return Ok(("<g></g>".to_string(), 100.0, 50.0));
     }
@@ -247,8 +469,8 @@ fn render_class(diagram: &ClassDiagram, style: &DiagramStyle) -> Result<(String,
         }
     }
 
-    let total_width = bbox.width + padding * 2.0;
-    let total_height = bbox.height + padding * 2.0;
+    let total_width = bbox.right() + padding;
+    let total_height = bbox.bottom() + padding;
 
     Ok((svg, total_width, total_height))
 }
@@ -266,22 +488,49 @@ fn render_class_box(class: &ClassDefinition, pos: &LayoutPos, style: &DiagramSty
     let mut y = pos.y + style.font_size + 8.0;
 
     // Class name
-    let name_text = if let Some(ref stereo) = class.stereotype {
-        format!("&lt;&lt;{}&gt;&gt; {}", stereo, class.name)
+    let effective_stereotype = if class.is_interface {
+        class
+            .stereotype
+            .clone()
+            .or_else(|| Some("interface".to_string()))
+    } else {
+        class.stereotype.clone()
+    };
+    let name_text = if let Some(stereo) = effective_stereotype {
+        format!(
+            "&lt;&lt;{}&gt;&gt; {}",
+            escape_xml(&stereo),
+            escape_xml(&class.name)
+        )
     } else {
         escape_xml(&class.name)
     };
+    let name_style = if class.is_abstract || class.is_interface {
+        " font-style=\"italic\""
+    } else {
+        ""
+    };
 
     svg.push_str(&format!(
-        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle" font-weight="bold">{}</text>"#,
-        pos.x + pos.width / 2.0, y, style.font_family, style.font_size, style.node_text, name_text
+        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle" font-weight="bold"{}>{}</text>"#,
+        pos.x + pos.width / 2.0,
+        y,
+        style.font_family,
+        style.font_size,
+        style.node_text,
+        name_style,
+        name_text
     ));
 
     // Divider line after name
     y += 6.0;
     svg.push_str(&format!(
         r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
-        pos.x, y, pos.x + pos.width, y, style.node_stroke
+        pos.x,
+        y,
+        pos.x + pos.width,
+        y,
+        style.node_stroke
     ));
 
     // Attributes
@@ -300,8 +549,22 @@ fn render_class_box(class: &ClassDefinition, pos: &LayoutPos, style: &DiagramSty
         };
 
         svg.push_str(&format!(
-            r#"<text x="{:.2}" y="{:.2}" font-family="monospace" font-size="{:.1}" fill="{}">{}</text>"#,
-            pos.x + 8.0, y, style.font_size * 0.85, style.node_text, escape_xml(&attr_text)
+            r#"<text x="{:.2}" y="{:.2}" font-family="monospace" font-size="{:.1}" fill="{}"{}{}>{}</text>"#,
+            pos.x + 8.0,
+            y,
+            style.font_size * 0.85,
+            style.node_text,
+            if attr.member.is_static {
+                " text-decoration=\"underline\""
+            } else {
+                ""
+            },
+            if attr.member.is_abstract {
+                " font-style=\"italic\""
+            } else {
+                ""
+            },
+            escape_xml(&attr_text)
         ));
         y += style.font_size * 0.9;
     }
@@ -311,7 +574,11 @@ fn render_class_box(class: &ClassDefinition, pos: &LayoutPos, style: &DiagramSty
         y += 2.0;
         svg.push_str(&format!(
             r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
-            pos.x, y, pos.x + pos.width, y, style.node_stroke
+            pos.x,
+            y,
+            pos.x + pos.width,
+            y,
+            style.node_stroke
         ));
         y += style.font_size + 2.0;
     }
@@ -325,7 +592,9 @@ fn render_class_box(class: &ClassDefinition, pos: &LayoutPos, style: &DiagramSty
             Visibility::Package => "~",
         };
 
-        let params: Vec<String> = method.parameters.iter()
+        let params: Vec<String> = method
+            .parameters
+            .iter()
             .map(|(name, t)| {
                 if let Some(ty) = t {
                     format!("{}: {}", name, ty)
@@ -336,14 +605,34 @@ fn render_class_box(class: &ClassDefinition, pos: &LayoutPos, style: &DiagramSty
             .collect();
 
         let method_text = if let Some(ref ret) = method.return_type {
-            format!("{} {}({}): {}", vis, method.member.name, params.join(", "), ret)
+            format!(
+                "{} {}({}): {}",
+                vis,
+                method.member.name,
+                params.join(", "),
+                ret
+            )
         } else {
             format!("{} {}({})", vis, method.member.name, params.join(", "))
         };
 
         svg.push_str(&format!(
-            r#"<text x="{:.2}" y="{:.2}" font-family="monospace" font-size="{:.1}" fill="{}">{}</text>"#,
-            pos.x + 8.0, y, style.font_size * 0.85, style.node_text, escape_xml(&method_text)
+            r#"<text x="{:.2}" y="{:.2}" font-family="monospace" font-size="{:.1}" fill="{}"{}{}>{}</text>"#,
+            pos.x + 8.0,
+            y,
+            style.font_size * 0.85,
+            style.node_text,
+            if method.member.is_static {
+                " text-decoration=\"underline\""
+            } else {
+                ""
+            },
+            if method.member.is_abstract {
+                " font-style=\"italic\""
+            } else {
+                ""
+            },
+            escape_xml(&method_text)
         ));
         y += style.font_size * 0.9;
     }
@@ -351,16 +640,21 @@ fn render_class_box(class: &ClassDefinition, pos: &LayoutPos, style: &DiagramSty
     svg
 }
 
-fn render_class_relation(relation: &ClassRelation, from: &LayoutPos, to: &LayoutPos, style: &DiagramStyle) -> String {
+fn render_class_relation(
+    relation: &ClassRelation,
+    from: &LayoutPos,
+    to: &LayoutPos,
+    style: &DiagramStyle,
+) -> String {
     let mut svg = String::new();
 
-    // Calculate connection points
-    let (x1, y1) = (from.x + from.width / 2.0, from.y + from.height / 2.0);
-    let (x2, y2) = (to.x + to.width / 2.0, to.y + to.height / 2.0);
+    let (x1, y1) = from.center();
+    let (x2, y2) = to.center();
 
-    // Draw line
     let line_style = match relation.relation_type {
-        ClassRelationType::Dependency | ClassRelationType::Realization => " stroke-dasharray=\"6,3\"",
+        ClassRelationType::Dependency | ClassRelationType::Realization => {
+            " stroke-dasharray=\"6,3\""
+        }
         _ => "",
     };
 
@@ -369,7 +663,6 @@ fn render_class_relation(relation: &ClassRelation, from: &LayoutPos, to: &Layout
         x1, y1, x2, y2, style.edge_stroke, line_style
     ));
 
-    // Draw arrow heads based on relation type
     let (from_marker, to_marker) = match relation.relation_type {
         ClassRelationType::Inheritance => (None, Some("hollow_triangle")),
         ClassRelationType::Composition => (Some("filled_diamond"), None),
@@ -379,7 +672,6 @@ fn render_class_relation(relation: &ClassRelation, from: &LayoutPos, to: &Layout
         ClassRelationType::Realization => (None, Some("hollow_triangle")),
     };
 
-    // Draw markers
     if let Some(marker) = to_marker {
         let angle = (y2 - y1).atan2(x2 - x1);
         svg.push_str(&draw_marker(marker, x2, y2, angle, style));
@@ -388,6 +680,60 @@ fn render_class_relation(relation: &ClassRelation, from: &LayoutPos, to: &Layout
     if let Some(marker) = from_marker {
         let angle = (y1 - y2).atan2(x1 - x2);
         svg.push_str(&draw_marker(marker, x1, y1, angle, style));
+    }
+
+    let angle = (y2 - y1).atan2(x2 - x1);
+    let unit_x = angle.cos();
+    let unit_y = angle.sin();
+    let normal_x = -unit_y;
+    let normal_y = unit_x;
+
+    if let Some(label) = &relation.label {
+        let mx = (x1 + x2) / 2.0;
+        let my = (y1 + y2) / 2.0;
+        let label_w = label.chars().count() as f32 * 7.0 + 10.0;
+        let label_h = style.font_size * 0.95;
+        svg.push_str(&format!(
+            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="2" fill="{}" />"#,
+            mx - label_w / 2.0,
+            my - label_h + normal_y * 10.0,
+            label_w,
+            label_h + 4.0,
+            style.background
+        ));
+        svg.push_str(&format!(
+            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
+            mx + normal_x * 10.0,
+            my + normal_y * 10.0,
+            style.font_family,
+            style.font_size * 0.8,
+            style.edge_text,
+            escape_xml(label)
+        ));
+    }
+
+    if let Some(m) = &relation.multiplicity_from {
+        svg.push_str(&format!(
+            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
+            x1 + unit_x * 12.0 + normal_x * 8.0,
+            y1 + unit_y * 12.0 + normal_y * 8.0,
+            style.font_family,
+            style.font_size * 0.75,
+            style.edge_text,
+            escape_xml(m)
+        ));
+    }
+
+    if let Some(m) = &relation.multiplicity_to {
+        svg.push_str(&format!(
+            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="end">{}</text>"#,
+            x2 - unit_x * 12.0 + normal_x * 8.0,
+            y2 - unit_y * 12.0 + normal_y * 8.0,
+            style.font_family,
+            style.font_size * 0.75,
+            style.edge_text,
+            escape_xml(m)
+        ));
     }
 
     svg
@@ -412,8 +758,7 @@ fn draw_marker(marker_type: &str, x: f32, y: f32, angle: f32, style: &DiagramSty
             let base = (x - cos * 10.0, y - sin * 10.0);
             format!(
                 r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" stroke="{}" stroke-width="1" />"#,
-                x, y, p1.0, p1.1, p2.0, p2.1, base.0, base.1,
-                style.node_fill, style.edge_stroke
+                x, y, p1.0, p1.1, p2.0, p2.1, base.0, base.1, style.node_fill, style.edge_stroke
             )
         }
         "filled_diamond" => {
@@ -422,8 +767,7 @@ fn draw_marker(marker_type: &str, x: f32, y: f32, angle: f32, style: &DiagramSty
             let back = (x - cos * 24.0, y - sin * 24.0);
             format!(
                 r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" />"#,
-                x, y, p1.0, p1.1, back.0, back.1, p2.0, p2.1,
-                style.edge_stroke
+                x, y, p1.0, p1.1, back.0, back.1, p2.0, p2.1, style.edge_stroke
             )
         }
         "hollow_diamond" => {
@@ -432,8 +776,7 @@ fn draw_marker(marker_type: &str, x: f32, y: f32, angle: f32, style: &DiagramSty
             let back = (x - cos * 24.0, y - sin * 24.0);
             format!(
                 r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" stroke="{}" stroke-width="1" />"#,
-                x, y, p1.0, p1.1, back.0, back.1, p2.0, p2.1,
-                style.node_fill, style.edge_stroke
+                x, y, p1.0, p1.1, back.0, back.1, p2.0, p2.1, style.node_fill, style.edge_stroke
             )
         }
         _ => String::new(),
@@ -444,7 +787,10 @@ fn draw_marker(marker_type: &str, x: f32, y: f32, angle: f32, style: &DiagramSty
 // STATE DIAGRAM RENDERING
 // ============================================
 
-fn render_state(diagram: &StateDiagram, style: &DiagramStyle) -> Result<(String, f32, f32), String> {
+fn render_state(
+    diagram: &StateDiagram,
+    style: &DiagramStyle,
+) -> Result<(String, f32, f32), String> {
     if diagram.states.is_empty() {
         return Ok(("<g></g>".to_string(), 100.0, 50.0));
     }
@@ -468,17 +814,22 @@ fn render_state(diagram: &StateDiagram, style: &DiagramStyle) -> Result<(String,
     // Draw states
     for state in &diagram.states {
         if let Some(pos) = positions.get(&state.id) {
-            svg.push_str(&render_state_node(state, pos, style));
+            svg.push_str(&render_state_node(state, &state.children, pos, style));
         }
     }
 
-    let total_width = bbox.width + padding * 2.0;
-    let total_height = bbox.height + padding * 2.0;
+    let total_width = bbox.right() + padding;
+    let total_height = bbox.bottom() + padding;
 
     Ok((svg, total_width, total_height))
 }
 
-fn render_state_node(state: &State, pos: &LayoutPos, style: &DiagramStyle) -> String {
+fn render_state_node(
+    state: &State,
+    children: &[StateElement],
+    pos: &LayoutPos,
+    style: &DiagramStyle,
+) -> String {
     let mut svg = String::new();
 
     if state.is_start || state.id == "[*]" && !state.is_end {
@@ -496,33 +847,94 @@ fn render_state_node(state: &State, pos: &LayoutPos, style: &DiagramStyle) -> St
         let cy = pos.y + pos.height / 2.0;
         svg.push_str(&format!(
             r#"<circle cx="{:.2}" cy="{:.2}" r="{:.2}" fill="{}" stroke="{}" stroke-width="2" />"#,
-            cx, cy, pos.width / 2.0 - 3.0, style.node_stroke, style.node_stroke
+            cx,
+            cy,
+            pos.width / 2.0 - 3.0,
+            style.node_stroke,
+            style.node_stroke
         ));
         svg.push_str(&format!(
             r#"<circle cx="{:.2}" cy="{:.2}" r="{:.2}" fill="none" stroke="{}" stroke-width="2" />"#,
             cx, cy, pos.width / 2.0, style.node_stroke
         ));
     } else {
-        // Normal state (rounded rectangle)
         svg.push_str(&format!(
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" stroke="{}" stroke-width="1.5" />"#,
             pos.x, pos.y, pos.width, pos.height,
             10.0, style.node_fill, style.node_stroke
         ));
 
-        // Label
         let text_x = pos.x + pos.width / 2.0;
         let text_y = pos.y + pos.height / 2.0 + style.font_size / 3.0;
         svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
             text_x, text_y, style.font_family, style.font_size, style.node_text, escape_xml(&state.label)
         ));
+
+        let mut nested_states = 0;
+        let mut nested_transitions = 0;
+        let mut nested_notes = 0;
+        for child in children {
+            match child {
+                StateElement::State(s) => {
+                    if s.id != state.id {
+                        nested_states += 1;
+                    }
+                }
+                StateElement::Transition(t) => {
+                    if t.from == state.id {
+                        nested_transitions += 1;
+                    }
+                }
+                StateElement::Note {
+                    state: note_state,
+                    text,
+                } => {
+                    if note_state == &state.id && !text.is_empty() {
+                        nested_notes += 1;
+                    }
+                }
+            }
+        }
+
+        if state.is_composite || nested_states > 0 || nested_transitions > 0 {
+            let fold = 10.0;
+            let x2 = pos.x + pos.width;
+            let y1 = pos.y;
+            svg.push_str(&format!(
+                r#"<path d="M {:.2} {:.2} L {:.2} {:.2} L {:.2} {:.2} Z" fill="{}" fill-opacity="0.35" stroke="{}" stroke-width="1" />"#,
+                x2 - fold,
+                y1,
+                x2,
+                y1,
+                x2,
+                y1 + fold,
+                style.node_fill,
+                style.node_stroke
+            ));
+            svg.push_str(&format!(
+                r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="end">{}|{}|{}</text>"#,
+                x2 - 4.0,
+                pos.y + pos.height - 6.0,
+                style.font_family,
+                style.font_size * 0.6,
+                style.edge_text,
+                nested_states,
+                nested_transitions,
+                nested_notes
+            ));
+        }
     }
 
     svg
 }
 
-fn render_state_transition(transition: &StateTransition, from: &LayoutPos, to: &LayoutPos, style: &DiagramStyle) -> String {
+fn render_state_transition(
+    transition: &StateTransition,
+    from: &LayoutPos,
+    to: &LayoutPos,
+    style: &DiagramStyle,
+) -> String {
     let mut svg = String::new();
 
     // Calculate edge points
@@ -561,10 +973,14 @@ fn render_state_transition(transition: &StateTransition, from: &LayoutPos, to: &
     let arrow_angle = (py1 - py2).atan2(px1 - px2);
     let ax = px2;
     let ay = py2;
-    let p1 = (ax + arrow_angle.cos() * 10.0 - arrow_angle.sin() * 5.0,
-              ay + arrow_angle.sin() * 10.0 + arrow_angle.cos() * 5.0);
-    let p2 = (ax + arrow_angle.cos() * 10.0 + arrow_angle.sin() * 5.0,
-              ay + arrow_angle.sin() * 10.0 - arrow_angle.cos() * 5.0);
+    let p1 = (
+        ax + arrow_angle.cos() * 10.0 - arrow_angle.sin() * 5.0,
+        ay + arrow_angle.sin() * 10.0 + arrow_angle.cos() * 5.0,
+    );
+    let p2 = (
+        ax + arrow_angle.cos() * 10.0 + arrow_angle.sin() * 5.0,
+        ay + arrow_angle.sin() * 10.0 - arrow_angle.cos() * 5.0,
+    );
 
     svg.push_str(&format!(
         r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" />"#,
@@ -618,8 +1034,8 @@ fn render_er(diagram: &ErDiagram, style: &DiagramStyle) -> Result<(String, f32, 
         }
     }
 
-    let total_width = bbox.width + padding * 2.0;
-    let total_height = bbox.height + padding * 2.0;
+    let total_width = bbox.right() + padding;
+    let total_height = bbox.bottom() + padding;
 
     Ok((svg, total_width, total_height))
 }
@@ -646,11 +1062,21 @@ fn render_er_entity(entity: &ErEntity, pos: &LayoutPos, style: &DiagramStyle) ->
     y += style.font_size + 4.0;
     for attr in &entity.attributes {
         let marker = if attr.is_key { "*" } else { "" };
-        let attr_text = format!("{}{}", marker, attr.name);
+        let attr_name = if attr.is_composite {
+            format!("[{}]", attr.name)
+        } else {
+            attr.name.clone()
+        };
+        let attr_text = format!("{}{}", marker, attr_name);
 
         svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
-            pos.x + 8.0, y, style.font_family, style.font_size * 0.9, style.node_text, escape_xml(&attr_text)
+            pos.x + 8.0,
+            y,
+            style.font_family,
+            style.font_size * 0.9,
+            style.node_text,
+            escape_xml(&attr_text)
         ));
         y += style.font_size;
     }
@@ -658,7 +1084,12 @@ fn render_er_entity(entity: &ErEntity, pos: &LayoutPos, style: &DiagramStyle) ->
     svg
 }
 
-fn render_er_relationship(relation: &ErRelationship, from: &LayoutPos, to: &LayoutPos, style: &DiagramStyle) -> String {
+fn render_er_relationship(
+    relation: &ErRelationship,
+    from: &LayoutPos,
+    to: &LayoutPos,
+    style: &DiagramStyle,
+) -> String {
     let mut svg = String::new();
 
     let x1 = from.x + from.width / 2.0;
@@ -690,14 +1121,36 @@ fn render_er_relationship(relation: &ErRelationship, from: &LayoutPos, to: &Layo
     // From cardinality
     svg.push_str(&format!(
         r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
-        x1 + 10.0, y1 - 5.0, style.font_family, style.font_size * 0.75, style.edge_text, from_card
+        x1 + 10.0,
+        y1 - 5.0,
+        style.font_family,
+        style.font_size * 0.75,
+        style.edge_text,
+        from_card
     ));
 
     // To cardinality
     svg.push_str(&format!(
         r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
-        x2 - 30.0, y2 - 5.0, style.font_family, style.font_size * 0.75, style.edge_text, to_card
+        x2 - 30.0,
+        y2 - 5.0,
+        style.font_family,
+        style.font_size * 0.75,
+        style.edge_text,
+        to_card
     ));
+
+    if let Some(label) = &relation.label {
+        svg.push_str(&format!(
+            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
+            (x1 + x2) / 2.0,
+            (y1 + y2) / 2.0 - 8.0,
+            style.font_family,
+            style.font_size * 0.8,
+            style.edge_text,
+            escape_xml(label)
+        ));
+    }
 
     svg
 }

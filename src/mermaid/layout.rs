@@ -13,7 +13,12 @@ pub struct BBox {
 
 impl BBox {
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     pub fn right(&self) -> f32 {
@@ -53,7 +58,12 @@ pub struct LayoutPos {
 
 impl LayoutPos {
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     pub fn center(&self) -> (f32, f32) {
@@ -102,7 +112,7 @@ impl LayoutEngine {
         }
 
         // Build adjacency lists
-        let mut outgoing: HashMap<&str, Vec<&str>> = HashMap::new();
+        let mut outgoing: HashMap<&str, Vec<(&str, usize)>> = HashMap::new();
         let mut incoming: HashMap<&str, Vec<&str>> = HashMap::new();
 
         for node in &flowchart.nodes {
@@ -111,12 +121,20 @@ impl LayoutEngine {
         }
 
         for edge in &flowchart.edges {
-            outgoing.entry(edge.from.as_str()).or_default().push(&edge.to);
-            incoming.entry(edge.to.as_str()).or_default().push(&edge.from);
+            outgoing
+                .entry(edge.from.as_str())
+                .or_default()
+                .push((&edge.to, edge.min_length.max(1)));
+            incoming
+                .entry(edge.to.as_str())
+                .or_default()
+                .push(&edge.from);
         }
 
         // Find root nodes (no incoming edges)
-        let mut roots: Vec<&str> = flowchart.nodes.iter()
+        let mut roots: Vec<&str> = flowchart
+            .nodes
+            .iter()
             .filter(|n| incoming.get(n.id.as_str()).map_or(true, |v| v.is_empty()))
             .map(|n| n.id.as_str())
             .collect();
@@ -139,9 +157,9 @@ impl LayoutEngine {
         while let Some(node_id) = queue.pop_front() {
             let current_level = *levels.get(node_id).unwrap_or(&0);
             if let Some(neighbors) = outgoing.get(node_id) {
-                for &neighbor in neighbors {
+                for &(neighbor, min_len) in neighbors {
                     if !levels.contains_key(neighbor) {
-                        let neighbor_level = current_level + 1;
+                        let neighbor_level = current_level + min_len;
                         levels.insert(neighbor, neighbor_level);
                         max_level = max_level.max(neighbor_level);
                         queue.push_back(neighbor);
@@ -164,9 +182,9 @@ impl LayoutEngine {
             while let Some(node_id) = queue.pop_front() {
                 let current_level = *levels.get(node_id).unwrap_or(&0);
                 if let Some(neighbors) = outgoing.get(node_id) {
-                    for &neighbor in neighbors {
+                    for &(neighbor, min_len) in neighbors {
                         if !levels.contains_key(neighbor) {
-                            let neighbor_level = current_level + 1;
+                            let neighbor_level = current_level + min_len;
                             levels.insert(neighbor, neighbor_level);
                             max_level = max_level.max(neighbor_level);
                             queue.push_back(neighbor);
@@ -183,7 +201,9 @@ impl LayoutEngine {
         }
 
         // Calculate node sizes based on label
-        let node_sizes: HashMap<&str, (f32, f32)> = flowchart.nodes.iter()
+        let node_sizes: HashMap<&str, (f32, f32)> = flowchart
+            .nodes
+            .iter()
             .map(|n| {
                 let (w, h) = self.calculate_node_size(&n.label, &n.shape);
                 (n.id.as_str(), (w, h))
@@ -191,7 +211,10 @@ impl LayoutEngine {
             .collect();
 
         // Position nodes
-        let is_vertical = matches!(flowchart.direction, FlowDirection::TopDown | FlowDirection::BottomUp);
+        let is_vertical = matches!(
+            flowchart.direction,
+            FlowDirection::TopDown | FlowDirection::BottomUp
+        );
 
         if is_vertical {
             let mut y = 20.0;
@@ -256,24 +279,18 @@ impl LayoutEngine {
                 let size = text_width.max(text_height) + padding + 20.0;
                 (size, size)
             }
-            NodeShape::Hexagon => {
-                (text_width + padding + 30.0, text_height + padding + 10.0)
-            }
+            NodeShape::Hexagon => (text_width + padding + 30.0, text_height + padding + 10.0),
             NodeShape::Stadium | NodeShape::Subroutine => {
                 (text_width + padding + 20.0, text_height + padding + 8.0)
             }
-            NodeShape::Cylinder => {
-                (text_width + padding, text_height + padding + 15.0)
-            }
+            NodeShape::Cylinder => (text_width + padding, text_height + padding + 15.0),
             NodeShape::Parallelogram | NodeShape::ParallelogramAlt => {
                 (text_width + padding + 30.0, text_height + padding)
             }
             NodeShape::Trapezoid | NodeShape::TrapezoidAlt => {
                 (text_width + padding + 30.0, text_height + padding)
             }
-            _ => {
-                (text_width + padding, text_height + padding)
-            }
+            _ => (text_width + padding, text_height + padding),
         };
 
         (base_width.max(40.0), base_height.max(30.0))
@@ -290,19 +307,23 @@ impl LayoutEngine {
         let mut max_bottom = f32::MIN;
 
         for pos in positions.values() {
-            min_x = min_x.min(pos.x);
-            min_y = min_y.min(pos.y);
-            max_right = max_right.max(pos.right());
-            max_bottom = max_bottom.max(pos.bottom());
+            let node_bbox = BBox::new(pos.x, pos.y, pos.width, pos.height);
+            min_x = min_x.min(node_bbox.x);
+            min_y = min_y.min(node_bbox.y);
+            max_right = max_right.max(node_bbox.right());
+            max_bottom = max_bottom.max(node_bbox.bottom());
         }
 
         BBox::new(min_x, min_y, max_right - min_x, max_bottom - min_y)
     }
 
     /// Layout a sequence diagram
-    pub fn layout_sequence(&self, diagram: &SequenceDiagram) -> (HashMap<String, LayoutPos>, Vec<SequenceLayoutElement>, BBox) {
+    pub fn layout_sequence(
+        &self,
+        diagram: &SequenceDiagram,
+    ) -> (HashMap<String, LayoutPos>, Vec<SequenceLayoutElement>, BBox) {
         let mut positions: HashMap<String, LayoutPos> = HashMap::new();
-        let elements: Vec<SequenceLayoutElement> = Vec::new();
+        let mut elements: Vec<SequenceLayoutElement> = Vec::new();
 
         if diagram.participants.is_empty() {
             return (positions, elements, BBox::default());
@@ -317,19 +338,109 @@ impl LayoutEngine {
 
         for (i, participant) in diagram.participants.iter().enumerate() {
             let x = start_x + i as f32 * (participant_width + spacing);
-            positions.insert(participant.id.clone(), LayoutPos::new(x, start_y, participant_width, participant_height));
+            positions.insert(
+                participant.id.clone(),
+                LayoutPos::new(x, start_y, participant_width, participant_height),
+            );
         }
 
-        // Calculate total height based on messages
-        let num_messages = diagram.elements.iter()
-            .filter(|e| matches!(e, SequenceElement::Message(_)))
-            .count();
-        let total_height = start_y + participant_height + 40.0 + (num_messages as f32 * 60.0);
+        let mut current_y = start_y + participant_height + 40.0;
+        self.collect_sequence_layout_elements(
+            &diagram.elements,
+            &positions,
+            &mut current_y,
+            &mut elements,
+        );
 
-        let width = start_x * 2.0 + diagram.participants.len() as f32 * (participant_width + spacing) - spacing;
-        let bbox = BBox::new(0.0, 0.0, width, total_height);
+        if elements.is_empty() {
+            current_y += 40.0;
+        }
+
+        let max_label_half_width = elements
+            .iter()
+            .filter_map(|el| {
+                if let SequenceLayoutElement::Message { label, .. } = el {
+                    Some(label.chars().count() as f32 * 3.5 + self.edge_label_padding)
+                } else {
+                    None
+                }
+            })
+            .fold(0.0_f32, f32::max);
+
+        let width = start_x * 2.0
+            + diagram.participants.len() as f32 * (participant_width + spacing)
+            - spacing;
+        let bbox = BBox::new(
+            0.0,
+            0.0,
+            width + max_label_half_width * 2.0,
+            current_y + 20.0,
+        )
+        .with_padding(self.edge_label_padding / 2.0);
 
         (positions, elements, bbox)
+    }
+
+    fn collect_sequence_layout_elements(
+        &self,
+        elements: &[SequenceElement],
+        positions: &HashMap<String, LayoutPos>,
+        current_y: &mut f32,
+        out: &mut Vec<SequenceLayoutElement>,
+    ) {
+        for element in elements {
+            match element {
+                SequenceElement::Message(msg) => {
+                    if let (Some(from), Some(to)) =
+                        (positions.get(&msg.from), positions.get(&msg.to))
+                    {
+                        let (from_x, _) = from.center();
+                        let (to_x, _) = to.center();
+                        out.push(SequenceLayoutElement::Message {
+                            from_x,
+                            to_x,
+                            y: *current_y,
+                            label: msg.label.clone(),
+                        });
+                    }
+                    *current_y += 50.0;
+                }
+                SequenceElement::Activation(activation)
+                | SequenceElement::Deactivation(activation) => {
+                    if let Some(pos) = positions.get(&activation.participant) {
+                        let (cx, _) = pos.center();
+                        out.push(SequenceLayoutElement::Activation {
+                            x: cx,
+                            y: *current_y - 10.0,
+                            height: 30.0,
+                        });
+                    }
+                    *current_y += 24.0;
+                }
+                SequenceElement::Note { .. } => {
+                    *current_y += 42.0;
+                }
+                SequenceElement::Block(block) => {
+                    *current_y += 28.0;
+                    self.collect_sequence_layout_elements(
+                        &block.messages,
+                        positions,
+                        current_y,
+                        out,
+                    );
+                    for (_, branch_elements) in &block.else_branches {
+                        *current_y += 22.0;
+                        self.collect_sequence_layout_elements(
+                            branch_elements,
+                            positions,
+                            current_y,
+                            out,
+                        );
+                    }
+                    *current_y += 20.0;
+                }
+            }
+        }
     }
 
     /// Layout a class diagram
@@ -365,7 +476,10 @@ impl LayoutEngine {
             let x = start_x + col as f32 * (class_width + spacing_x);
             let y = start_y + row as f32 * (class_height + spacing_y);
 
-            positions.insert(class.name.clone(), LayoutPos::new(x, y, class_width, class_height));
+            positions.insert(
+                class.name.clone(),
+                LayoutPos::new(x, y, class_width, class_height),
+            );
         }
 
         let bbox = self.calculate_bbox(&positions);
@@ -386,7 +500,10 @@ impl LayoutEngine {
             outgoing.entry(state.id.as_str()).or_default();
         }
         for trans in &diagram.transitions {
-            outgoing.entry(trans.from.as_str()).or_default().push(&trans.to);
+            outgoing
+                .entry(trans.from.as_str())
+                .or_default()
+                .push(&trans.to);
         }
 
         // Assign levels using BFS from start state
@@ -451,7 +568,8 @@ impl LayoutEngine {
 
         for (level, states) in level_states.iter().enumerate() {
             let y = start_y + level as f32 * (state_height + spacing_y);
-            let _total_width = states.len() as f32 * state_width + (states.len().saturating_sub(1)) as f32 * spacing_x;
+            let _total_width = states.len() as f32 * state_width
+                + (states.len().saturating_sub(1)) as f32 * spacing_x;
             let mut x = start_x;
 
             for &state_id in states {
@@ -499,7 +617,10 @@ impl LayoutEngine {
             let x = start_x + col as f32 * (entity_width + spacing_x);
             let y = start_y + row as f32 * (entity_height + spacing_y);
 
-            positions.insert(entity.name.clone(), LayoutPos::new(x, y, entity_width, entity_height));
+            positions.insert(
+                entity.name.clone(),
+                LayoutPos::new(x, y, entity_width, entity_height),
+            );
         }
 
         let bbox = self.calculate_bbox(&positions);

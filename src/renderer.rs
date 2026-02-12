@@ -4,6 +4,7 @@ use base64::Engine;
 use imagesize;
 use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use resvg::usvg;
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style as SyntectStyle, ThemeSet};
@@ -239,7 +240,7 @@ impl<T: TextMeasure> Renderer<T> {
         Ok(Self {
             theme,
             measure,
-            svg_content: String::new(),
+            svg_content: String::with_capacity(64 * 1024), // 64KB initial capacity
             cursor_x: padding_x,
             cursor_y: padding_y,
             width,
@@ -481,7 +482,8 @@ impl<T: TextMeasure> Renderer<T> {
                 }
 
                 let indent = self.base_left_indent() + self.theme.font_size_base * 1.5;
-                self.definition_list_stack.push(DefinitionListState { indent });
+                self.definition_list_stack
+                    .push(DefinitionListState { indent });
             }
             Tag::DefinitionListTitle => {
                 if !self.at_line_start {
@@ -717,26 +719,30 @@ impl<T: TextMeasure> Renderer<T> {
 
         if self.in_strikethrough {
             let line_y = self.cursor_y - font_size * 0.32;
-            self.svg_content.push_str(&format!(
+            write!(
+                self.svg_content,
                 r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
                 self.cursor_x,
                 line_y,
                 self.cursor_x + token_width,
                 line_y,
                 fill,
-            ));
+            )
+            .unwrap();
         }
 
         if self.link_depth > 0 {
             let underline_y = self.cursor_y + font_size * 0.12;
-            self.svg_content.push_str(&format!(
+            write!(
+                self.svg_content,
                 r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
                 self.cursor_x,
                 underline_y,
                 self.cursor_x + token_width,
                 underline_y,
                 fill,
-            ));
+            )
+            .unwrap();
         }
 
         self.cursor_x += token_width;
@@ -761,7 +767,8 @@ impl<T: TextMeasure> Renderer<T> {
         let rect_y =
             self.cursor_y - self.theme.font_size_code * 0.8 - self.theme.code_padding_y / 2.0;
 
-        self.svg_content.push_str(&format!(
+        write!(
+            self.svg_content,
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" />"#,
             self.cursor_x,
             rect_y,
@@ -769,7 +776,8 @@ impl<T: TextMeasure> Renderer<T> {
             rect_height,
             self.theme.code_radius,
             self.theme.code_bg_color,
-        ));
+        )
+        .unwrap();
 
         let code_text_color = self.theme.code_text_color.clone();
         self.draw_text_at(
@@ -829,14 +837,9 @@ impl<T: TextMeasure> Renderer<T> {
         let font_size = self.current_font_size();
         let marker = format!("{}", label);
         let superscript_size = font_size * 0.65;
-        let (marker_width, _) = self.measure.measure_text(
-            &marker,
-            superscript_size,
-            false,
-            false,
-            false,
-            None,
-        );
+        let (marker_width, _) =
+            self.measure
+                .measure_text(&marker, superscript_size, false, false, false, None);
 
         if !self.at_line_start && self.cursor_x + marker_width > self.right_edge() {
             self.advance_line(font_size);
@@ -869,12 +872,13 @@ impl<T: TextMeasure> Renderer<T> {
                 if !self.at_line_start && self.cursor_x + result.width > self.right_edge() {
                     self.new_line();
                 }
-                let rendered = crate::math::render_math_at(
-                    math_src, font_size, &color, &mut self.measure, false,
-                    self.cursor_x, self.cursor_y,
-                ).map_err(|e| format!("Math render error: {}", e))?;
-                self.svg_content.push_str(&rendered.svg_fragment);
-                self.cursor_x += rendered.width;
+                write!(
+                    self.svg_content,
+                    r#"<g transform="translate({:.2}, {:.2})">{}</g>"#,
+                    self.cursor_x, self.cursor_y, result.svg_fragment
+                )
+                .unwrap();
+                self.cursor_x += result.width;
                 self.at_line_start = false;
                 self.last_margin_added = 0.0;
             }
@@ -918,15 +922,18 @@ impl<T: TextMeasure> Renderer<T> {
                 self.start_block(self.theme.margin_top, false);
 
                 let available_width = self.right_edge() - self.line_start_x();
-                let offset_x = self.line_start_x() + (available_width - result.width).max(0.0) / 2.0;
+                let offset_x =
+                    self.line_start_x() + (available_width - result.width).max(0.0) / 2.0;
                 let baseline_y = self.cursor_y + result.ascent;
 
-                let rendered = crate::math::render_math_at(
-                    &math_src, font_size, &color, &mut self.measure, true,
-                    offset_x, baseline_y,
-                ).map_err(|e| format!("Math render error: {}", e))?;
-                self.svg_content.push_str(&rendered.svg_fragment);
-                self.cursor_y = baseline_y + rendered.descent;
+                write!(
+                    self.svg_content,
+                    r#"<g transform="translate({:.2}, {:.2})">{}</g>"#,
+                    offset_x, baseline_y, result.svg_fragment
+                )
+                .unwrap();
+
+                self.cursor_y = baseline_y + result.descent;
                 self.cursor_x = self.line_start_x();
                 self.at_line_start = true;
 
@@ -1052,7 +1059,8 @@ impl<T: TextMeasure> Renderer<T> {
             + self.theme.code_padding_y * 2.0;
         let block_width = max_line_width + self.theme.code_padding_x * 2.0;
 
-        self.svg_content.push_str(&format!(
+        write!(
+            self.svg_content,
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" />"#,
             x,
             self.cursor_y,
@@ -1060,7 +1068,8 @@ impl<T: TextMeasure> Renderer<T> {
             block_height,
             self.theme.code_radius,
             self.theme.code_bg_color,
-        ));
+        )
+        .unwrap();
 
         for (idx, line_segments) in lines.iter().enumerate() {
             let y = self.cursor_y
@@ -1076,7 +1085,7 @@ impl<T: TextMeasure> Renderer<T> {
                     style.foreground.r, style.foreground.g, style.foreground.b
                 );
 
-                self.draw_text_at(
+                let w = self.draw_text_at(
                     current_x,
                     y,
                     text,
@@ -1085,15 +1094,6 @@ impl<T: TextMeasure> Renderer<T> {
                     &fill,
                     false,
                     false,
-                );
-
-                let (w, _) = self.measure.measure_text(
-                    text,
-                    self.theme.font_size_code,
-                    true,
-                    false,
-                    false,
-                    None,
                 );
                 current_x += w;
             }
@@ -1128,7 +1128,8 @@ impl<T: TextMeasure> Renderer<T> {
 
         // Add background
         let bg_height = height + 20.0;
-        self.svg_content.push_str(&format!(
+        write!(
+            self.svg_content,
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" />"#,
             x,
             self.cursor_y,
@@ -1136,15 +1137,18 @@ impl<T: TextMeasure> Renderer<T> {
             bg_height,
             self.theme.code_radius,
             self.theme.code_bg_color,
-        ));
+        )
+        .unwrap();
 
         // Add diagram SVG (wrapped in a group with translation)
         let svg_x = x + offset_x + 10.0;
         let svg_y = self.cursor_y + 10.0;
-        self.svg_content.push_str(&format!(
+        write!(
+            self.svg_content,
             r#"<g transform="translate({:.2}, {:.2})">{}</g>"#,
             svg_x, svg_y, svg
-        ));
+        )
+        .unwrap();
 
         self.cursor_y += bg_height;
         self.cursor_x = self.line_start_x();
@@ -1243,10 +1247,12 @@ impl<T: TextMeasure> Renderer<T> {
         let left = self.base_left_indent();
         let right = self.right_edge();
 
-        self.svg_content.push_str(&format!(
+        write!(
+            self.svg_content,
             r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
             left, hr_y, right, hr_y, self.theme.quote_border_color,
-        ));
+        )
+        .unwrap();
 
         // Reset margin tracking so the bottom margin isn't collapsed with the top.
         self.last_margin_added = 0.0;
@@ -1377,14 +1383,16 @@ impl<T: TextMeasure> Renderer<T> {
         let mut current_y = self.cursor_y;
         let table_height = row_height * state.rows.len() as f32;
 
-        self.svg_content.push_str(&format!(
+        write!(
+            self.svg_content,
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="none" stroke="{}" stroke-width="1" />"#,
             table_x,
             current_y,
             table_width,
             table_height,
             border_color,
-        ));
+        )
+        .unwrap();
 
         for row in &state.rows {
             let mut cell_x = table_x;
@@ -1396,14 +1404,16 @@ impl<T: TextMeasure> Renderer<T> {
                     .copied()
                     .unwrap_or(Alignment::Left);
 
-                self.svg_content.push_str(&format!(
+                write!(
+                    self.svg_content,
                     r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="none" stroke="{}" stroke-width="1" />"#,
                     cell_x,
                     current_y,
                     cell_width,
                     row_height,
                     border_color,
-                ));
+                )
+                .unwrap();
 
                 let (text_width, _) = self.measure.measure_text(
                     cell.text.trim(),
@@ -1464,14 +1474,17 @@ impl<T: TextMeasure> Renderer<T> {
 
         let x = marker_x;
         let y = self.cursor_y - size * 0.7;
-        self.svg_content.push_str(&format!(
+        let marker_stroke = self.current_fill().to_string();
+        write!(
+            self.svg_content,
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="2" ry="2" stroke="{}" fill="none" stroke-width="1" />"#,
             x,
             y,
             size,
             size,
-            self.current_fill(),
-        ));
+            marker_stroke,
+        )
+        .unwrap();
 
         if checked {
             let inset = size * 0.2;
@@ -1481,7 +1494,9 @@ impl<T: TextMeasure> Renderer<T> {
             let y2 = y + size - inset;
             let x3 = x + size - inset;
             let y3 = y + inset;
-            self.svg_content.push_str(&format!(
+            let check_stroke = self.current_fill().to_string();
+            write!(
+                self.svg_content,
                 r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />"#,
                 x1,
                 y1,
@@ -1489,8 +1504,9 @@ impl<T: TextMeasure> Renderer<T> {
                 y2,
                 x3,
                 y3,
-                self.current_fill(),
-            ));
+                check_stroke,
+            )
+            .unwrap();
         }
 
         self.cursor_x = marker_x + size + gap;
@@ -1529,10 +1545,12 @@ impl<T: TextMeasure> Renderer<T> {
         let x = self.line_start_x();
         let y = self.cursor_y;
 
-        self.svg_content.push_str(&format!(
+        write!(
+            self.svg_content,
             r#"<image x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" href="{}" />"#,
             x, y, width, height, payload.data_url,
-        ));
+        )
+        .unwrap();
 
         self.cursor_y += height;
         self.cursor_x = self.line_start_x();
@@ -1654,8 +1672,8 @@ impl<T: TextMeasure> Renderer<T> {
             return Ok((size.width() as f32, size.height() as f32));
         }
 
-        let size = imagesize::blob_size(bytes)
-            .map_err(|e| format!("Failed to read image size: {}", e))?;
+        let size =
+            imagesize::blob_size(bytes).map_err(|e| format!("Failed to read image size: {}", e))?;
         Ok((size.width as f32, size.height as f32))
     }
 
@@ -1759,14 +1777,16 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         if let Some(quote) = self.blockquotes.pop() {
-            self.svg_content.push_str(&format!(
+            write!(
+                self.svg_content,
                 r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="2" />"#,
                 quote.border_x,
                 quote.start_y,
                 quote.border_x,
                 self.cursor_y,
                 self.theme.quote_border_color,
-            ));
+            )
+            .unwrap();
         }
     }
 
@@ -1919,13 +1939,19 @@ impl<T: TextMeasure> Renderer<T> {
         fill: &str,
         bold: bool,
         italic: bool,
-    ) {
+    ) -> f32 {
         self.last_margin_added = 0.0;
+
+        let is_code = font_family == "monospace";
+        let (width, _) = self
+            .measure
+            .measure_text(text, font_size, is_code, bold, italic, None);
 
         let weight_attr = if bold { " font-weight=\"700\"" } else { "" };
         let style_attr = if italic { " font-style=\"italic\"" } else { "" };
 
-        self.svg_content.push_str(&format!(
+        write!(
+            self.svg_content,
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.2}" fill="{}"{}{}>{}</text>"#,
             x,
             y,
@@ -1935,7 +1961,10 @@ impl<T: TextMeasure> Renderer<T> {
             weight_attr,
             style_attr,
             self.escape_xml(text).replace(' ', "&#160;"),
-        ));
+        )
+        .unwrap();
+
+        width
     }
 
     fn escape_xml(&self, text: &str) -> String {
@@ -1947,9 +1976,18 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn finalize_svg(&self, height: f32) -> String {
-        format!(
+        let mut svg = String::with_capacity(self.svg_content.len() + 256);
+        write!(
+            svg,
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {} {}" width="{}" height="{}"><rect width="100%" height="100%" fill="{}" />{}</svg>"#,
-            self.width, height, self.width, height, self.theme.background_color, self.svg_content,
+            self.width,
+            height,
+            self.width,
+            height,
+            self.theme.background_color,
+            self.svg_content,
         )
+        .unwrap();
+        svg
     }
 }

@@ -49,7 +49,6 @@ enum MathNode {
     /// Stretchy operator (parentheses, brackets that scale)
     StretchyOp {
         op: String,
-        #[allow(dead_code)]
         form: String, // "prefix", "postfix", "infix"
     },
 }
@@ -86,8 +85,8 @@ pub fn render_math_at<T: TextMeasure>(
         DisplayStyle::Inline
     };
 
-    let mathml = latex_to_mathml(latex, style)
-        .map_err(|e| format!("LaTeX parse error: {:?}", e))?;
+    let mathml =
+        latex_to_mathml(latex, style).map_err(|e| format!("LaTeX parse error: {:?}", e))?;
 
     let root = parse_mathml(&mathml)?;
     let mbox = layout_node(&root, font_size, text_color, measure, x, baseline_y);
@@ -236,7 +235,10 @@ fn parse_mathml(mathml: &str) -> Result<MathNode, String> {
 }
 
 fn get_attr(attrs: &[(String, String)], name: &str) -> Option<String> {
-    attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+    attrs
+        .iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.clone())
 }
 
 fn build_node(tag: &str, mut children: Vec<MathNode>, attrs: &Attrs) -> MathNode {
@@ -252,7 +254,9 @@ fn build_node(tag: &str, mut children: Vec<MathNode>, attrs: &Attrs) -> MathNode
         "mo" => {
             let text = extract_text(&children);
             // Check for stretchy attribute
-            let stretchy = get_attr(attrs, "stretchy").map(|v| v == "true").unwrap_or(false);
+            let stretchy = get_attr(attrs, "stretchy")
+                .map(|v| v == "true")
+                .unwrap_or(false);
             let form = get_attr(attrs, "form").unwrap_or_else(|| "infix".to_string());
 
             if stretchy && !text.is_empty() {
@@ -416,14 +420,15 @@ fn layout_node<T: TextMeasure>(
             let italic =
                 text.len() == 1 && text.chars().next().map_or(false, |c| c.is_alphabetic());
             let (w, _h) = measure_token(text, font_size, italic, measure);
-            let style = if italic {
-                " font-style=\"italic\""
-            } else {
-                ""
-            };
+            let style = if italic { " font-style=\"italic\"" } else { "" };
             let svg = format!(
                 r#"<text x="{:.2}" y="{:.2}" font-family="serif" font-size="{:.2}" fill="{}"{}>{}</text>"#,
-                x, baseline_y, font_size, color, style, escape_xml(text)
+                x,
+                baseline_y,
+                font_size,
+                color,
+                style,
+                escape_xml(text)
             );
             MathBox {
                 width: w,
@@ -436,7 +441,11 @@ fn layout_node<T: TextMeasure>(
             let (w, _h) = measure_token(text, font_size, false, measure);
             let svg = format!(
                 r#"<text x="{:.2}" y="{:.2}" font-family="serif" font-size="{:.2}" fill="{}">{}</text>"#,
-                x, baseline_y, font_size, color, escape_xml(text)
+                x,
+                baseline_y,
+                font_size,
+                color,
+                escape_xml(text)
             );
             MathBox {
                 width: w,
@@ -447,11 +456,7 @@ fn layout_node<T: TextMeasure>(
         }
         MathNode::Operator(text) => {
             let is_large = is_large_operator(text);
-            let effective_size = if is_large {
-                font_size * 1.4
-            } else {
-                font_size
-            };
+            let effective_size = if is_large { font_size * 1.4 } else { font_size };
             let (w, _h) = measure_token(text, effective_size, false, measure);
             let spacing = font_size * 0.15;
             let total_w = w + spacing * 2.0;
@@ -487,7 +492,11 @@ fn layout_node<T: TextMeasure>(
             let (w, _h) = measure_token(text, font_size, false, measure);
             let svg = format!(
                 r#"<text x="{:.2}" y="{:.2}" font-family="sans-serif" font-size="{:.2}" fill="{}">{}</text>"#,
-                x, baseline_y, font_size, color, escape_xml(text)
+                x,
+                baseline_y,
+                font_size,
+                color,
+                escape_xml(text)
             );
             MathBox {
                 width: w,
@@ -508,13 +517,10 @@ fn layout_node<T: TextMeasure>(
 
             let sup_size = font_size * 0.7;
             let sup_y = baseline_y - base_box.ascent * 0.55;
-            let sup_box =
-                layout_node(sup, sup_size, color, measure, x + base_box.width, sup_y);
+            let sup_box = layout_node(sup, sup_size, color, measure, x + base_box.width, sup_y);
 
             let total_width = base_box.width + sup_box.width;
-            let ascent = base_box
-                .ascent
-                .max(sup_box.ascent + base_box.ascent * 0.55);
+            let ascent = base_box.ascent.max(sup_box.ascent + base_box.ascent * 0.55);
             let descent = base_box.descent;
 
             MathBox {
@@ -529,13 +535,12 @@ fn layout_node<T: TextMeasure>(
 
             let sub_size = font_size * 0.7;
             let sub_y = baseline_y + base_box.descent + sub_size * 0.35;
-            let sub_box =
-                layout_node(sub, sub_size, color, measure, x + base_box.width, sub_y);
+            let sub_box = layout_node(sub, sub_size, color, measure, x + base_box.width, sub_y);
 
             let total_width = base_box.width + sub_box.width;
             let ascent = base_box.ascent;
-            let descent = (base_box.descent + sub_size * 0.35 + sub_box.descent)
-                .max(base_box.descent);
+            let descent =
+                (base_box.descent + sub_size * 0.35 + sub_box.descent).max(base_box.descent);
 
             MathBox {
                 width: total_width,
@@ -550,32 +555,16 @@ fn layout_node<T: TextMeasure>(
             let script_size = font_size * 0.7;
 
             let sup_y = baseline_y - base_box.ascent * 0.55;
-            let sup_box = layout_node(
-                sup,
-                script_size,
-                color,
-                measure,
-                x + base_box.width,
-                sup_y,
-            );
+            let sup_box = layout_node(sup, script_size, color, measure, x + base_box.width, sup_y);
 
             let sub_y = baseline_y + base_box.descent + script_size * 0.35;
-            let sub_box = layout_node(
-                sub,
-                script_size,
-                color,
-                measure,
-                x + base_box.width,
-                sub_y,
-            );
+            let sub_box = layout_node(sub, script_size, color, measure, x + base_box.width, sub_y);
 
             let script_width = sup_box.width.max(sub_box.width);
             let total_width = base_box.width + script_width;
-            let ascent = base_box
-                .ascent
-                .max(sup_box.ascent + base_box.ascent * 0.55);
-            let descent = (base_box.descent + script_size * 0.35 + sub_box.descent)
-                .max(base_box.descent);
+            let ascent = base_box.ascent.max(sup_box.ascent + base_box.ascent * 0.55);
+            let descent =
+                (base_box.descent + script_size * 0.35 + sub_box.descent).max(base_box.descent);
 
             MathBox {
                 width: total_width,
@@ -584,11 +573,7 @@ fn layout_node<T: TextMeasure>(
                 svg: format!("{}{}{}", base_box.svg, sup_box.svg, sub_box.svg),
             }
         }
-        MathNode::UnderOver {
-            base,
-            under,
-            over,
-        } => layout_underover(
+        MathNode::UnderOver { base, under, over } => layout_underover(
             base,
             under.as_deref(),
             over.as_deref(),
@@ -628,16 +613,18 @@ fn layout_node<T: TextMeasure>(
             let rule_svg = if line_thickness != &Some(0.0) {
                 format!(
                     r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
-                    x, rule_y, x + frac_width, rule_y, color
+                    x,
+                    rule_y,
+                    x + frac_width,
+                    rule_y,
+                    color
                 )
             } else {
                 String::new()
             };
 
-            let ascent =
-                (baseline_y - num_baseline + num_rendered.ascent).max(font_size * 0.75);
-            let descent =
-                (den_baseline - baseline_y + den_rendered.descent).max(font_size * 0.25);
+            let ascent = (baseline_y - num_baseline + num_rendered.ascent).max(font_size * 0.75);
+            let descent = (den_baseline - baseline_y + den_rendered.descent).max(font_size * 0.25);
 
             MathBox {
                 width: frac_width,
@@ -713,14 +700,7 @@ fn layout_node<T: TextMeasure>(
 
             // Render the index (nth root degree) in the notch
             let index_baseline = baseline_y - inner_box.ascent * 0.3;
-            let index_box = layout_node(
-                index,
-                index_size,
-                color,
-                measure,
-                x,
-                index_baseline,
-            );
+            let index_box = layout_node(index, index_size, color, measure, x, index_baseline);
 
             // Radical symbol with notch for index
             let radical_svg = format!(
@@ -751,14 +731,20 @@ fn layout_node<T: TextMeasure>(
         MathNode::Table { rows, column_align } => {
             layout_table(rows, column_align, font_size, color, measure, x, baseline_y)
         }
-        MathNode::StretchyOp { op, form: _ } => {
-            // For stretchy operators, we render them at normal size
-            // The actual stretching would require knowing the content height
-            // For now, treat as regular operator - stretching is handled by the wrapping Row
+        MathNode::StretchyOp { op, form } => {
             let (w, _h) = measure_token(op, font_size, false, measure);
+            let offset = match form.as_str() {
+                "prefix" => font_size * 0.08,
+                "postfix" => -font_size * 0.08,
+                _ => 0.0,
+            };
             let svg = format!(
                 r#"<text x="{:.2}" y="{:.2}" font-family="serif" font-size="{:.2}" fill="{}">{}</text>"#,
-                x, baseline_y, font_size, color, escape_xml(op)
+                x + offset,
+                baseline_y,
+                font_size,
+                color,
+                escape_xml(op)
             );
             MathBox {
                 width: w,
@@ -835,8 +821,14 @@ fn layout_underover<T: TextMeasure>(
     if let (Some(over_node), Some(ob)) = (over, &over_box) {
         let over_baseline = baseline_y - base_box.ascent - gap - ob.descent;
         let over_x = x + (max_width - ob.width) / 2.0;
-        let over_rendered =
-            layout_node(over_node, script_size, color, measure, over_x, over_baseline);
+        let over_rendered = layout_node(
+            over_node,
+            script_size,
+            color,
+            measure,
+            over_x,
+            over_baseline,
+        );
         svg.push_str(&over_rendered.svg);
         total_ascent = base_box.ascent + gap + ob.ascent + ob.descent;
     }
@@ -844,8 +836,14 @@ fn layout_underover<T: TextMeasure>(
     if let (Some(under_node), Some(ub)) = (under, &under_box) {
         let under_baseline = baseline_y + base_box.descent + gap + ub.ascent;
         let under_x = x + (max_width - ub.width) / 2.0;
-        let under_rendered =
-            layout_node(under_node, script_size, color, measure, under_x, under_baseline);
+        let under_rendered = layout_node(
+            under_node,
+            script_size,
+            color,
+            measure,
+            under_x,
+            under_baseline,
+        );
         svg.push_str(&under_rendered.svg);
         total_descent = base_box.descent + gap + ub.ascent + ub.descent;
     }
@@ -904,9 +902,10 @@ fn layout_table<T: TextMeasure>(
     }
 
     // Calculate total table dimensions
-    let total_width: f32 = col_widths.iter().sum::<f32>() + col_gap * (col_widths.len().max(1) - 1) as f32;
-    let total_height: f32 = row_heights.iter().map(|(a, d)| a + d).sum::<f32>()
-        + row_gap * (rows.len() - 1) as f32;
+    let total_width: f32 =
+        col_widths.iter().sum::<f32>() + col_gap * (col_widths.len().max(1) - 1) as f32;
+    let total_height: f32 =
+        row_heights.iter().map(|(a, d)| a + d).sum::<f32>() + row_gap * (rows.len() - 1) as f32;
 
     // Center the table vertically around baseline
     let table_top = baseline_y - total_height / 2.0;

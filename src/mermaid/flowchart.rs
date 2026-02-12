@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
-use super::layout::{LayoutEngine, LayoutPos};
+use super::layout::{BBox, LayoutEngine, LayoutPos};
 use super::render::{escape_xml, DiagramStyle};
-use super::types::{ArrowType, EdgeStyle, Flowchart, FlowDirection, NodeShape};
+use super::types::{ArrowType, EdgeStyle, FlowDirection, Flowchart, NodeShape};
 
 /// Render a flowchart to SVG
-pub fn render_flowchart(flowchart: &Flowchart, style: &DiagramStyle) -> Result<(String, f32, f32), String> {
+pub fn render_flowchart(
+    flowchart: &Flowchart,
+    style: &DiagramStyle,
+) -> Result<(String, f32, f32), String> {
     if flowchart.nodes.is_empty() {
         return Ok(("<g></g>".to_string(), 100.0, 50.0));
     }
@@ -38,8 +41,8 @@ pub fn render_flowchart(flowchart: &Flowchart, style: &DiagramStyle) -> Result<(
         svg.push_str(&render_subgraph(subgraph, &positions, style));
     }
 
-    let total_width = bbox.width + padding * 2.0;
-    let total_height = bbox.height + padding * 2.0;
+    let total_width = bbox.right() + padding;
+    let total_height = bbox.bottom() + padding;
 
     Ok((svg, total_width, total_height))
 }
@@ -141,19 +144,16 @@ fn render_node(label: &str, shape: &NodeShape, pos: &LayoutPos, style: &DiagramS
         NodeShape::Rhombus => {
             let cx = pos.x + pos.width / 2.0;
             let cy = pos.y + pos.height / 2.0;
-            let half_w = pos.width / 2.0;
-            let half_h = pos.height / 2.0;
             svg.push_str(&format!(
                 r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" stroke="{}" stroke-width="1.5" />"#,
-                cx, pos.y,          // top
-                pos.x + pos.width, cy, // right
-                cx, pos.y + pos.height, // bottom
-                pos.x, cy,         // left
+                cx, pos.y,
+                pos.x + pos.width, cy,
+                cx, pos.y + pos.height,
+                pos.x, cy,
                 style.node_fill, style.node_stroke
             ));
         }
         NodeShape::Hexagon => {
-            let cx = pos.x + pos.width / 2.0;
             let offset = 15.0_f32.min(pos.width / 4.0);
             svg.push_str(&format!(
                 r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" stroke="{}" stroke-width="1.5" />"#,
@@ -269,25 +269,22 @@ fn render_edge(
         }
     };
 
-    // Line style
-    let dash = match edge.style {
-        EdgeStyle::Solid => "",
-        EdgeStyle::Dotted => " stroke-dasharray=\"4,4\"",
-        EdgeStyle::Thick => " stroke-width=\"2.5\"",
+    let (dash_attr, stroke_width) = match edge.style {
+        EdgeStyle::Solid => ("", 1.5),
+        EdgeStyle::Dotted => (" stroke-dasharray=\"4,4\"", 1.5),
+        EdgeStyle::Thick => ("", 2.5),
     };
 
     // Draw line (straight or curved for better look)
     if (x1 - x2).abs() < 1.0 || (y1 - y2).abs() < 1.0 {
         // Straight line
         svg.push_str(&format!(
-            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5"{} />"#,
-            x1, y1, x2, y2, style.edge_stroke, dash
+            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="{:.1}"{} />"#,
+            x1, y1, x2, y2, style.edge_stroke, stroke_width, dash_attr
         ));
     } else {
-        // Curved path for diagonal connections
         let mx = (x1 + x2) / 2.0;
         let my = (y1 + y2) / 2.0;
-        let ctrl_offset = ((y2 - y1).abs() * 0.3).min(40.0);
 
         let (cx1, cy1, cx2, cy2) = if is_vertical {
             (x1, my, x2, my)
@@ -296,8 +293,8 @@ fn render_edge(
         };
 
         svg.push_str(&format!(
-            r#"<path d="M {:.2} {:.2} C {:.2} {:.2}, {:.2} {:.2}, {:.2} {:.2}" fill="none" stroke="{}" stroke-width="1.5"{} />"#,
-            x1, y1, cx1, cy1, cx2, cy2, x2, y2, style.edge_stroke, dash
+            r#"<path d="M {:.2} {:.2} C {:.2} {:.2}, {:.2} {:.2}, {:.2} {:.2}" fill="none" stroke="{}" stroke-width="{:.1}"{} />"#,
+            x1, y1, cx1, cy1, cx2, cy2, x2, y2, style.edge_stroke, stroke_width, dash_attr
         ));
     }
 
@@ -310,7 +307,13 @@ fn render_edge(
     // Arrow tail (for bidirectional)
     if edge.arrow_tail != ArrowType::None {
         let tail_angle = angle + std::f32::consts::PI;
-        svg.push_str(&render_arrow_head(x1, y1, tail_angle, &edge.arrow_tail, style));
+        svg.push_str(&render_arrow_head(
+            x1,
+            y1,
+            tail_angle,
+            &edge.arrow_tail,
+            style,
+        ));
     }
 
     // Edge label
@@ -347,7 +350,13 @@ fn render_edge(
     svg
 }
 
-fn render_arrow_head(x: f32, y: f32, angle: f32, arrow_type: &ArrowType, style: &DiagramStyle) -> String {
+fn render_arrow_head(
+    x: f32,
+    y: f32,
+    angle: f32,
+    arrow_type: &ArrowType,
+    style: &DiagramStyle,
+) -> String {
     let cos = angle.cos();
     let sin = angle.sin();
 
@@ -371,7 +380,10 @@ fn render_arrow_head(x: f32, y: f32, angle: f32, arrow_type: &ArrowType, style: 
         ArrowType::Circle => {
             format!(
                 r#"<circle cx="{:.2}" cy="{:.2}" r="5" fill="{}" stroke="{}" stroke-width="1" />"#,
-                x - cos * 5.0, y - sin * 5.0, style.node_fill, style.edge_stroke
+                x - cos * 5.0,
+                y - sin * 5.0,
+                style.node_fill,
+                style.edge_stroke
             )
         }
         ArrowType::Cross => {
@@ -381,8 +393,16 @@ fn render_arrow_head(x: f32, y: f32, angle: f32, arrow_type: &ArrowType, style: 
             let ns = cos;
             format!(
                 r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="2" /><line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="2" />"#,
-                cx + nc * 5.0, cy + ns * 5.0, cx - nc * 5.0, cy - ns * 5.0, style.edge_stroke,
-                cx + ns * 5.0, cy - nc * 5.0, cx - ns * 5.0, cy + nc * 5.0, style.edge_stroke
+                cx + nc * 5.0,
+                cy + ns * 5.0,
+                cx - nc * 5.0,
+                cy - ns * 5.0,
+                style.edge_stroke,
+                cx + ns * 5.0,
+                cy - nc * 5.0,
+                cx - ns * 5.0,
+                cy + nc * 5.0,
+                style.edge_stroke
             )
         }
         ArrowType::None => String::new(),
@@ -408,8 +428,8 @@ fn render_subgraph(
             found = true;
             min_x = min_x.min(pos.x);
             min_y = min_y.min(pos.y);
-            max_right = max_right.max(pos.x + pos.width);
-            max_bottom = max_bottom.max(pos.y + pos.height);
+            max_right = max_right.max(pos.right());
+            max_bottom = max_bottom.max(pos.bottom());
         }
     }
 
@@ -417,15 +437,17 @@ fn render_subgraph(
         return svg;
     }
 
-    // Add padding
-    let padding = 15.0;
-    min_x -= padding;
-    min_y -= padding + 20.0; // Extra for title
-    max_right += padding;
-    max_bottom += padding;
+    let content_bbox = BBox::new(min_x, min_y, max_right - min_x, max_bottom - min_y);
+    let padded_bbox = content_bbox.with_padding(15.0);
+    let min_x = padded_bbox.x;
+    let min_y = padded_bbox.y - 20.0;
+    let width = padded_bbox.width;
+    let height = padded_bbox.height + 20.0;
+    let title_center_y = (min_y + padded_bbox.y) / 2.0;
+    let title_x = padded_bbox.center_x();
+    let _title_anchor_hint = padded_bbox.center_y().min(title_center_y);
 
-    let width = max_right - min_x;
-    let height = max_bottom - min_y;
+    svg.push_str(&format!(r#"<g id="{}">"#, escape_xml(&subgraph.id)));
 
     // Draw subgraph box
     svg.push_str(&format!(
@@ -436,14 +458,15 @@ fn render_subgraph(
 
     // Draw title
     if !subgraph.title.is_empty() {
-        let title_x = min_x + 10.0;
-        let title_y = min_y + 15.0;
+        let title_y = title_center_y + style.font_size * 0.3;
 
         svg.push_str(&format!(
-            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" font-weight="bold">{}</text>"#,
+            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" font-weight="bold" text-anchor="middle">{}</text>"#,
             title_x, title_y, style.font_family, style.font_size * 0.9, style.node_text, escape_xml(&subgraph.title)
         ));
     }
+
+    svg.push_str("</g>");
 
     svg
 }
