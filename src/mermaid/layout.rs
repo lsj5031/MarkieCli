@@ -219,7 +219,7 @@ impl LayoutEngine {
         if is_vertical {
             let mut y = 20.0;
             for level in &level_nodes {
-                let mut x = 20.0;
+                let mut x = 10.0;
                 let mut max_height: f32 = 0.0;
 
                 for &node_id in level {
@@ -232,7 +232,7 @@ impl LayoutEngine {
                 y += max_height + self.node_spacing_y;
             }
         } else {
-            let mut x = 20.0;
+            let mut x = 10.0;
             for level in &level_nodes {
                 let mut y = 20.0;
                 let mut max_width: f32 = 0.0;
@@ -318,15 +318,11 @@ impl LayoutEngine {
     }
 
     /// Layout a sequence diagram
-    pub fn layout_sequence(
-        &self,
-        diagram: &SequenceDiagram,
-    ) -> (HashMap<String, LayoutPos>, Vec<SequenceLayoutElement>, BBox) {
+    pub fn layout_sequence(&self, diagram: &SequenceDiagram) -> (HashMap<String, LayoutPos>, BBox) {
         let mut positions: HashMap<String, LayoutPos> = HashMap::new();
-        let mut elements: Vec<SequenceLayoutElement> = Vec::new();
 
         if diagram.participants.is_empty() {
-            return (positions, elements, BBox::default());
+            return (positions, BBox::default());
         }
 
         // Position participants horizontally
@@ -345,27 +341,12 @@ impl LayoutEngine {
         }
 
         let mut current_y = start_y + participant_height + 40.0;
-        self.collect_sequence_layout_elements(
-            &diagram.elements,
-            &positions,
-            &mut current_y,
-            &mut elements,
-        );
+        let mut max_label_half_width = 0.0;
+        self.measure_sequence_metrics(&diagram.elements, &mut current_y, &mut max_label_half_width);
 
-        if elements.is_empty() {
+        if diagram.elements.is_empty() {
             current_y += 40.0;
         }
-
-        let max_label_half_width = elements
-            .iter()
-            .filter_map(|el| {
-                if let SequenceLayoutElement::Message { label, .. } = el {
-                    Some(label.chars().count() as f32 * 3.5 + self.edge_label_padding)
-                } else {
-                    None
-                }
-            })
-            .fold(0.0_f32, f32::max);
 
         let width = start_x * 2.0
             + diagram.participants.len() as f32 * (participant_width + spacing)
@@ -378,43 +359,23 @@ impl LayoutEngine {
         )
         .with_padding(self.edge_label_padding / 2.0);
 
-        (positions, elements, bbox)
+        (positions, bbox)
     }
 
-    fn collect_sequence_layout_elements(
+    fn measure_sequence_metrics(
         &self,
         elements: &[SequenceElement],
-        positions: &HashMap<String, LayoutPos>,
         current_y: &mut f32,
-        out: &mut Vec<SequenceLayoutElement>,
+        max_label_half_width: &mut f32,
     ) {
         for element in elements {
             match element {
                 SequenceElement::Message(msg) => {
-                    if let (Some(from), Some(to)) =
-                        (positions.get(&msg.from), positions.get(&msg.to))
-                    {
-                        let (from_x, _) = from.center();
-                        let (to_x, _) = to.center();
-                        out.push(SequenceLayoutElement::Message {
-                            from_x,
-                            to_x,
-                            y: *current_y,
-                            label: msg.label.clone(),
-                        });
-                    }
+                    *max_label_half_width = (*max_label_half_width)
+                        .max(msg.label.chars().count() as f32 * 3.5 + self.edge_label_padding);
                     *current_y += 50.0;
                 }
-                SequenceElement::Activation(activation)
-                | SequenceElement::Deactivation(activation) => {
-                    if let Some(pos) = positions.get(&activation.participant) {
-                        let (cx, _) = pos.center();
-                        out.push(SequenceLayoutElement::Activation {
-                            x: cx,
-                            y: *current_y - 10.0,
-                            height: 30.0,
-                        });
-                    }
+                SequenceElement::Activation(_) | SequenceElement::Deactivation(_) => {
                     *current_y += 24.0;
                 }
                 SequenceElement::Note { .. } => {
@@ -422,19 +383,13 @@ impl LayoutEngine {
                 }
                 SequenceElement::Block(block) => {
                     *current_y += 28.0;
-                    self.collect_sequence_layout_elements(
-                        &block.messages,
-                        positions,
-                        current_y,
-                        out,
-                    );
+                    self.measure_sequence_metrics(&block.messages, current_y, max_label_half_width);
                     for (_, branch_elements) in &block.else_branches {
                         *current_y += 22.0;
-                        self.collect_sequence_layout_elements(
+                        self.measure_sequence_metrics(
                             branch_elements,
-                            positions,
                             current_y,
-                            out,
+                            max_label_half_width,
                         );
                     }
                     *current_y += 20.0;
@@ -586,7 +541,11 @@ impl LayoutEngine {
                         .filter(|child| matches!(child, StateElement::State(_)))
                         .count()
                         .max(1);
-                    let composite_height = 60.0 + child_count as f32 * 54.0;
+                    let child_cols = if child_count >= 4 { 2 } else { 1 };
+                    let child_rows = (child_count + child_cols - 1) / child_cols;
+                    let composite_height = 84.0
+                        + child_rows as f32 * 40.0
+                        + (child_rows.saturating_sub(1)) as f32 * 30.0;
                     level_max_height = level_max_height.max(composite_height);
                 }
             }
@@ -606,7 +565,17 @@ impl LayoutEngine {
                             .filter(|child| matches!(child, StateElement::State(_)))
                             .count()
                             .max(1);
-                        (state_width + 80.0, 60.0 + child_count as f32 * 54.0)
+                        let child_cols = if child_count >= 4 { 2 } else { 1 };
+                        let child_rows = (child_count + child_cols - 1) / child_cols;
+                        let composite_width = if child_cols == 2 {
+                            state_width + 180.0
+                        } else {
+                            state_width + 80.0
+                        };
+                        let composite_height = 84.0
+                            + child_rows as f32 * 40.0
+                            + (child_rows.saturating_sub(1)) as f32 * 30.0;
+                        (composite_width, composite_height)
                     } else {
                         (state_width, state_height)
                     }
@@ -663,20 +632,4 @@ impl LayoutEngine {
         let bbox = self.calculate_bbox(&positions);
         (positions, bbox)
     }
-}
-
-/// Layout element for sequence diagrams
-#[derive(Debug, Clone)]
-pub enum SequenceLayoutElement {
-    Message {
-        from_x: f32,
-        to_x: f32,
-        y: f32,
-        label: String,
-    },
-    Activation {
-        x: f32,
-        y: f32,
-        height: f32,
-    },
 }

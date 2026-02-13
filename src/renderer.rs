@@ -1107,7 +1107,7 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn render_mermaid_block(&mut self, source: &str) -> Result<(), String> {
-        use crate::mermaid::{render_diagram, DiagramStyle};
+        use crate::mermaid::{DiagramStyle, render_diagram};
 
         let x = self.line_start_x();
         let style = DiagramStyle::from_theme(
@@ -1141,7 +1141,7 @@ impl<T: TextMeasure> Renderer<T> {
         .unwrap();
 
         // Add diagram SVG (wrapped in a group with translation)
-        let svg_x = x + offset_x + 10.0;
+        let svg_x = x + offset_x;
         let svg_y = self.cursor_y + 10.0;
         write!(
             self.svg_content,

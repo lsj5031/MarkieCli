@@ -148,7 +148,7 @@ fn render_sequence(
     }
 
     let layout = LayoutEngine::new();
-    let (positions, layout_elements, bbox) = layout.layout_sequence(diagram);
+    let (positions, bbox) = layout.layout_sequence(diagram);
 
     let mut svg = String::new();
     let padding = 20.0;
@@ -204,43 +204,11 @@ fn render_sequence(
         .map(|pos| pos.y + pos.height)
         .fold(bbox.y + 40.0, f32::max);
     let lifeline_start_y = participant_bottom + 8.0;
-    let lifeline_end_y = bbox.bottom() - 20.0;
-    for participant in &diagram.participants {
-        if let Some(x) = participant_centers.get(participant.id.as_str()) {
-            svg.push_str(&format!(
-                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" stroke-dasharray="4,4" />"#,
-                x, lifeline_start_y, x, lifeline_end_y, style.edge_stroke
-            ));
-        }
-    }
 
-    let mut message_y = lifeline_start_y + 24.0;
-    for el in &layout_elements {
-        match el {
-            super::layout::SequenceLayoutElement::Message {
-                from_x,
-                to_x,
-                y,
-                label,
-            } => {
-                let label_span = (label.chars().count() as f32 * 3.5).max(8.0);
-                let _max_edge = from_x.max(*to_x) + label_span;
-                if *y > message_y {
-                    message_y = *y;
-                }
-            }
-            super::layout::SequenceLayoutElement::Activation { x, y, height } => {
-                let _ = x;
-                let bottom = y + height;
-                if bottom > message_y {
-                    message_y = bottom;
-                }
-            }
-        }
-    }
+    let mut message_y = participant_bottom + 34.0;
 
     let mut activation_starts: HashMap<String, Vec<f32>> = HashMap::new();
-    svg.push_str(&render_sequence_elements(
+    let elements_svg = render_sequence_elements(
         &diagram.elements,
         &participant_centers,
         style,
@@ -249,7 +217,18 @@ fn render_sequence(
         left_edge,
         right_edge,
         &mut activation_starts,
-    ));
+    );
+
+    let lifeline_end_y = (message_y + 6.0).max(lifeline_start_y + 24.0);
+    for participant in &diagram.participants {
+        if let Some(x) = participant_centers.get(participant.id.as_str()) {
+            svg.push_str(&format!(
+                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" stroke-dasharray="4,4" />"#,
+                x, lifeline_start_y, x, lifeline_end_y, style.edge_stroke
+            ));
+        }
+    }
+    svg.push_str(&elements_svg);
 
     Ok((
         svg,
@@ -329,7 +308,7 @@ fn render_sequence_elements(
                             *message_y - 8.0,
                             style.font_family,
                             style.font_size * 0.85,
-                            style.edge_text,
+                            style.node_text,
                             escape_xml(&msg.label)
                         ));
                     }
@@ -430,7 +409,7 @@ fn render_sequence_elements(
                     *message_y,
                     style.font_family,
                     style.font_size * 0.8,
-                    style.edge_text,
+                    style.node_text,
                     escape_xml(&title)
                 ));
                 *message_y += 18.0;
@@ -463,7 +442,7 @@ fn render_sequence_elements(
                             separator_y - 4.0,
                             style.font_family,
                             style.font_size * 0.78,
-                            style.edge_text,
+                            style.node_text,
                             escape_xml(label)
                         ));
                     }
@@ -485,7 +464,7 @@ fn render_sequence_elements(
                     block_left,
                     start_y,
                     (block_right - block_left).max(24.0),
-                    (*message_y - start_y + 8.0).max(28.0),
+                    (*message_y - start_y + 16.0).max(28.0),
                     style.edge_stroke
                 ));
                 *message_y += 10.0;
@@ -876,18 +855,41 @@ fn render_state(
     }
 
     // Draw transitions first (behind states)
-    for transition in &diagram.transitions {
-        if child_state_ids.contains(transition.from.as_str())
-            || child_state_ids.contains(transition.to.as_str())
-        {
-            continue;
-        }
+    let visible_transitions: Vec<&StateTransition> = diagram
+        .transitions
+        .iter()
+        .filter(|transition| {
+            !child_state_ids.contains(transition.from.as_str())
+                && !child_state_ids.contains(transition.to.as_str())
+        })
+        .collect();
+
+    let mut pair_totals: HashMap<(String, String), usize> = HashMap::new();
+    for transition in &visible_transitions {
+        *pair_totals
+            .entry(state_pair_key(&transition.from, &transition.to))
+            .or_insert(0) += 1;
+    }
+
+    let mut pair_seen: HashMap<(String, String), usize> = HashMap::new();
+    for transition in visible_transitions {
+        let key = state_pair_key(&transition.from, &transition.to);
+        let route_index = pair_seen.get(&key).copied().unwrap_or(0);
+        pair_seen.insert(key.clone(), route_index + 1);
+        let route_total = pair_totals.get(&key).copied().unwrap_or(1);
 
         let from_pos = positions.get(&transition.from);
         let to_pos = positions.get(&transition.to);
 
         if let (Some(from), Some(to)) = (from_pos, to_pos) {
-            svg.push_str(&render_state_transition(transition, from, to, style));
+            svg.push_str(&render_state_transition(
+                transition,
+                from,
+                to,
+                style,
+                route_index,
+                route_total,
+            ));
         }
     }
 
@@ -1015,18 +1017,34 @@ fn render_composite_state_contents(
         return svg;
     }
 
-    let mut child_positions: HashMap<String, LayoutPos> = HashMap::new();
-    let inner_top = parent_pos.y + 60.0;
-    let mut child_y = inner_top;
-    let child_x = parent_pos.x + 20.0;
-    let child_width = (parent_pos.width - 40.0).max(80.0);
-    let child_height = 40.0;
-    let child_spacing = 14.0;
+    let child_state_nodes: Vec<&State> = child_states
+        .into_iter()
+        .filter(|child_state| child_state.id != state.id)
+        .collect();
 
-    for child_state in child_states {
-        if child_state.id == state.id {
-            continue;
-        }
+    if child_state_nodes.is_empty() {
+        return svg;
+    }
+
+    let mut child_positions: HashMap<String, LayoutPos> = HashMap::new();
+    let cols = if child_state_nodes.len() >= 4 { 2 } else { 1 };
+    let inner_top = parent_pos.y + 72.0;
+    let inner_left = parent_pos.x + 16.0;
+    let horizontal_gap = if cols == 2 { 28.0 } else { 0.0 };
+    let child_width = if cols == 2 {
+        ((parent_pos.width - 32.0 - horizontal_gap) / 2.0).max(88.0)
+    } else {
+        (parent_pos.width - 32.0).max(88.0)
+    };
+    let child_height = 40.0;
+    let child_spacing = 28.0;
+
+    for (index, child_state) in child_state_nodes.into_iter().enumerate() {
+        let row = index / cols;
+        let col = index % cols;
+        let child_x = inner_left + col as f32 * (child_width + horizontal_gap);
+        let child_y = inner_top + row as f32 * (child_height + child_spacing);
+
         child_positions.insert(
             child_state.id.clone(),
             LayoutPos::new(child_x, child_y, child_width, child_height),
@@ -1044,11 +1062,22 @@ fn render_composite_state_contents(
             style.node_text,
             escape_xml(&child_state.label)
         ));
-
-        child_y += child_height + child_spacing;
     }
 
+    let mut pair_totals: HashMap<(String, String), usize> = HashMap::new();
+    for transition in &child_transitions {
+        *pair_totals
+            .entry(state_pair_key(&transition.from, &transition.to))
+            .or_insert(0) += 1;
+    }
+
+    let mut pair_seen: HashMap<(String, String), usize> = HashMap::new();
     for transition in child_transitions {
+        let key = state_pair_key(&transition.from, &transition.to);
+        let route_index = pair_seen.get(&key).copied().unwrap_or(0);
+        pair_seen.insert(key.clone(), route_index + 1);
+        let route_total = pair_totals.get(&key).copied().unwrap_or(1);
+
         let from = child_positions
             .get(&transition.from)
             .or_else(|| positions.get(&transition.from));
@@ -1057,7 +1086,12 @@ fn render_composite_state_contents(
             .or_else(|| positions.get(&transition.to));
         if let (Some(from_pos), Some(to_pos)) = (from, to) {
             svg.push_str(&render_state_transition(
-                transition, from_pos, to_pos, style,
+                transition,
+                from_pos,
+                to_pos,
+                style,
+                route_index,
+                route_total,
             ));
         }
     }
@@ -1107,6 +1141,8 @@ fn render_state_transition(
     from: &LayoutPos,
     to: &LayoutPos,
     style: &DiagramStyle,
+    route_index: usize,
+    route_total: usize,
 ) -> String {
     let mut svg = String::new();
 
@@ -1133,14 +1169,57 @@ fn render_state_transition(
         (x + center_angle.cos() * 5.0, y + center_angle.sin() * 5.0)
     };
 
-    // Line
-    svg.push_str(&format!(
-        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
-        px1, py1, px2, py2, style.edge_stroke
-    ));
+    let route_hash = transition
+        .from
+        .bytes()
+        .chain(transition.to.bytes())
+        .fold(0_u32, |acc, value| {
+            acc.wrapping_mul(31).wrapping_add(value as u32)
+        });
+    let lane = if route_total > 1 {
+        route_index as f32 - (route_total as f32 - 1.0) / 2.0
+    } else {
+        0.0
+    };
+    let lane_offset = lane * 24.0;
+    let global_lane = (route_hash % 5) as f32 - 2.0;
+    let global_offset = global_lane * 4.0;
+    let route_side = match transition.from.cmp(&transition.to) {
+        std::cmp::Ordering::Less => 1.0,
+        std::cmp::Ordering::Greater => -1.0,
+        std::cmp::Ordering::Equal => {
+            if route_hash % 2 == 0 {
+                1.0
+            } else {
+                -1.0
+            }
+        }
+    };
+    let verticalish = (px2 - px1).abs() < 24.0 && (py2 - py1).abs() > 30.0;
+
+    let mut label_anchor_x = (px1 + px2) / 2.0;
+    let mut label_anchor_y = (py1 + py2) / 2.0;
+    let arrow_angle;
+
+    if verticalish {
+        let bend_x = label_anchor_x + route_side * (26.0 + lane.abs() * 14.0);
+        let bend_y = label_anchor_y + lane_offset * 0.5;
+        svg.push_str(&format!(
+            r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="1.5" />"#,
+            px1, py1, bend_x, bend_y, px2, py2, style.edge_stroke
+        ));
+        label_anchor_x = bend_x;
+        label_anchor_y = bend_y;
+        arrow_angle = (bend_y - py2).atan2(bend_x - px2);
+    } else {
+        svg.push_str(&format!(
+            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
+            px1, py1, px2, py2, style.edge_stroke
+        ));
+        arrow_angle = (py1 - py2).atan2(px1 - px2);
+    }
 
     // Arrow
-    let arrow_angle = (py1 - py2).atan2(px1 - px2);
     let ax = px2;
     let ay = py2;
     let p1 = (
@@ -1159,16 +1238,25 @@ fn render_state_transition(
 
     // Label
     if let Some(ref label) = transition.label {
-        let mut label_x = (px1 + px2) / 2.0;
-        let is_upward = py2 < py1;
-        let label_y = if is_upward {
-            (py1 + py2) / 2.0 - 10.0
-        } else {
-            (py1 + py2) / 2.0 + 14.0
-        };
+        let mut label_x = label_anchor_x;
+        let mut label_y = label_anchor_y;
 
-        if (px2 - px1).abs() < 20.0 {
-            label_x += if is_upward { -24.0 } else { 24.0 };
+        if verticalish {
+            label_x += route_side * (8.0 + global_lane.abs() * 2.0);
+            label_y += route_side * 8.0;
+            label_y += lane_offset + global_offset;
+        } else {
+            let dx = px2 - px1;
+            let dy = py2 - py1;
+            let length = (dx * dx + dy * dy).sqrt().max(1.0);
+            let perp_x = -dy / length;
+            let perp_y = dx / length;
+            let label_offset = 16.0 + lane.abs() * 8.0 + global_lane.abs() * 3.0;
+            label_x += perp_x * label_offset * route_side;
+            label_y += perp_y * label_offset * route_side;
+            let tangent_offset = lane_offset + global_offset;
+            label_x += (dx / length) * tangent_offset;
+            label_y += (dy / length) * tangent_offset;
         }
         let label_width = label.chars().count() as f32 * 6.8 + 8.0;
         let label_height = style.font_size * 0.8 + 6.0;
@@ -1193,6 +1281,14 @@ fn render_state_transition(
     }
 
     svg
+}
+
+fn state_pair_key(from: &str, to: &str) -> (String, String) {
+    if from <= to {
+        (from.to_string(), to.to_string())
+    } else {
+        (to.to_string(), from.to_string())
+    }
 }
 
 // ============================================
