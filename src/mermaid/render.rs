@@ -151,7 +151,13 @@ fn render_sequence(
         }
     }
 
-    let lifeline_start_y = bbox.y + 50.0;
+    let participant_bottom = diagram
+        .participants
+        .iter()
+        .filter_map(|participant| positions.get(&participant.id))
+        .map(|pos| pos.y + pos.height)
+        .fold(bbox.y + 40.0, f32::max);
+    let lifeline_start_y = participant_bottom + 8.0;
     let lifeline_end_y = bbox.bottom() - 20.0;
     for participant in &diagram.participants {
         if let Some(x) = participant_centers.get(participant.id.as_str()) {
@@ -162,7 +168,7 @@ fn render_sequence(
         }
     }
 
-    let mut message_y = lifeline_start_y + 30.0;
+    let mut message_y = lifeline_start_y + 24.0;
     for el in &layout_elements {
         match el {
             super::layout::SequenceLayoutElement::Message {
@@ -395,26 +401,27 @@ fn render_sequence_elements(
                 ));
 
                 for (label, branch_elements) in &block.else_branches {
+                    let separator_y = *message_y + 2.0;
                     svg.push_str(&format!(
                         r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" stroke-dasharray="5,3" />"#,
                         block_left,
-                        *message_y - 2.0,
+                        separator_y,
                         block_right,
-                        *message_y - 2.0,
+                        separator_y,
                         style.edge_stroke
                     ));
                     if !label.is_empty() {
                         svg.push_str(&format!(
                             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
                             block_left + 6.0,
-                            *message_y + 6.0,
+                            separator_y - 4.0,
                             style.font_family,
                             style.font_size * 0.78,
                             style.edge_text,
                             escape_xml(label)
                         ));
                     }
-                    *message_y += 14.0;
+                    *message_y = separator_y + 22.0;
                     svg.push_str(&render_sequence_elements(
                         branch_elements,
                         participant_centers,
@@ -1106,13 +1113,17 @@ fn render_state_transition(
 
     // Label
     if let Some(ref label) = transition.label {
-        let label_x = (px1 + px2) / 2.0;
+        let mut label_x = (px1 + px2) / 2.0;
         let is_upward = py2 < py1;
         let label_y = if is_upward {
             (py1 + py2) / 2.0 - 10.0
         } else {
             (py1 + py2) / 2.0 + 14.0
         };
+
+        if (px2 - px1).abs() < 20.0 {
+            label_x += if is_upward { -24.0 } else { 24.0 };
+        }
         let label_width = label.chars().count() as f32 * 6.8 + 8.0;
         let label_height = style.font_size * 0.8 + 6.0;
 

@@ -322,14 +322,14 @@ fn render_edge(
         let my = (y1 + y2) / 2.0;
 
         // Offset label slightly perpendicular to the edge
-        let perp_x = -angle.sin() * 12.0;
-        let perp_y = angle.cos() * 12.0;
+        let perp_x = -angle.sin() * 30.0;
+        let perp_y = -angle.cos() * 30.0;
 
         let label_x = mx + perp_x;
-        let label_y = my + perp_y - 4.0;
+        let label_y = my + perp_y;
 
         // Background rectangle for label
-        let label_width = label.len() as f32 * 7.0 + 8.0;
+        let label_width = label.chars().count() as f32 * 7.0 + 8.0;
         let label_height = style.font_size + 6.0;
 
         svg.push_str(&format!(
