@@ -34,16 +34,62 @@ impl Default for DiagramStyle {
 
 impl DiagramStyle {
     pub fn from_theme(text_color: &str, background: &str, code_bg: &str) -> Self {
+        let diagram_fg = pick_higher_contrast(code_bg, text_color, background);
+        let label_fg = pick_higher_contrast(background, text_color, code_bg);
+
         Self {
             node_fill: code_bg.to_string(),
-            node_stroke: text_color.to_string(),
-            node_text: text_color.to_string(),
-            edge_stroke: text_color.to_string(),
-            edge_text: text_color.to_string(),
+            node_stroke: diagram_fg.clone(),
+            node_text: diagram_fg.clone(),
+            edge_stroke: diagram_fg,
+            edge_text: label_fg,
             background: background.to_string(),
             font_family: "sans-serif".to_string(),
             font_size: 14.0,
         }
+    }
+}
+
+fn parse_hex_rgb(value: &str) -> Option<(f32, f32, f32)> {
+    let hex = value.trim_start_matches('#');
+    if hex.len() != 6 {
+        return None;
+    }
+
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()? as f32 / 255.0;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()? as f32 / 255.0;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()? as f32 / 255.0;
+    Some((r, g, b))
+}
+
+fn relative_luminance(color: (f32, f32, f32)) -> f32 {
+    let linear = |v: f32| {
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+
+    let (r, g, b) = color;
+    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+}
+
+fn contrast_ratio(a: &str, b: &str) -> Option<f32> {
+    let l1 = relative_luminance(parse_hex_rgb(a)?);
+    let l2 = relative_luminance(parse_hex_rgb(b)?);
+    let (hi, lo) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+    Some((hi + 0.05) / (lo + 0.05))
+}
+
+fn pick_higher_contrast(base: &str, primary: &str, secondary: &str) -> String {
+    let p = contrast_ratio(base, primary).unwrap_or(0.0);
+    let s = contrast_ratio(base, secondary).unwrap_or(0.0);
+
+    if s > p {
+        secondary.to_string()
+    } else {
+        primary.to_string()
     }
 }
 
@@ -421,7 +467,7 @@ fn render_sequence_elements(
                             escape_xml(label)
                         ));
                     }
-                    *message_y = separator_y + 22.0;
+                    *message_y = separator_y + 30.0;
                     svg.push_str(&render_sequence_elements(
                         branch_elements,
                         participant_centers,
@@ -1036,7 +1082,7 @@ fn render_state_note(
 ) -> String {
     let note_width = (text.chars().count() as f32 * 6.0).clamp(72.0, 180.0);
     let note_height = 26.0;
-    let x = state_pos.x + state_pos.width + 12.0;
+    let x = state_pos.x + state_pos.width + 28.0;
     let y = state_pos.y + 4.0;
 
     format!(
