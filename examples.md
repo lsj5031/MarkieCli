@@ -102,14 +102,17 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     participant Client
+    participant Gateway
     participant Service
     Note right of Client: trigger request
-    alt happy path
-        Client->>Service: GET /items
-        Service-->>Client: 200 OK
-    else retry
-        Client->>Service: GET /items (retry)
-        Service-->>Client: 503
+    Client->>Gateway: GET /items
+    Gateway->>Service: validate + fetch
+    alt success
+        Service-->>Gateway: 200 OK
+        Gateway-->>Client: 200 OK
+    else transient error
+        Service-->>Gateway: 503
+        Gateway-->>Client: retry later
     end
 ```
 
@@ -134,14 +137,22 @@ classDiagram
 stateDiagram
     [*] --> Idle
     Idle --> Running
+    Idle --> Error
     state Running {
         state Validate
         state Execute
+        state Persist
+        state Recover
         Validate --> Execute: ok
-        Execute --> Validate: retry
+        Execute --> Persist: save
+        Persist --> Recover: fail
+        Recover --> Validate
     }
-    Note right of Validate: guard checks
-    Running --> [*]
+    Note right of Recover: exponential backoff
+    Running --> Success: done
+    Running --> Error: fatal
+    Error --> Idle
+    Success --> [*]
 ```
 
 ### ER
