@@ -123,10 +123,7 @@ pub fn render_diagram(source: &str, style: &DiagramStyle) -> Result<(String, f32
 
 /// Escape XML special characters
 pub fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+    crate::xml::escape_xml(s)
 }
 
 // ============================================
@@ -356,7 +353,7 @@ fn render_sequence_elements(
                 text,
             } => {
                 if let Some(cx) = participant_centers.get(participant.as_str()) {
-                    let note_width = (text.chars().count() as f32 * 6.0 + 20.0)
+                    let note_width = (crate::xml::sanitized_char_count(text) as f32 * 6.0 + 20.0)
                         .min(220.0)
                         .max(80.0);
                     let x = match position.as_str() {
@@ -735,7 +732,7 @@ fn render_class_relation(
     if let Some(label) = &relation.label {
         let mx = (x1 + x2) / 2.0;
         let my = (y1 + y2) / 2.0;
-        let label_w = label.chars().count() as f32 * 7.0 + 10.0;
+        let label_w = crate::xml::sanitized_char_count(label) as f32 * 7.0 + 10.0;
         let label_h = style.font_size * 0.95;
         svg.push_str(&format!(
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="2" fill="{}" />"#,
@@ -1114,7 +1111,7 @@ fn render_state_note(
     state_pos: &LayoutPos,
     style: &DiagramStyle,
 ) -> String {
-    let note_width = (text.chars().count() as f32 * 6.0).clamp(72.0, 180.0);
+    let note_width = (crate::xml::sanitized_char_count(text) as f32 * 6.0).clamp(72.0, 180.0);
     let note_height = 26.0;
     let x = state_pos.x + state_pos.width + 28.0;
     let y = state_pos.y + 4.0;
@@ -1258,7 +1255,7 @@ fn render_state_transition(
             label_x += (dx / length) * tangent_offset;
             label_y += (dy / length) * tangent_offset;
         }
-        let label_width = label.chars().count() as f32 * 6.8 + 8.0;
+        let label_width = crate::xml::sanitized_char_count(label) as f32 * 6.8 + 8.0;
         let label_height = style.font_size * 0.8 + 6.0;
 
         svg.push_str(&format!(

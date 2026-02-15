@@ -371,8 +371,10 @@ impl LayoutEngine {
         for element in elements {
             match element {
                 SequenceElement::Message(msg) => {
-                    *max_label_half_width = (*max_label_half_width)
-                        .max(msg.label.chars().count() as f32 * 3.5 + self.edge_label_padding);
+                    *max_label_half_width = (*max_label_half_width).max(
+                        crate::xml::sanitized_char_count(&msg.label) as f32 * 3.5
+                            + self.edge_label_padding,
+                    );
                     *current_y += 50.0;
                 }
                 SequenceElement::Activation(_) | SequenceElement::Deactivation(_) => {

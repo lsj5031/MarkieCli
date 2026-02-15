@@ -3,6 +3,7 @@ mod math;
 mod mermaid;
 mod renderer;
 mod theme;
+mod xml;
 
 use clap::Parser;
 use resvg::usvg;

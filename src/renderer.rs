@@ -111,6 +111,22 @@ mod tests {
         // The SVGs should be different (different content and potentially different colors)
         assert_ne!(svg_py, svg_rs);
     }
+
+    #[test]
+    fn test_svg_output_strips_xml_invalid_control_chars() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "Intro\n\n\u{0007}## 1) Summary\n";
+        let result = renderer.render(markdown);
+
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+        assert!(!svg.contains('\u{0007}'));
+        assert!(svg.contains("Summary"));
+        assert!(!svg.contains(">##<"));
+    }
 }
 
 const LIST_INDENT_RATIO: f32 = 1.5;
@@ -276,6 +292,10 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     pub fn render(&mut self, markdown: &str) -> Result<String, String> {
+        // Remove XML-illegal control chars before markdown parsing so syntax (e.g. headings)
+        // still parses correctly when noisy bytes are present in input files.
+        let markdown = crate::xml::sanitize_xml_text(markdown);
+
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TABLES);
         options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -287,7 +307,7 @@ impl<T: TextMeasure> Renderer<T> {
         options.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
         options.insert(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS);
 
-        let parser = Parser::new_ext(markdown, options);
+        let parser = Parser::new_ext(&markdown, options);
 
         for event in parser {
             if self.in_metadata_block {
@@ -1942,10 +1962,12 @@ impl<T: TextMeasure> Renderer<T> {
     ) -> f32 {
         self.last_margin_added = 0.0;
 
+        // SVG is XML: drop XML-illegal codepoints early so measuring and output agree.
+        let text = crate::xml::sanitize_xml_text(text);
         let is_code = font_family == "monospace";
         let (width, _) = self
             .measure
-            .measure_text(text, font_size, is_code, bold, italic, None);
+            .measure_text(&text, font_size, is_code, bold, italic, None);
 
         let weight_attr = if bold { " font-weight=\"700\"" } else { "" };
         let style_attr = if italic { " font-style=\"italic\"" } else { "" };
@@ -1960,19 +1982,11 @@ impl<T: TextMeasure> Renderer<T> {
             fill,
             weight_attr,
             style_attr,
-            self.escape_xml(text).replace(' ', "&#160;"),
+            crate::xml::escape_xml(&text).replace(' ', "&#160;"),
         )
         .unwrap();
 
         width
-    }
-
-    fn escape_xml(&self, text: &str) -> String {
-        text.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&apos;")
     }
 
     fn finalize_svg(&self, height: f32) -> String {

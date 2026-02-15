@@ -329,7 +329,7 @@ fn render_edge(
         let label_y = my + perp_y;
 
         // Background rectangle for label
-        let label_width = label.chars().count() as f32 * 7.0 + 8.0;
+        let label_width = crate::xml::sanitized_char_count(label) as f32 * 7.0 + 8.0;
         let label_height = style.font_size + 6.0;
 
         svg.push_str(&format!(

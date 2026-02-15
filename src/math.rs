@@ -1,5 +1,5 @@
 use crate::fonts::TextMeasure;
-use latex2mathml::{latex_to_mathml, DisplayStyle};
+use latex2mathml::{DisplayStyle, latex_to_mathml};
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::reader::Reader as XmlReader;
 
@@ -391,11 +391,7 @@ fn extract_text(children: &[MathNode]) -> String {
 }
 
 fn escape_xml(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+    crate::xml::escape_xml(text)
 }
 
 fn measure_token<T: TextMeasure>(
@@ -404,7 +400,8 @@ fn measure_token<T: TextMeasure>(
     italic: bool,
     measure: &mut T,
 ) -> (f32, f32) {
-    measure.measure_text(text, font_size, false, false, italic, None)
+    let cleaned = crate::xml::sanitize_xml_text(text);
+    measure.measure_text(&cleaned, font_size, false, false, italic, None)
 }
 
 fn layout_node<T: TextMeasure>(
