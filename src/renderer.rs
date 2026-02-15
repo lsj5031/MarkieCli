@@ -33,6 +33,27 @@ mod tests {
         }
     }
 
+    struct ZeroSpaceMeasure;
+    impl TextMeasure for ZeroSpaceMeasure {
+        fn measure_text(
+            &mut self,
+            text: &str,
+            font_size: f32,
+            _is_code: bool,
+            _is_bold: bool,
+            _is_italic: bool,
+            _max_width: Option<f32>,
+        ) -> (f32, f32) {
+            let width = match text {
+                " " => 0.0,
+                "m m" => 30.0,
+                "mm" => 20.0,
+                _ => text.len() as f32 * font_size * 0.6,
+            };
+            (width, font_size)
+        }
+    }
+
     #[test]
     fn test_renderer_initialization() {
         let theme = Theme::default();
@@ -126,6 +147,144 @@ mod tests {
         assert!(!svg.contains('\u{0007}'));
         assert!(svg.contains("Summary"));
         assert!(!svg.contains(">##<"));
+    }
+
+    #[test]
+    fn test_mermaid_class_relations_rendered_from_markdown_fence() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = r#"
+# Class Example
+
+```mermaid
+classDiagram
+  class User {
+    +String id
+  }
+  class Session {
+    +String token
+  }
+  class AuditLog {
+    +record(event: String): void
+  }
+
+  User --> Session : creates
+  User ..> AuditLog : writes
+```
+"#;
+        let svg = renderer.render(markdown).unwrap();
+        assert!(
+            svg.contains("creates") && svg.contains("writes"),
+            "Expected class relation labels to be present in SVG"
+        );
+    }
+
+    #[test]
+    fn test_markdown_mermaid_fence_preserves_relation_lines() {
+        let markdown = r#"
+# Class Example
+
+```mermaid
+classDiagram
+  class User {
+    +String id
+  }
+  class Session {
+    +String token
+  }
+  User --> Session : creates
+```
+"#;
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_TABLES);
+        options.insert(Options::ENABLE_STRIKETHROUGH);
+        options.insert(Options::ENABLE_TASKLISTS);
+        options.insert(Options::ENABLE_MATH);
+        options.insert(Options::ENABLE_SMART_PUNCTUATION);
+        options.insert(Options::ENABLE_FOOTNOTES);
+        options.insert(Options::ENABLE_DEFINITION_LIST);
+        options.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
+        options.insert(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS);
+
+        let parser = Parser::new_ext(markdown, options);
+        let mut in_code = false;
+        let mut lang = None::<String>;
+        let mut code = String::new();
+
+        for event in parser {
+            match event {
+                Event::Start(Tag::CodeBlock(kind)) => {
+                    in_code = true;
+                    lang = match kind {
+                        pulldown_cmark::CodeBlockKind::Fenced(l) => Some(l.to_string()),
+                        _ => None,
+                    };
+                }
+                Event::End(TagEnd::CodeBlock) => break,
+                Event::Text(t) if in_code => code.push_str(&t),
+                Event::Code(t) if in_code => code.push_str(&t),
+                Event::SoftBreak | Event::HardBreak if in_code => code.push('\n'),
+                _ => {}
+            }
+        }
+
+        assert_eq!(lang.as_deref(), Some("mermaid"));
+        assert!(code.contains("User --> Session : creates"));
+    }
+
+    #[test]
+    fn test_whitespace_fallback_prevents_collapsed_words() {
+        let theme = Theme::default();
+        let measure = ZeroSpaceMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let svg = renderer.render("Hello World").unwrap();
+
+        let hello_idx = svg.find(">Hello</text>").expect("Hello text missing");
+        let world_idx = svg.find(">World</text>").expect("World text missing");
+        assert!(world_idx > hello_idx, "World should render after Hello");
+
+        let world_prefix = &svg[..world_idx];
+        let x_start = world_prefix
+            .rfind("x=\"")
+            .expect("missing x attribute for World")
+            + 3;
+        let x_end = world_prefix[x_start..]
+            .find('"')
+            .expect("unterminated x attribute for World")
+            + x_start;
+        let world_x: f32 = world_prefix[x_start..x_end].parse().unwrap_or(0.0);
+
+        // 32px left padding + Hello width (42) + inferred space (10) = 84
+        assert!(world_x >= 84.0, "Expected non-zero spacing between words");
+    }
+
+    #[test]
+    fn test_parser_preserves_space_in_heading_text_event() {
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_TABLES);
+        options.insert(Options::ENABLE_STRIKETHROUGH);
+        options.insert(Options::ENABLE_TASKLISTS);
+        options.insert(Options::ENABLE_MATH);
+        options.insert(Options::ENABLE_SMART_PUNCTUATION);
+        options.insert(Options::ENABLE_FOOTNOTES);
+        options.insert(Options::ENABLE_DEFINITION_LIST);
+        options.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
+        options.insert(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS);
+        let parser = Parser::new_ext("# Hello World\n", options);
+        let texts: Vec<String> = parser
+            .filter_map(|event| match event {
+                Event::Text(t) => Some(t.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|t| t == "Hello World"),
+            "Expected heading text event 'Hello World', got: {:?}",
+            texts
+        );
     }
 }
 
@@ -689,9 +848,31 @@ impl<T: TextMeasure> Renderer<T> {
                 return Ok(());
             }
 
-            let (space_width, _) = self
+            let (raw_space_width, _) = self
                 .measure
                 .measure_text(" ", font_size, false, is_bold, is_italic, None);
+
+            // Some shapers trim trailing whitespace and report a zero/tiny width for " ".
+            // Infer space advance from "m m" - "mm" and prefer the larger valid value.
+            let (with_space, _) =
+                self.measure
+                    .measure_text("m m", font_size, false, is_bold, is_italic, None);
+            let (without_space, _) =
+                self.measure
+                    .measure_text("mm", font_size, false, is_bold, is_italic, None);
+            let inferred = with_space - without_space;
+
+            let mut space_width = if inferred.is_finite() && inferred > 0.0 {
+                raw_space_width.max(inferred)
+            } else {
+                raw_space_width
+            };
+
+            if !(space_width.is_finite() && space_width > 0.0) {
+                space_width = font_size * 0.33;
+            }
+            // Guard against shapers reporting near-zero space width.
+            space_width = space_width.max(font_size * 0.2);
 
             if self.cursor_x + space_width > self.right_edge() {
                 self.advance_line(font_size);
@@ -1136,7 +1317,7 @@ impl<T: TextMeasure> Renderer<T> {
             &self.theme.code_bg_color,
         );
 
-        let (svg, width, height) = render_diagram(source, &style)?;
+        let (svg, width, height) = render_diagram(source, &style, &mut self.measure)?;
 
         // Center the diagram if smaller than available width
         let available_width = self.right_edge() - x;

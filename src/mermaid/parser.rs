@@ -815,14 +815,26 @@ fn parse_class_relation(line: &str) -> Option<ClassRelation> {
     for (pattern, rel_type) in &patterns {
         if let Some(pos) = line.find(pattern) {
             let from = line[..pos].trim().to_string();
-            let rest = &line[pos + pattern.len()..];
-            let to = rest.trim().to_string();
+            let rest = line[pos + pattern.len()..].trim();
+
+            let (to, label) = if let Some((to_part, label_part)) = rest.split_once(':') {
+                let to = to_part.trim().to_string();
+                let label = label_part
+                    .trim()
+                    .trim_matches('"')
+                    .trim()
+                    .to_string();
+                let label = if label.is_empty() { None } else { Some(label) };
+                (to, label)
+            } else {
+                (rest.to_string(), None)
+            };
 
             return Some(ClassRelation {
                 from,
                 to,
                 relation_type: rel_type.clone(),
-                label: None,
+                label,
                 multiplicity_from: None,
                 multiplicity_to: None,
             });
@@ -1171,16 +1183,31 @@ fn parse_er(input: &str) -> Result<ErDiagram, String> {
     let mut current_entity: Option<String> = None;
     let mut current_attributes: Vec<ErAttribute> = Vec::new();
 
-    for line in &mut lines {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with("%%") {
+    for raw_line in &mut lines {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("%%") {
             continue;
         }
 
-        // Entity attribute
-        if line.starts_with("  ") || line.starts_with("\t") {
-            if current_entity.is_some() {
-                let attr_line = line.trim();
+        // Inside an entity block
+        if current_entity.is_some() {
+            if trimmed == "}" {
+                let entity_name = current_entity.take().unwrap();
+                entities.push(ErEntity {
+                    name: entity_name,
+                    attributes: std::mem::take(&mut current_attributes),
+                });
+                continue;
+            }
+
+            let is_indented = raw_line
+                .chars()
+                .next()
+                .map(|c| c.is_whitespace())
+                .unwrap_or(false);
+
+            if is_indented {
+                let attr_line = trimmed;
                 let is_key = attr_line.starts_with('*');
                 let name = if is_key {
                     attr_line[1..].trim()
@@ -1193,38 +1220,42 @@ fn parse_er(input: &str) -> Result<ErDiagram, String> {
                     is_key,
                     is_composite: false,
                 });
+                continue;
             }
-            continue;
-        }
 
-        // Save previous entity
-        if let Some(entity_name) = current_entity.take() {
+            // Unexpected unindented line while inside a block: close the block and
+            // re-process this line as a top-level statement.
+            let entity_name = current_entity.take().unwrap();
             entities.push(ErEntity {
                 name: entity_name,
                 attributes: std::mem::take(&mut current_attributes),
             });
+            // fallthrough
         }
 
-        // Relationship
-        if line.contains("||--") || line.contains("}o--") || line.contains("|o--") {
-            if let Some(rel) = parse_er_relationship(line) {
-                relationships.push(rel);
-            }
+        if trimmed == "}" {
             continue;
         }
 
-        // Entity definition
-        if line.contains('{') {
-            let name = line.trim_end_matches('{').trim().to_string();
+        // Relationship
+        if let Some(rel) = parse_er_relationship(trimmed) {
+            relationships.push(rel);
+            continue;
+        }
+
+        // Entity definition (block)
+        if trimmed.contains('{') {
+            let name = trimmed.trim_end_matches('{').trim().to_string();
             current_entity = Some(name);
             current_attributes.clear();
-        } else if !line.contains("--") {
-            // Simple entity declaration
-            entities.push(ErEntity {
-                name: line.to_string(),
-                attributes: Vec::new(),
-            });
+            continue;
         }
+
+        // Simple entity declaration
+        entities.push(ErEntity {
+            name: trimmed.to_string(),
+            attributes: Vec::new(),
+        });
     }
 
     // Save last entity
@@ -1289,9 +1320,18 @@ fn parse_er_relationship(line: &str) -> Option<ErRelationship> {
     for (pattern, from_card, to_card) in &patterns {
         if let Some(pos) = line.find(pattern) {
             let from = line[..pos].trim().to_string();
-            let rest = &line[pos + pattern.len()..];
+            let rest = line[pos + pattern.len()..].trim();
 
-            let (to, label) = if rest.starts_with('"') {
+            let (to, label) = if let Some((to_part, label_part)) = rest.split_once(':') {
+                let to = to_part.trim().to_string();
+                let label = label_part
+                    .trim()
+                    .trim_matches('"')
+                    .trim()
+                    .to_string();
+                let label = if label.is_empty() { None } else { Some(label) };
+                (to, label)
+            } else if rest.starts_with('"') {
                 let end = rest[1..].find('"')? + 1;
                 (rest[..end].trim_matches('"').to_string(), None)
             } else {
@@ -1674,6 +1714,92 @@ classDiagram
             );
         } else {
             panic!("Expected class diagram");
+        }
+    }
+
+    #[test]
+    fn test_parse_class_relations_with_labels() {
+        let input = r#"
+classDiagram
+    class User {
+        +String id
+    }
+    class Session {
+        +String token
+    }
+    class AuditLog {
+        +record(event: String): void
+    }
+
+    User --> Session : creates
+    User ..> AuditLog : writes
+"#;
+        let result = parse_mermaid(input).unwrap();
+        if let MermaidDiagram::ClassDiagram(cls) = result {
+            assert_eq!(cls.classes.len(), 3);
+            assert_eq!(cls.relations.len(), 2);
+
+            let creates = cls
+                .relations
+                .iter()
+                .find(|r| r.from == "User" && r.to == "Session")
+                .expect("missing creates relation");
+            assert_eq!(creates.label.as_deref(), Some("creates"));
+
+            let writes = cls
+                .relations
+                .iter()
+                .find(|r| r.from == "User" && r.to == "AuditLog")
+                .expect("missing writes relation");
+            assert_eq!(writes.label.as_deref(), Some("writes"));
+            assert!(matches!(writes.relation_type, ClassRelationType::Dependency));
+        } else {
+            panic!("Expected class diagram");
+        }
+    }
+
+    #[test]
+    fn test_parse_er_entity_blocks_and_relationship_labels() {
+        let input = r#"
+erDiagram
+    USER ||--o{ ORDER : places
+    ORDER ||--|{ ORDER_ITEM : contains
+
+    USER {
+        string id
+        string email
+    }
+
+    ORDER {
+        string id
+    }
+
+    ORDER_ITEM {
+        string order_id
+    }
+"#;
+        let result = parse_mermaid(input).unwrap();
+        if let MermaidDiagram::ErDiagram(er) = result {
+            assert_eq!(er.entities.len(), 3);
+            assert_eq!(er.relationships.len(), 2);
+
+            let user = er
+                .entities
+                .iter()
+                .find(|e| e.name == "USER")
+                .expect("missing USER");
+            assert_eq!(user.attributes.len(), 2);
+            assert_eq!(user.attributes[0].name, "string id");
+            assert_eq!(user.attributes[1].name, "string email");
+
+            let places = er
+                .relationships
+                .iter()
+                .find(|r| r.from == "USER" && r.to == "ORDER")
+                .expect("missing places relationship");
+            assert_eq!(places.label.as_deref(), Some("places"));
+        } else {
+            panic!("Expected ER diagram");
         }
     }
 

@@ -14,10 +14,6 @@ pub fn sanitize_xml_text(text: &str) -> String {
     text.chars().filter(|&c| is_valid_xml_char(c)).collect()
 }
 
-pub fn sanitized_char_count(text: &str) -> usize {
-    text.chars().filter(|&c| is_valid_xml_char(c)).count()
-}
-
 pub fn escape_xml(text: &str) -> String {
     let mut escaped = String::with_capacity(text.len());
     for c in text.chars() {

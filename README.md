@@ -10,11 +10,13 @@ A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents in
 - **Multiple Output Formats**: Export to SVG, PNG, or PDF
 - **High-Resolution PNG Output**: Use `--png-scale` for sharper raster output
 - **Native Mermaid Rendering**: Flowchart, sequence, class, state, and ER diagrams (including advanced edge/control syntax)
+- **Improved Mermaid Layout**: Sparser node spacing and collision-aware edge label placement
 - **Enhanced Math Rendering**: LaTeX-style math including nth roots, binomials, and matrices
 - **Customizable Themes**: Supports Alacritty theme files (`.yaml`/`.toml`)
 - **Flexible Input**: Read from file or stdin
 - **Adjustable Width**: Control output image width
 - **Font Support**: Includes local font directory, system fallback, and global font caching
+- **XML-Safe Output**: Invalid XML control characters are stripped during rendering
 
 ## Markdown Support
 
@@ -61,6 +63,10 @@ Supported diagram types:
 - **Class**: `classDiagram` with classes, attributes, methods, and relationships
 - **State**: `stateDiagram` with states, transitions, composite state children, and notes
 - **ER**: `erDiagram` with entities and relationships
+
+Rendering notes:
+- Diagram layout is intentionally sparse for readability.
+- Edge labels are offset and collision-checked against nodes and nearby labels.
 
 ### Enhanced Math Support
 

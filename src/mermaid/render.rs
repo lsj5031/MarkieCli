@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::fonts::TextMeasure;
+
 use super::layout::{LayoutEngine, LayoutPos};
 use super::types::*;
 use super::{MermaidDiagram, parse_mermaid};
@@ -94,28 +96,32 @@ fn pick_higher_contrast(base: &str, primary: &str, secondary: &str) -> String {
 }
 
 /// Render any mermaid diagram to SVG
-pub fn render_diagram(source: &str, style: &DiagramStyle) -> Result<(String, f32, f32), String> {
+pub fn render_diagram<T: TextMeasure>(
+    source: &str,
+    style: &DiagramStyle,
+    measure: &mut T,
+) -> Result<(String, f32, f32), String> {
     let diagram = parse_mermaid(source)?;
 
     match diagram {
         MermaidDiagram::Flowchart(fc) => {
-            let svg = super::flowchart::render_flowchart(&fc, style)?;
+            let svg = super::flowchart::render_flowchart(&fc, style, measure)?;
             Ok(svg)
         }
         MermaidDiagram::Sequence(seq) => {
-            let svg = render_sequence(&seq, style)?;
+            let svg = render_sequence(&seq, style, measure)?;
             Ok(svg)
         }
         MermaidDiagram::ClassDiagram(cls) => {
-            let svg = render_class(&cls, style)?;
+            let svg = render_class(&cls, style, measure)?;
             Ok(svg)
         }
         MermaidDiagram::StateDiagram(st) => {
-            let svg = render_state(&st, style)?;
+            let svg = render_state(&st, style, measure)?;
             Ok(svg)
         }
         MermaidDiagram::ErDiagram(er) => {
-            let svg = render_er(&er, style)?;
+            let svg = render_er(&er, style, measure)?;
             Ok(svg)
         }
     }
@@ -139,12 +145,13 @@ pub fn escape_xml(s: &str) -> String {
 fn render_sequence(
     diagram: &SequenceDiagram,
     style: &DiagramStyle,
+    measure: &mut impl TextMeasure,
 ) -> Result<(String, f32, f32), String> {
     if diagram.participants.is_empty() {
         return Ok(("<g></g>".to_string(), 100.0, 50.0));
     }
 
-    let layout = LayoutEngine::new();
+    let mut layout = LayoutEngine::new(measure, style.font_size);
     let (positions, bbox) = layout.layout_sequence(diagram);
 
     let mut svg = String::new();
@@ -209,6 +216,7 @@ fn render_sequence(
         &diagram.elements,
         &participant_centers,
         style,
+        measure,
         &mut message_y,
         0,
         left_edge,
@@ -238,6 +246,7 @@ fn render_sequence_elements(
     elements: &[SequenceElement],
     participant_centers: &HashMap<&str, f32>,
     style: &DiagramStyle,
+    measure: &mut impl TextMeasure,
     message_y: &mut f32,
     block_depth: usize,
     left_edge: f32,
@@ -353,7 +362,11 @@ fn render_sequence_elements(
                 text,
             } => {
                 if let Some(cx) = participant_centers.get(participant.as_str()) {
-                    let note_width = (crate::xml::sanitized_char_count(text) as f32 * 6.0 + 20.0)
+                    let cleaned = crate::xml::sanitize_xml_text(text);
+                    let note_width = (measure
+                        .measure_text(&cleaned, style.font_size * 0.8, false, false, false, None)
+                        .0
+                        + 20.0)
                         .min(220.0)
                         .max(80.0);
                     let x = match position.as_str() {
@@ -415,6 +428,7 @@ fn render_sequence_elements(
                     &block.messages,
                     participant_centers,
                     style,
+                    measure,
                     message_y,
                     block_depth + 1,
                     left_edge,
@@ -448,6 +462,7 @@ fn render_sequence_elements(
                         branch_elements,
                         participant_centers,
                         style,
+                        measure,
                         message_y,
                         block_depth + 1,
                         left_edge,
@@ -478,12 +493,13 @@ fn render_sequence_elements(
 fn render_class(
     diagram: &ClassDiagram,
     style: &DiagramStyle,
+    measure: &mut impl TextMeasure,
 ) -> Result<(String, f32, f32), String> {
     if diagram.classes.is_empty() {
         return Ok(("<g></g>".to_string(), 100.0, 50.0));
     }
 
-    let layout = LayoutEngine::new();
+    let mut layout = LayoutEngine::new(measure, style.font_size);
     let (positions, bbox) = layout.layout_class(diagram);
 
     let mut svg = String::new();
@@ -502,7 +518,7 @@ fn render_class(
         let to_pos = positions.get(&relation.to);
 
         if let (Some(from), Some(to)) = (from_pos, to_pos) {
-            svg.push_str(&render_class_relation(relation, from, to, style));
+            svg.push_str(&render_class_relation(relation, from, to, style, measure));
         }
     }
 
@@ -682,6 +698,7 @@ fn render_class_relation(
     from: &LayoutPos,
     to: &LayoutPos,
     style: &DiagramStyle,
+    _measure: &mut impl TextMeasure,
 ) -> String {
     let mut svg = String::new();
 
@@ -732,24 +749,16 @@ fn render_class_relation(
     if let Some(label) = &relation.label {
         let mx = (x1 + x2) / 2.0;
         let my = (y1 + y2) / 2.0;
-        let label_w = crate::xml::sanitized_char_count(label) as f32 * 7.0 + 10.0;
-        let label_h = style.font_size * 0.95;
-        svg.push_str(&format!(
-            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="2" fill="{}" />"#,
-            mx - label_w / 2.0,
-            my - label_h + normal_y * 10.0,
-            label_w,
-            label_h + 4.0,
-            style.background
-        ));
+        let cleaned = crate::xml::sanitize_xml_text(label);
+        let label_offset = 16.0;
         svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
-            mx + normal_x * 10.0,
-            my + normal_y * 10.0,
+            mx + normal_x * label_offset,
+            my + normal_y * label_offset,
             style.font_family,
             style.font_size * 0.8,
             style.edge_text,
-            escape_xml(label)
+            escape_xml(&cleaned)
         ));
     }
 
@@ -828,15 +837,33 @@ fn draw_marker(marker_type: &str, x: f32, y: f32, angle: f32, style: &DiagramSty
 // STATE DIAGRAM RENDERING
 // ============================================
 
+#[derive(Clone, Copy, Debug)]
+struct RectF {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+impl RectF {
+    fn overlaps(&self, other: &RectF) -> bool {
+        self.x < other.x + other.w
+            && self.x + self.w > other.x
+            && self.y < other.y + other.h
+            && self.y + self.h > other.y
+    }
+}
+
 fn render_state(
     diagram: &StateDiagram,
     style: &DiagramStyle,
+    measure: &mut impl TextMeasure,
 ) -> Result<(String, f32, f32), String> {
     if diagram.states.is_empty() {
         return Ok(("<g></g>".to_string(), 100.0, 50.0));
     }
 
-    let layout = LayoutEngine::new();
+    let mut layout = LayoutEngine::new(measure, style.font_size);
     let (positions, bbox) = layout.layout_state(diagram);
 
     let mut svg = String::new();
@@ -869,6 +896,7 @@ fn render_state(
     }
 
     let mut pair_seen: HashMap<(String, String), usize> = HashMap::new();
+    let mut occupied_labels: Vec<RectF> = Vec::new();
     for transition in visible_transitions {
         let key = state_pair_key(&transition.from, &transition.to);
         let route_index = pair_seen.get(&key).copied().unwrap_or(0);
@@ -884,8 +912,10 @@ fn render_state(
                 from,
                 to,
                 style,
+                measure,
                 route_index,
                 route_total,
+                &mut occupied_labels,
             ));
         }
     }
@@ -903,6 +933,7 @@ fn render_state(
                 pos,
                 style,
                 &positions,
+                measure,
             ));
         }
     }
@@ -919,6 +950,7 @@ fn render_state_node(
     pos: &LayoutPos,
     style: &DiagramStyle,
     positions: &HashMap<String, LayoutPos>,
+    measure: &mut impl TextMeasure,
 ) -> String {
     let mut svg = String::new();
 
@@ -967,7 +999,7 @@ fn render_state_node(
 
         if state.is_composite {
             svg.push_str(&render_composite_state_contents(
-                state, children, pos, style, positions,
+                state, children, pos, style, positions, measure,
             ));
         } else {
             for child in children {
@@ -977,7 +1009,7 @@ fn render_state_node(
                 } = child
                 {
                     if note_state == &state.id && !text.is_empty() {
-                        svg.push_str(&render_state_note(note_state, text, pos, style));
+                        svg.push_str(&render_state_note(note_state, text, pos, style, measure));
                     }
                 }
             }
@@ -993,6 +1025,7 @@ fn render_composite_state_contents(
     parent_pos: &LayoutPos,
     style: &DiagramStyle,
     positions: &HashMap<String, LayoutPos>,
+    measure: &mut impl TextMeasure,
 ) -> String {
     let mut svg = String::new();
     let mut child_states: Vec<&State> = Vec::new();
@@ -1069,6 +1102,7 @@ fn render_composite_state_contents(
     }
 
     let mut pair_seen: HashMap<(String, String), usize> = HashMap::new();
+    let mut occupied_labels: Vec<RectF> = Vec::new();
     for transition in child_transitions {
         let key = state_pair_key(&transition.from, &transition.to);
         let route_index = pair_seen.get(&key).copied().unwrap_or(0);
@@ -1087,8 +1121,10 @@ fn render_composite_state_contents(
                 from_pos,
                 to_pos,
                 style,
+                measure,
                 route_index,
                 route_total,
+                &mut occupied_labels,
             ));
         }
     }
@@ -1098,7 +1134,7 @@ fn render_composite_state_contents(
             .get(note_state)
             .or_else(|| positions.get(note_state))
         {
-            svg.push_str(&render_state_note(note_state, text, target, style));
+            svg.push_str(&render_state_note(note_state, text, target, style, measure));
         }
     }
 
@@ -1110,8 +1146,14 @@ fn render_state_note(
     text: &str,
     state_pos: &LayoutPos,
     style: &DiagramStyle,
+    measure: &mut impl TextMeasure,
 ) -> String {
-    let note_width = (crate::xml::sanitized_char_count(text) as f32 * 6.0).clamp(72.0, 180.0);
+    let cleaned = crate::xml::sanitize_xml_text(text);
+    let note_width = (measure
+        .measure_text(&cleaned, style.font_size * 0.8, false, false, false, None)
+        .0
+        + 16.0)
+        .clamp(72.0, 180.0);
     let note_height = 26.0;
     let x = state_pos.x + state_pos.width + 28.0;
     let y = state_pos.y + 4.0;
@@ -1138,8 +1180,10 @@ fn render_state_transition(
     from: &LayoutPos,
     to: &LayoutPos,
     style: &DiagramStyle,
+    measure: &mut impl TextMeasure,
     route_index: usize,
     route_total: usize,
+    occupied_labels: &mut Vec<RectF>,
 ) -> String {
     let mut svg = String::new();
 
@@ -1178,9 +1222,9 @@ fn render_state_transition(
     } else {
         0.0
     };
-    let lane_offset = lane * 24.0;
+    let lane_offset = lane * 30.0;
     let global_lane = (route_hash % 5) as f32 - 2.0;
-    let global_offset = global_lane * 4.0;
+    let global_offset = global_lane * 6.0;
     let route_side = match transition.from.cmp(&transition.to) {
         std::cmp::Ordering::Less => 1.0,
         std::cmp::Ordering::Greater => -1.0,
@@ -1214,6 +1258,14 @@ fn render_state_transition(
             px1, py1, px2, py2, style.edge_stroke
         ));
         arrow_angle = (py1 - py2).atan2(px1 - px2);
+
+        // Jitter label anchor along the edge to reduce label-label collisions.
+        let dx = px2 - px1;
+        let dy = py2 - py1;
+        let jitter = ((route_hash % 7) as f32 - 3.0) * 0.07;
+        let t = (0.5 + jitter).clamp(0.25, 0.75);
+        label_anchor_x = px1 + dx * t;
+        label_anchor_y = py1 + dy * t;
     }
 
     // Arrow
@@ -1235,45 +1287,144 @@ fn render_state_transition(
 
     // Label
     if let Some(ref label) = transition.label {
-        let mut label_x = label_anchor_x;
-        let mut label_y = label_anchor_y;
-
-        if verticalish {
-            label_x += route_side * (8.0 + global_lane.abs() * 2.0);
-            label_y += route_side * 8.0;
-            label_y += lane_offset + global_offset;
-        } else {
-            let dx = px2 - px1;
-            let dy = py2 - py1;
-            let length = (dx * dx + dy * dy).sqrt().max(1.0);
-            let perp_x = -dy / length;
-            let perp_y = dx / length;
-            let label_offset = 16.0 + lane.abs() * 8.0 + global_lane.abs() * 3.0;
-            label_x += perp_x * label_offset * route_side;
-            label_y += perp_y * label_offset * route_side;
-            let tangent_offset = lane_offset + global_offset;
-            label_x += (dx / length) * tangent_offset;
-            label_y += (dy / length) * tangent_offset;
-        }
-        let label_width = crate::xml::sanitized_char_count(label) as f32 * 6.8 + 8.0;
+        let cleaned = crate::xml::sanitize_xml_text(label);
+        let label_width = measure
+            .measure_text(&cleaned, style.font_size * 0.85, false, false, false, None)
+            .0
+            + 8.0;
         let label_height = style.font_size * 0.8 + 6.0;
+        let pad = 3.0;
+        let from_rect = RectF {
+            x: from.x - pad,
+            y: from.y - pad,
+            w: from.width + pad * 2.0,
+            h: from.height + pad * 2.0,
+        };
+        let to_rect = RectF {
+            x: to.x - pad,
+            y: to.y - pad,
+            w: to.width + pad * 2.0,
+            h: to.height + pad * 2.0,
+        };
 
-        svg.push_str(&format!(
-            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="2" fill="{}" />"#,
-            label_x - label_width / 2.0,
-            label_y - label_height + 2.0,
-            label_width,
-            label_height,
-            style.background
-        ));
+        let dx = px2 - px1;
+        let dy = py2 - py1;
+        let len = (dx * dx + dy * dy).sqrt().max(1.0);
+        let tx = dx / len;
+        let ty = dy / len;
+        let perp_x = -ty;
+        let perp_y = tx;
+        let tangent_offset = lane_offset + global_offset;
+
+        let rect_for = |lx: f32, ly: f32| RectF {
+            x: lx - label_width / 2.0,
+            y: ly - label_height + 2.0,
+            w: label_width,
+            h: label_height,
+        };
+
+        let score = |r: &RectF| -> i32 {
+            let mut s = 0;
+            if r.overlaps(&from_rect) {
+                s += 500;
+            }
+            if r.overlaps(&to_rect) {
+                s += 500;
+            }
+            for o in occupied_labels.iter() {
+                if r.overlaps(o) {
+                    s += 800;
+                }
+            }
+            s
+        };
+
+        // Candidate search: try different anchor t and perpendicular distances on both sides.
+        let t_candidates: [f32; 5] = [0.28, 0.38, 0.5, 0.62, 0.72];
+        let dist_candidates: [f32; 6] = [30.0, 44.0, 58.0, 72.0, 86.0, 100.0];
+        let side_candidates: [f32; 2] = [route_side, -route_side];
+
+        // Always include the previous heuristic as a candidate.
+        let base_dist = 30.0 + lane.abs() * 12.0 + global_lane.abs() * 6.0;
+        let base_x = label_anchor_x
+            + perp_x * base_dist * route_side
+            + tx * tangent_offset;
+        let base_y = label_anchor_y
+            + perp_y * base_dist * route_side
+            + ty * tangent_offset;
+        let base_rect = rect_for(base_x, base_y);
+        let base_score = score(&base_rect);
+        let mut best_x = base_x;
+        let mut best_y = base_y;
+        let mut best_rect = base_rect;
+        let mut best_score = base_score;
+        let mut best_move =
+            ((base_x - label_anchor_x).powi(2) + (base_y - label_anchor_y).powi(2)).sqrt();
+
+        for &t in &t_candidates {
+            let ax = px1 + dx * t;
+            let ay = py1 + dy * t;
+            for &side in &side_candidates {
+                for &dist in &dist_candidates {
+                    let lx = ax + perp_x * dist * side + tx * tangent_offset;
+                    let ly = ay + perp_y * dist * side + ty * tangent_offset;
+                    let r = rect_for(lx, ly);
+                    let sc = score(&r);
+                    let mv = ((lx - label_anchor_x).powi(2) + (ly - label_anchor_y).powi(2)).sqrt();
+                    if sc < best_score || (sc == best_score && mv < best_move) {
+                        best_score = sc;
+                        best_move = mv;
+                        best_x = lx;
+                        best_y = ly;
+                        best_rect = r;
+                        if best_score == 0 {
+                            break;
+                        }
+                    }
+                }
+                if best_score == 0 {
+                    break;
+                }
+            }
+            if best_score == 0 {
+                break;
+            }
+        }
+
+        // For vertical-ish routes (polyline), also try shifting sideways.
+        if verticalish && best_score > 0 {
+            for &side in &side_candidates {
+                for &dist in &dist_candidates {
+                    let lx = label_anchor_x + side * dist;
+                    let ly = label_anchor_y + lane_offset * 0.5;
+                    let r = rect_for(lx, ly);
+                    let sc = score(&r);
+                    if sc < best_score {
+                        best_score = sc;
+                        best_x = lx;
+                        best_y = ly;
+                        best_rect = r;
+                        if best_score == 0 {
+                            break;
+                        }
+                    }
+                }
+                if best_score == 0 {
+                    break;
+                }
+            }
+        }
+
+        occupied_labels.push(best_rect);
+
         svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
-            label_x,
-            label_y,
+            best_x,
+            best_y,
             style.font_family,
             style.font_size * 0.85,
             style.edge_text,
-            escape_xml(label)
+            escape_xml(&cleaned)
         ));
     }
 
@@ -1292,16 +1443,21 @@ fn state_pair_key(from: &str, to: &str) -> (String, String) {
 // ER DIAGRAM RENDERING
 // ============================================
 
-fn render_er(diagram: &ErDiagram, style: &DiagramStyle) -> Result<(String, f32, f32), String> {
+fn render_er(
+    diagram: &ErDiagram,
+    style: &DiagramStyle,
+    measure: &mut impl TextMeasure,
+) -> Result<(String, f32, f32), String> {
     if diagram.entities.is_empty() {
         return Ok(("<g></g>".to_string(), 100.0, 50.0));
     }
 
-    let layout = LayoutEngine::new();
+    let mut layout = LayoutEngine::new(measure, style.font_size);
     let (positions, bbox) = layout.layout_er(diagram);
 
     let mut svg = String::new();
     let padding = 20.0;
+    let mut occupied_labels: Vec<RectF> = Vec::new();
 
     // Draw relationships first
     for relation in &diagram.relationships {
@@ -1309,7 +1465,14 @@ fn render_er(diagram: &ErDiagram, style: &DiagramStyle) -> Result<(String, f32, 
         let to_pos = positions.get(&relation.to);
 
         if let (Some(from), Some(to)) = (from_pos, to_pos) {
-            svg.push_str(&render_er_relationship(relation, from, to, style));
+            svg.push_str(&render_er_relationship(
+                relation,
+                from,
+                to,
+                style,
+                measure,
+                &mut occupied_labels,
+            ));
         }
     }
 
@@ -1375,6 +1538,8 @@ fn render_er_relationship(
     from: &LayoutPos,
     to: &LayoutPos,
     style: &DiagramStyle,
+    measure: &mut impl TextMeasure,
+    occupied_labels: &mut Vec<RectF>,
 ) -> String {
     let mut svg = String::new();
 
@@ -1406,14 +1571,138 @@ fn render_er_relationship(
     ));
 
     if let Some(label) = &relation.label {
+        let cleaned = crate::xml::sanitize_xml_text(label);
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        let len = (dx * dx + dy * dy).sqrt().max(1.0);
+        let nx = -dy / len;
+        let ny = dx / len;
+        let mx = (x1 + x2) / 2.0;
+        let my = (y1 + y2) / 2.0;
+        let label_w = measure
+            .measure_text(&cleaned, style.font_size * 0.8, false, false, false, None)
+            .0
+            + 8.0;
+        let label_h = style.font_size * 0.75 + 6.0;
+
+        let pad = 3.0;
+        let from_x = from.x - pad;
+        let from_y = from.y - pad;
+        let from_w = from.width + pad * 2.0;
+        let from_h = from.height + pad * 2.0;
+        let to_x = to.x - pad;
+        let to_y = to.y - pad;
+        let to_w = to.width + pad * 2.0;
+        let to_h = to.height + pad * 2.0;
+
+        // Choose the normal direction that avoids overlapping endpoints.
+        let rect_for = |lx: f32, ly: f32| RectF {
+            x: lx - label_w / 2.0,
+            y: ly - label_h + 2.0,
+            w: label_w,
+            h: label_h,
+        };
+
+        let mut best_dir = (nx, ny);
+        let mut best_penalty = i32::MAX;
+        for (cx, cy) in [(nx, ny), (-nx, -ny)] {
+            let off = 22.0;
+            let lx = mx + cx * off;
+            let ly = my + cy * off;
+            let r = rect_for(lx, ly);
+            let mut penalty = 0;
+            if r.overlaps(&RectF {
+                x: from_x,
+                y: from_y,
+                w: from_w,
+                h: from_h,
+            }) {
+                penalty += 1;
+            }
+            if r.overlaps(&RectF {
+                x: to_x,
+                y: to_y,
+                w: to_w,
+                h: to_h,
+            }) {
+                penalty += 1;
+            }
+            if penalty < best_penalty {
+                best_penalty = penalty;
+                best_dir = (cx, cy);
+            }
+            if penalty == 0 {
+                break;
+            }
+        }
+
+        let from_r = RectF {
+            x: from_x,
+            y: from_y,
+            w: from_w,
+            h: from_h,
+        };
+        let to_r = RectF {
+            x: to_x,
+            y: to_y,
+            w: to_w,
+            h: to_h,
+        };
+
+        let mut label_x = mx;
+        let mut label_y = my;
+        let mut best_rect = rect_for(label_x, label_y);
+        let mut best_score = i32::MAX;
+
+        let tx = dx / len;
+        let ty = dy / len;
+        for off in [22.0_f32, 32.0, 44.0, 56.0, 68.0, 80.0] {
+            for tangent in [-28.0_f32, -14.0, 0.0, 14.0, 28.0] {
+                for (sx, sy) in [(best_dir.0, best_dir.1), (-best_dir.0, -best_dir.1)] {
+                    let lx = mx + sx * off + tx * tangent;
+                    let ly = my + sy * off + ty * tangent;
+                    let r = rect_for(lx, ly);
+                    let mut sc = 0;
+                    if r.overlaps(&from_r) {
+                        sc += 500;
+                    }
+                    if r.overlaps(&to_r) {
+                        sc += 500;
+                    }
+                    for o in occupied_labels.iter() {
+                        if r.overlaps(o) {
+                            sc += 800;
+                        }
+                    }
+                    if sc < best_score {
+                        best_score = sc;
+                        label_x = lx;
+                        label_y = ly;
+                        best_rect = r;
+                        if best_score == 0 {
+                            break;
+                        }
+                    }
+                }
+                if best_score == 0 {
+                    break;
+                }
+            }
+            if best_score == 0 {
+                break;
+            }
+        }
+
+        occupied_labels.push(best_rect);
+
         svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
-            (x1 + x2) / 2.0,
-            (y1 + y2) / 2.0 - 8.0,
+            label_x,
+            label_y,
             style.font_family,
             style.font_size * 0.8,
             style.edge_text,
-            escape_xml(label)
+            escape_xml(&cleaned)
         ));
     }
 
@@ -1520,4 +1809,48 @@ fn render_er_cardinality_marker(
     }
 
     marker
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockMeasure;
+
+    impl TextMeasure for MockMeasure {
+        fn measure_text(
+            &mut self,
+            text: &str,
+            font_size: f32,
+            _is_code: bool,
+            _is_bold: bool,
+            _is_italic: bool,
+            _max_width: Option<f32>,
+        ) -> (f32, f32) {
+            (text.chars().count() as f32 * font_size * 0.6, font_size)
+        }
+    }
+
+    #[test]
+    fn render_class_includes_relations_and_labels() {
+        let src = r#"classDiagram
+  class User {
+    +String id
+  }
+  class Session {
+    +String token
+  }
+  class AuditLog {
+    +record(event: String): void
+  }
+  User --> Session : creates
+  User ..> AuditLog : writes
+"#;
+        let style = DiagramStyle::default();
+        let mut measure = MockMeasure;
+
+        let (svg, _w, _h) = render_diagram(src, &style, &mut measure).unwrap();
+        assert!(svg.contains("creates"));
+        assert!(svg.contains("writes"));
+    }
 }

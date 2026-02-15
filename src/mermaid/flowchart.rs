@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::fonts::TextMeasure;
+
 use super::layout::{BBox, LayoutEngine, LayoutPos};
 use super::render::{DiagramStyle, escape_xml};
 use super::types::{ArrowType, EdgeStyle, FlowDirection, Flowchart, NodeShape};
@@ -8,12 +10,13 @@ use super::types::{ArrowType, EdgeStyle, FlowDirection, Flowchart, NodeShape};
 pub fn render_flowchart(
     flowchart: &Flowchart,
     style: &DiagramStyle,
+    measure: &mut impl TextMeasure,
 ) -> Result<(String, f32, f32), String> {
     if flowchart.nodes.is_empty() {
         return Ok(("<g></g>".to_string(), 100.0, 50.0));
     }
 
-    let layout = LayoutEngine::new();
+    let mut layout = LayoutEngine::new(measure, style.font_size);
     let (positions, bbox) = layout.layout_flowchart(flowchart);
 
     let mut svg = String::new();
@@ -25,7 +28,14 @@ pub fn render_flowchart(
         let to_pos = positions.get(&edge.to);
 
         if let (Some(from), Some(to)) = (from_pos, to_pos) {
-            svg.push_str(&render_edge(edge, from, to, style, &flowchart.direction));
+            svg.push_str(&render_edge(
+                edge,
+                from,
+                to,
+                style,
+                &flowchart.direction,
+                measure,
+            ));
         }
     }
 
@@ -239,6 +249,7 @@ fn render_edge(
     to: &LayoutPos,
     style: &DiagramStyle,
     direction: &FlowDirection,
+    _measure: &mut impl TextMeasure,
 ) -> String {
     let mut svg = String::new();
 
@@ -322,28 +333,22 @@ fn render_edge(
         let my = (y1 + y2) / 2.0;
 
         // Offset label slightly perpendicular to the edge
-        let perp_x = -angle.sin() * 30.0;
-        let perp_y = -angle.cos() * 30.0;
+        let perp_x = -angle.sin() * 38.0;
+        let perp_y = -angle.cos() * 38.0;
 
         let label_x = mx + perp_x;
         let label_y = my + perp_y;
 
-        // Background rectangle for label
-        let label_width = crate::xml::sanitized_char_count(label) as f32 * 7.0 + 8.0;
-        let label_height = style.font_size + 6.0;
-
-        svg.push_str(&format!(
-            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="2" fill="{}" />"#,
-            label_x - label_width / 2.0,
-            label_y - label_height / 2.0,
-            label_width,
-            label_height,
-            style.background
-        ));
+        let cleaned = crate::xml::sanitize_xml_text(label);
 
         svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
-            label_x, label_y + style.font_size / 3.0, style.font_family, style.font_size * 0.85, style.edge_text, escape_xml(label)
+            label_x,
+            label_y + style.font_size / 3.0,
+            style.font_family,
+            style.font_size * 0.85,
+            style.edge_text,
+            escape_xml(&cleaned)
         ));
     }
 
