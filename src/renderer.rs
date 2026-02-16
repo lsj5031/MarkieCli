@@ -286,6 +286,32 @@ classDiagram
             texts
         );
     }
+
+    #[test]
+    fn test_mermaid_block_scales_down_when_wider_than_content() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 360.0).unwrap();
+
+        let markdown = r#"
+```mermaid
+flowchart LR
+    A[Start] --> B[Gateway]
+    B --> C[Auth]
+    C --> D[Query]
+    D --> E[Transform]
+    E --> F[Cache]
+    F --> G[Publish]
+    G --> H[Done]
+```
+"#;
+
+        let svg = renderer.render(markdown).unwrap();
+        assert!(
+            svg.contains("scale("),
+            "Expected Mermaid block to be scaled when too wide"
+        );
+    }
 }
 
 const LIST_INDENT_RATIO: f32 = 1.5;
@@ -1319,16 +1345,20 @@ impl<T: TextMeasure> Renderer<T> {
 
         let (svg, width, height) = render_diagram(source, &style, &mut self.measure)?;
 
-        // Center the diagram if smaller than available width
+        // Scale down oversized diagrams so they never overflow the code-block frame.
         let available_width = self.right_edge() - x;
-        let offset_x = if width < available_width {
-            (available_width - width) / 2.0
+        let content_max_width = (available_width - 20.0).max(1.0);
+        let scale = if width > content_max_width {
+            content_max_width / width
         } else {
-            0.0
+            1.0
         };
+        let rendered_width = width * scale;
+        let rendered_height = height * scale;
+        let offset_x = (available_width - rendered_width).max(0.0) / 2.0;
 
         // Add background
-        let bg_height = height + 20.0;
+        let bg_height = rendered_height + 20.0;
         write!(
             self.svg_content,
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" />"#,
@@ -1346,8 +1376,8 @@ impl<T: TextMeasure> Renderer<T> {
         let svg_y = self.cursor_y + 10.0;
         write!(
             self.svg_content,
-            r#"<g transform="translate({:.2}, {:.2})">{}</g>"#,
-            svg_x, svg_y, svg
+            r#"<g transform="translate({:.2}, {:.2}) scale({:.4})">{}</g>"#,
+            svg_x, svg_y, scale, svg
         )
         .unwrap();
 
