@@ -37,7 +37,9 @@ impl Default for DiagramStyle {
 impl DiagramStyle {
     pub fn from_theme(text_color: &str, background: &str, code_bg: &str) -> Self {
         let diagram_fg = pick_higher_contrast(code_bg, text_color, background);
-        let label_fg = pick_higher_contrast(background, text_color, code_bg);
+        // Diagram labels/notes are painted on top of the Mermaid block background.
+        // Keep edge text contrast anchored to code_bg, not the page background.
+        let label_fg = pick_higher_contrast(code_bg, text_color, background);
 
         Self {
             node_fill: code_bg.to_string(),
@@ -852,6 +854,72 @@ impl RectF {
             && self.y < other.y + other.h
             && self.y + self.h > other.y
     }
+
+    fn expanded(&self, pad: f32) -> RectF {
+        RectF {
+            x: self.x - pad,
+            y: self.y - pad,
+            w: self.w + 2.0 * pad,
+            h: self.h + 2.0 * pad,
+        }
+    }
+}
+
+fn rect_from_pos(pos: &LayoutPos, pad: f32) -> RectF {
+    RectF {
+        x: pos.x - pad,
+        y: pos.y - pad,
+        w: pos.width + 2.0 * pad,
+        h: pos.height + 2.0 * pad,
+    }
+}
+
+fn vseg_hits_rect(x: f32, y1: f32, y2: f32, r: &RectF) -> bool {
+    let (ya, yb) = if y1 <= y2 { (y1, y2) } else { (y2, y1) };
+    x >= r.x && x <= r.x + r.w && yb >= r.y && ya <= r.y + r.h
+}
+
+fn hseg_hits_rect(y: f32, x1: f32, x2: f32, r: &RectF) -> bool {
+    let (xa, xb) = if x1 <= x2 { (x1, x2) } else { (x2, x1) };
+    y >= r.y && y <= r.y + r.h && xb >= r.x && xa <= r.x + r.w
+}
+
+fn line_intersects_rect(x1: f32, y1: f32, x2: f32, y2: f32, r: &RectF) -> bool {
+    // Cohen–Sutherland: check if segment (x1,y1)→(x2,y2) intersects axis-aligned rect r
+    let left = r.x;
+    let right = r.x + r.w;
+    let top = r.y;
+    let bottom = r.y + r.h;
+
+    let code = |x: f32, y: f32| -> u8 {
+        let mut c = 0u8;
+        if x < left { c |= 1; }
+        if x > right { c |= 2; }
+        if y < top { c |= 4; }
+        if y > bottom { c |= 8; }
+        c
+    };
+
+    let mut c1 = code(x1, y1);
+    let mut c2 = code(x2, y2);
+    let mut ax = x1;
+    let mut ay = y1;
+    let mut bx = x2;
+    let mut by = y2;
+
+    for _ in 0..20 {
+        if c1 == 0 || c2 == 0 { return true; } // one endpoint inside
+        if c1 & c2 != 0 { return false; } // both on same outside
+        let c = if c1 != 0 { c1 } else { c2 };
+        let (nx, ny);
+        if c & 8 != 0 { nx = ax + (bx - ax) * (bottom - ay) / (by - ay); ny = bottom; }
+        else if c & 4 != 0 { nx = ax + (bx - ax) * (top - ay) / (by - ay); ny = top; }
+        else if c & 2 != 0 { ny = ay + (by - ay) * (right - ax) / (bx - ax); nx = right; }
+        else { ny = ay + (by - ay) * (left - ax) / (bx - ax); nx = left; }
+        if c == c1 { ax = nx; ay = ny; c1 = code(ax, ay); }
+        else { bx = nx; by = ny; c2 = code(bx, by); }
+    }
+    false
 }
 
 fn render_state(
@@ -895,6 +963,15 @@ fn render_state(
             .or_insert(0) += 1;
     }
 
+    let state_obstacles: Vec<RectF> = positions
+        .values()
+        .map(|p| rect_from_pos(p, 3.0))
+        .collect();
+
+    let mut transition_min_x = f32::MAX;
+    let mut transition_max_x = f32::MIN;
+    let mut transition_max_y = f32::MIN;
+
     let mut pair_seen: HashMap<(String, String), usize> = HashMap::new();
     let mut occupied_labels: Vec<RectF> = Vec::new();
     for transition in visible_transitions {
@@ -907,7 +984,7 @@ fn render_state(
         let to_pos = positions.get(&transition.to);
 
         if let (Some(from), Some(to)) = (from_pos, to_pos) {
-            svg.push_str(&render_state_transition(
+            let (t_svg, ext) = render_state_transition(
                 transition,
                 from,
                 to,
@@ -916,7 +993,12 @@ fn render_state(
                 route_index,
                 route_total,
                 &mut occupied_labels,
-            ));
+                &state_obstacles,
+            );
+            svg.push_str(&t_svg);
+            transition_min_x = transition_min_x.min(ext.x);
+            transition_max_x = transition_max_x.max(ext.x + ext.w);
+            transition_max_y = transition_max_y.max(ext.y + ext.h);
         }
     }
 
@@ -938,8 +1020,41 @@ fn render_state(
         }
     }
 
-    let total_width = bbox.right() + padding;
-    let total_height = bbox.bottom() + padding;
+    let mut total_width = bbox.right() + padding;
+    let mut total_height = bbox.bottom() + padding;
+
+    for state in &diagram.states {
+        for child in &state.children {
+            if let StateElement::Note { state: note_state, text } = child {
+                if !text.is_empty() {
+                    if let Some(pos) = positions.get(note_state.as_str()) {
+                        let note_width = 180.0_f32;
+                        let note_height = 26.0_f32;
+                        let nx = pos.x + pos.width + 28.0;
+                        let ny = pos.y + 4.0;
+                        total_width = total_width.max(nx + note_width + padding);
+                        total_height = total_height.max(ny + note_height + padding);
+                    }
+                }
+            }
+        }
+    }
+
+    // Expand to contain any transition routing that extends beyond the bbox
+    if transition_max_x != f32::MIN {
+        total_width = total_width.max(transition_max_x + padding);
+    }
+    if transition_max_y != f32::MIN {
+        total_height = total_height.max(transition_max_y + padding);
+    }
+
+    // If transitions route into negative x territory, shift everything right
+    if transition_min_x != f32::MAX && transition_min_x < 0.0 {
+        let shift = -transition_min_x + padding;
+        let shifted_svg = format!(r#"<g transform="translate({:.2},0)">{}</g>"#, shift, svg);
+        total_width += shift;
+        return Ok((shifted_svg, total_width, total_height));
+    }
 
     Ok((svg, total_width, total_height))
 }
@@ -1019,6 +1134,58 @@ fn render_state_node(
     svg
 }
 
+fn calculate_child_state_size(
+    state: &State,
+    style: &DiagramStyle,
+    measure: &mut impl TextMeasure,
+) -> (f32, f32) {
+    if state.is_start || state.is_end {
+        return (24.0, 24.0);
+    }
+
+    let node_padding = 12.0;
+    let label_w = measure
+        .measure_text(&state.label, style.font_size, false, false, false, None)
+        .0;
+    let base_width = (label_w + node_padding * 2.0).max(120.0);
+    let base_height = (style.font_size * 2.2).max(40.0);
+
+    if !state.is_composite {
+        return (base_width, base_height);
+    }
+
+    let child_states: Vec<&State> = state
+        .children
+        .iter()
+        .filter_map(|child| match child {
+            StateElement::State(s) if s.id != state.id => Some(s),
+            _ => None,
+        })
+        .collect();
+
+    if child_states.is_empty() {
+        return (base_width, base_height);
+    }
+
+    let child_sizes: Vec<(f32, f32)> = child_states
+        .iter()
+        .map(|s| calculate_child_state_size(s, style, measure))
+        .collect();
+
+    let child_gap = 20.0;
+    let inner_pad = 16.0;
+    let header_h = style.font_size * 2.0 + 16.0;
+
+    let max_child_w: f32 = child_sizes.iter().map(|(w, _)| *w).fold(0.0, f32::max);
+    let total_child_h: f32 = child_sizes.iter().map(|(_, h)| *h).sum::<f32>()
+        + child_gap * (child_sizes.len().saturating_sub(1)) as f32;
+
+    let width = base_width.max(max_child_w + inner_pad * 2.0);
+    let height = header_h + total_child_h + inner_pad * 2.0;
+
+    (width, height)
+}
+
 fn render_composite_state_contents(
     state: &State,
     children: &[StateElement],
@@ -1057,41 +1224,36 @@ fn render_composite_state_contents(
     }
 
     let mut child_positions: HashMap<String, LayoutPos> = HashMap::new();
-    let cols = if child_state_nodes.len() >= 4 { 2 } else { 1 };
-    let inner_top = parent_pos.y + 72.0;
-    let inner_left = parent_pos.x + 16.0;
-    let horizontal_gap = if cols == 2 { 28.0 } else { 0.0 };
-    let child_width = if cols == 2 {
-        ((parent_pos.width - 32.0 - horizontal_gap) / 2.0).max(88.0)
-    } else {
-        (parent_pos.width - 32.0).max(88.0)
-    };
-    let child_height = 40.0;
-    let child_spacing = 28.0;
+    let header_h = style.font_size * 2.0 + 16.0;
+    let inner_pad = 16.0;
+    let route_lane = 40.0; // extra space on each side for transition routing
+    let child_gap = 20.0;
+    let inner_top = parent_pos.y + header_h + inner_pad;
+    let content_left = parent_pos.x + inner_pad + route_lane;
+    let content_width = parent_pos.width - inner_pad * 2.0 - route_lane * 2.0;
 
-    for (index, child_state) in child_state_nodes.into_iter().enumerate() {
-        let row = index / cols;
-        let col = index % cols;
-        let child_x = inner_left + col as f32 * (child_width + horizontal_gap);
-        let child_y = inner_top + row as f32 * (child_height + child_spacing);
+    let mut y_cursor = inner_top;
+    for child_state in &child_state_nodes {
+        let (child_w, child_h) = calculate_child_state_size(child_state, style, measure);
+        let child_width = content_width.max(child_w);
+        let child_x = content_left;
+        let child_y = y_cursor;
 
         child_positions.insert(
             child_state.id.clone(),
-            LayoutPos::new(child_x, child_y, child_width, child_height),
+            LayoutPos::new(child_x, child_y, child_width, child_h),
         );
-        svg.push_str(&format!(
-            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="10.00" fill="{}" stroke="{}" stroke-width="1.5" />"#,
-            child_x, child_y, child_width, child_height, style.node_fill, style.node_stroke
+
+        svg.push_str(&render_state_node(
+            child_state,
+            &child_state.children,
+            &LayoutPos::new(child_x, child_y, child_width, child_h),
+            style,
+            positions,
+            measure,
         ));
-        svg.push_str(&format!(
-            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
-            child_x + child_width / 2.0,
-            child_y + child_height / 2.0 + style.font_size / 3.0,
-            style.font_family,
-            style.font_size,
-            style.node_text,
-            escape_xml(&child_state.label)
-        ));
+
+        y_cursor += child_h + child_gap;
     }
 
     let mut pair_totals: HashMap<(String, String), usize> = HashMap::new();
@@ -1100,6 +1262,22 @@ fn render_composite_state_contents(
             .entry(state_pair_key(&transition.from, &transition.to))
             .or_insert(0) += 1;
     }
+
+    let parent_rect = rect_from_pos(parent_pos, 0.0);
+    let mut child_obstacles: Vec<RectF> = child_positions
+        .values()
+        .map(|p| rect_from_pos(p, 3.0))
+        .collect();
+    // Include global positions but exclude the parent composite (we're routing inside it)
+    child_obstacles.extend(
+        positions
+            .values()
+            .filter(|p| {
+                let r = rect_from_pos(p, 0.0);
+                !r.overlaps(&parent_rect) || r.w < parent_rect.w * 0.5
+            })
+            .map(|p| rect_from_pos(p, 3.0)),
+    );
 
     let mut pair_seen: HashMap<(String, String), usize> = HashMap::new();
     let mut occupied_labels: Vec<RectF> = Vec::new();
@@ -1116,7 +1294,7 @@ fn render_composite_state_contents(
             .get(&transition.to)
             .or_else(|| positions.get(&transition.to));
         if let (Some(from_pos), Some(to_pos)) = (from, to) {
-            svg.push_str(&render_state_transition(
+            let (t_svg, _ext) = render_state_transition(
                 transition,
                 from_pos,
                 to_pos,
@@ -1125,7 +1303,9 @@ fn render_composite_state_contents(
                 route_index,
                 route_total,
                 &mut occupied_labels,
-            ));
+                &child_obstacles,
+            );
+            svg.push_str(&t_svg);
         }
     }
 
@@ -1158,8 +1338,17 @@ fn render_state_note(
     let x = state_pos.x + state_pos.width + 28.0;
     let y = state_pos.y + 4.0;
 
+    let y_mid = y + note_height / 2.0;
+    let line_x1 = state_pos.x + state_pos.width;
+    let line_x2 = x;
+
     format!(
-        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="3" fill="{}" fill-opacity="0.25" stroke="{}" stroke-width="1" /><text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
+        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" stroke-dasharray="4,3" /><rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="3" fill="{}" fill-opacity="0.25" stroke="{}" stroke-width="1" /><text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
+        line_x1,
+        y_mid,
+        line_x2,
+        y_mid,
+        style.edge_stroke,
         x,
         y,
         note_width,
@@ -1184,8 +1373,22 @@ fn render_state_transition(
     route_index: usize,
     route_total: usize,
     occupied_labels: &mut Vec<RectF>,
-) -> String {
+    obstacles: &[RectF],
+) -> (String, RectF) {
     let mut svg = String::new();
+    let mut ext_min_x = f32::MAX;
+    let mut ext_min_y = f32::MAX;
+    let mut ext_max_x = f32::MIN;
+    let mut ext_max_y = f32::MIN;
+
+    macro_rules! track_point {
+        ($x:expr, $y:expr) => {
+            ext_min_x = ext_min_x.min($x);
+            ext_min_y = ext_min_y.min($y);
+            ext_max_x = ext_max_x.max($x);
+            ext_max_y = ext_max_y.max($y);
+        };
+    }
 
     let (from_cx, from_cy) = from.center();
     let (to_cx, to_cy) = to.center();
@@ -1202,12 +1405,11 @@ fn render_state_transition(
 
     let (px2, py2) = if to.width == to.height && to.width < 30.0 {
         (
-            to_cx + (center_angle + std::f32::consts::PI).cos() * (to.width / 2.0 + 5.0),
-            to_cy + (center_angle + std::f32::consts::PI).sin() * (to.width / 2.0 + 5.0),
+            to_cx + (center_angle + std::f32::consts::PI).cos() * (to.width / 2.0),
+            to_cy + (center_angle + std::f32::consts::PI).sin() * (to.width / 2.0),
         )
     } else {
-        let (x, y) = rect_boundary_point(to, center_angle + std::f32::consts::PI);
-        (x + center_angle.cos() * 5.0, y + center_angle.sin() * 5.0)
+        rect_boundary_point(to, center_angle + std::f32::consts::PI)
     };
 
     let route_hash = transition
@@ -1236,41 +1438,188 @@ fn render_state_transition(
             }
         }
     };
-    let verticalish = (px2 - px1).abs() < 24.0 && (py2 - py1).abs() > 30.0;
+    let verticalish = (from_cx - to_cx).abs() < (from.width + to.width) / 4.0 && (py2 - py1).abs() > 30.0;
 
-    let mut label_anchor_x = (px1 + px2) / 2.0;
-    let mut label_anchor_y = (py1 + py2) / 2.0;
+    let label_anchor_x;
+    let label_anchor_y;
     let arrow_angle;
+    let mut arrow_x = px2;
+    let mut arrow_y = py2;
 
     if verticalish {
-        let bend_x = label_anchor_x + route_side * (26.0 + lane.abs() * 14.0);
-        let bend_y = label_anchor_y + lane_offset * 0.5;
-        svg.push_str(&format!(
-            r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="1.5" />"#,
-            px1, py1, bend_x, bend_y, px2, py2, style.edge_stroke
-        ));
-        label_anchor_x = bend_x;
-        label_anchor_y = bend_y;
-        arrow_angle = (bend_y - py2).atan2(bend_x - px2);
-    } else {
-        svg.push_str(&format!(
-            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
-            px1, py1, px2, py2, style.edge_stroke
-        ));
-        arrow_angle = (py1 - py2).atan2(px1 - px2);
+        // Determine if from and to are adjacent (no boxes between them)
+        let gap = (to.y - from.bottom()).max(from.y - to.bottom());
+        let (top_y, bot_y) = if from_cy < to_cy {
+            (from.bottom(), to.y)
+        } else {
+            (to.bottom(), from.y)
+        };
+        let mid_x = (from_cx + to_cx) / 2.0;
+        let from_rect_obs = rect_from_pos(from, 3.0);
+        let to_rect_obs = rect_from_pos(to, 3.0);
+        let has_obstacle_between = gap > 0.0 && obstacles.iter().any(|r| {
+            if r.overlaps(&from_rect_obs) || r.overlaps(&to_rect_obs) {
+                return false;
+            }
+            mid_x >= r.x && mid_x <= r.x + r.w && r.y < bot_y && r.y + r.h > top_y
+        });
+        let adjacent = gap > 0.0 && gap < 80.0 && !has_obstacle_between;
 
-        // Jitter label anchor along the edge to reduce label-label collisions.
-        let dx = px2 - px1;
-        let dy = py2 - py1;
-        let jitter = ((route_hash % 7) as f32 - 3.0) * 0.07;
-        let t = (0.5 + jitter).clamp(0.25, 0.75);
-        label_anchor_x = px1 + dx * t;
-        label_anchor_y = py1 + dy * t;
+        if adjacent {
+            // Adjacent states: draw a straight vertical line
+            let x = (from_cx + to_cx) / 2.0;
+            let y1 = if from_cy < to_cy { from.bottom() } else { from.y };
+            let y2 = if from_cy < to_cy { to.y } else { to.bottom() };
+            svg.push_str(&format!(
+                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
+                x, y1, x, y2, style.edge_stroke
+            ));
+            track_point!(x, y1);
+            track_point!(x, y2);
+            label_anchor_x = x;
+            label_anchor_y = (y1 + y2) / 2.0;
+            arrow_angle = if from_cy < to_cy {
+                -std::f32::consts::FRAC_PI_2 // arrowhead points up (into top of target)
+            } else {
+                std::f32::consts::FRAC_PI_2
+            };
+            arrow_x = x;
+            arrow_y = y2;
+        } else {
+            // Non-adjacent: use orthogonal routing (out → down → in)
+            let max_half_width = (from.width / 2.0).max(to.width / 2.0);
+            let exit_y = from_cy;
+            let enter_y = to_cy;
+            let from_rect = rect_from_pos(from, 3.0);
+            let to_rect = rect_from_pos(to, 3.0);
+
+            // Try both sides and pick the one that clears first (fewer steps)
+            let step = 14.0;
+            let max_steps = 30;
+
+            let mut best_lane_x = from_cx + route_side * (max_half_width + 20.0);
+            let mut best_step_count = max_steps;
+
+            for &try_side in &[route_side, -route_side] {
+                let base = from_cx + try_side * (max_half_width + 20.0 + lane.abs() * 12.0);
+                let fex = if base >= from_cx {
+                    from.x + from.width
+                } else {
+                    from.x
+                };
+                let tex = if base >= to_cx {
+                    to.x + to.width
+                } else {
+                    to.x
+                };
+                for i in 0..max_steps {
+                    let candidate = base + try_side * (i as f32) * step;
+                    let clear = obstacles.iter().all(|r| {
+                        if r.overlaps(&from_rect) || r.overlaps(&to_rect) {
+                            return true;
+                        }
+                        let rr = r.expanded(2.0);
+                        !hseg_hits_rect(exit_y, fex, candidate, &rr)
+                            && !vseg_hits_rect(candidate, exit_y, enter_y, &rr)
+                            && !hseg_hits_rect(enter_y, candidate, tex, &rr)
+                    });
+                    if clear && i < best_step_count {
+                        best_lane_x = candidate;
+                        best_step_count = i;
+                        break;
+                    }
+                }
+            }
+
+            let lane_x = best_lane_x;
+            let from_exit_x = if lane_x >= from_cx {
+                from.x + from.width
+            } else {
+                from.x
+            };
+            let to_enter_x = if lane_x >= to_cx {
+                to.x + to.width
+            } else {
+                to.x
+            };
+
+            svg.push_str(&format!(
+                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="1.5" />"#,
+                from_exit_x, exit_y, lane_x, exit_y, lane_x, enter_y, to_enter_x, enter_y,
+                style.edge_stroke
+            ));
+            track_point!(from_exit_x, exit_y);
+            track_point!(lane_x, exit_y);
+            track_point!(lane_x, enter_y);
+            track_point!(to_enter_x, enter_y);
+            label_anchor_x = lane_x;
+            label_anchor_y = (exit_y + enter_y) / 2.0;
+            arrow_angle = if to_enter_x > lane_x {
+                0.0 // pointing right
+            } else {
+                std::f32::consts::PI // pointing left
+            };
+            arrow_x = to_enter_x;
+            arrow_y = enter_y;
+        }
+    } else {
+        // Check if a straight line would cross any obstacles
+        let from_rect_obs = rect_from_pos(from, 3.0);
+        let to_rect_obs = rect_from_pos(to, 3.0);
+        let straight_blocked = obstacles.iter().any(|r| {
+            if r.overlaps(&from_rect_obs) || r.overlaps(&to_rect_obs) {
+                return false;
+            }
+            line_intersects_rect(px1, py1, px2, py2, r)
+        });
+
+        if straight_blocked {
+            // Use orthogonal routing for non-verticalish blocked paths
+            let going_right = to_cx > from_cx;
+            let from_exit_x = if going_right { from.x + from.width } else { from.x };
+            let to_enter_x = if going_right { to.x } else { to.x + to.width };
+            let mid_y = (from_cy + to_cy) / 2.0;
+
+            svg.push_str(&format!(
+                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="1.5" />"#,
+                from_exit_x, from_cy, from_exit_x, mid_y, to_enter_x, mid_y, to_enter_x, to_cy,
+                style.edge_stroke
+            ));
+            track_point!(from_exit_x, from_cy);
+            track_point!(from_exit_x, mid_y);
+            track_point!(to_enter_x, mid_y);
+            track_point!(to_enter_x, to_cy);
+            label_anchor_x = (from_exit_x + to_enter_x) / 2.0;
+            label_anchor_y = mid_y;
+            arrow_angle = if to_cy > mid_y {
+                -std::f32::consts::FRAC_PI_2
+            } else {
+                std::f32::consts::FRAC_PI_2
+            };
+            arrow_x = to_enter_x;
+            arrow_y = to_cy;
+        } else {
+            svg.push_str(&format!(
+                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
+                px1, py1, px2, py2, style.edge_stroke
+            ));
+            track_point!(px1, py1);
+            track_point!(px2, py2);
+            arrow_angle = (py1 - py2).atan2(px1 - px2);
+
+            // Jitter label anchor along the edge to reduce label-label collisions.
+            let dx = px2 - px1;
+            let dy = py2 - py1;
+            let jitter = ((route_hash % 7) as f32 - 3.0) * 0.07;
+            let t = (0.5 + jitter).clamp(0.25, 0.75);
+            label_anchor_x = px1 + dx * t;
+            label_anchor_y = py1 + dy * t;
+        }
     }
 
     // Arrow
-    let ax = px2;
-    let ay = py2;
+    let ax = arrow_x;
+    let ay = arrow_y;
     let p1 = (
         ax + arrow_angle.cos() * 10.0 - arrow_angle.sin() * 5.0,
         ay + arrow_angle.sin() * 10.0 + arrow_angle.cos() * 5.0,
@@ -1293,20 +1642,6 @@ fn render_state_transition(
             .0
             + 8.0;
         let label_height = style.font_size * 0.8 + 6.0;
-        let pad = 3.0;
-        let from_rect = RectF {
-            x: from.x - pad,
-            y: from.y - pad,
-            w: from.width + pad * 2.0,
-            h: from.height + pad * 2.0,
-        };
-        let to_rect = RectF {
-            x: to.x - pad,
-            y: to.y - pad,
-            w: to.width + pad * 2.0,
-            h: to.height + pad * 2.0,
-        };
-
         let dx = px2 - px1;
         let dy = py2 - py1;
         let len = (dx * dx + dy * dy).sqrt().max(1.0);
@@ -1325,11 +1660,13 @@ fn render_state_transition(
 
         let score = |r: &RectF| -> i32 {
             let mut s = 0;
-            if r.overlaps(&from_rect) {
-                s += 500;
+            if r.x < 0.0 || r.y < 0.0 {
+                s += 1000;
             }
-            if r.overlaps(&to_rect) {
-                s += 500;
+            for o in obstacles {
+                if r.overlaps(o) {
+                    s += 500;
+                }
             }
             for o in occupied_labels.iter() {
                 if r.overlaps(o) {
@@ -1416,6 +1753,8 @@ fn render_state_transition(
         }
 
         occupied_labels.push(best_rect);
+        track_point!(best_rect.x, best_rect.y);
+        track_point!(best_rect.x + best_rect.w, best_rect.y + best_rect.h);
 
         svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
@@ -1428,7 +1767,13 @@ fn render_state_transition(
         ));
     }
 
-    svg
+    let extent = RectF {
+        x: ext_min_x.min(0.0),
+        y: ext_min_y.min(0.0),
+        w: (ext_max_x - ext_min_x.min(0.0)).max(0.0),
+        h: (ext_max_y - ext_min_y.min(0.0)).max(0.0),
+    };
+    (svg, extent)
 }
 
 fn state_pair_key(from: &str, to: &str) -> (String, String) {
@@ -1852,5 +2197,11 @@ mod tests {
         let (svg, _w, _h) = render_diagram(src, &style, &mut measure).unwrap();
         assert!(svg.contains("creates"));
         assert!(svg.contains("writes"));
+    }
+
+    #[test]
+    fn from_theme_uses_code_bg_contrast_for_edge_text() {
+        let style = DiagramStyle::from_theme("#586e75", "#fdf6e3", "#073642");
+        assert_eq!(style.edge_text, "#fdf6e3");
     }
 }

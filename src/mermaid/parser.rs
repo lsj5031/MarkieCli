@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::types::*;
 
 #[derive(Debug, Clone)]
@@ -982,6 +984,33 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
                 }
             }
         }
+    }
+
+    // Sync composite state data into parent children entries.
+    // During parsing, children are added as clones before the composite's own children
+    // are parsed, so the child-of-parent copy may be stale.  Walk every parent and
+    // update its child entries from the authoritative top-level state.
+    let state_index: HashMap<String, usize> = states
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.id.clone(), i))
+        .collect();
+    // Collect (parent_idx, child_pos, source_idx) tuples first to avoid borrow issues.
+    let mut patches: Vec<(usize, usize, usize)> = Vec::new();
+    for (pi, parent) in states.iter().enumerate() {
+        for (ci, child_elem) in parent.children.iter().enumerate() {
+            if let StateElement::State(child_state) = child_elem {
+                if let Some(&si) = state_index.get(&child_state.id) {
+                    if si != pi && states[si].is_composite && !child_state.is_composite {
+                        patches.push((pi, ci, si));
+                    }
+                }
+            }
+        }
+    }
+    for (pi, ci, si) in patches {
+        let fresh = states[si].clone();
+        states[pi].children[ci] = StateElement::State(fresh);
     }
 
     Ok(StateDiagram {

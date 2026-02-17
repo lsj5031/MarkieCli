@@ -585,21 +585,42 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         }
 
         let label_w = self.measure_text_width(&state.label, self.font_size, false, false, false);
-        let mut width = (label_w + self.node_padding * 2.0).max(120.0);
-        let mut height = (self.font_size * 2.2).max(40.0);
+        let base_width = (label_w + self.node_padding * 2.0).max(120.0);
+        let base_height = (self.font_size * 2.2).max(40.0);
 
-        if state.is_composite {
-            let child_count = state
-                .children
-                .iter()
-                .filter(|child| matches!(child, StateElement::State(_)))
-                .count()
-                .max(1);
-            let child_cols = if child_count >= 4 { 2 } else { 1 };
-            let child_rows = child_count.div_ceil(child_cols);
-            width = width.max(if child_cols == 2 { 300.0 } else { 220.0 });
-            height = 84.0 + child_rows as f32 * 40.0 + (child_rows.saturating_sub(1)) as f32 * 30.0;
+        if !state.is_composite {
+            return (base_width, base_height);
         }
+
+        let child_states: Vec<&State> = state
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                StateElement::State(s) if s.id != state.id => Some(s),
+                _ => None,
+            })
+            .collect();
+
+        if child_states.is_empty() {
+            return (base_width, base_height);
+        }
+
+        let child_sizes: Vec<(f32, f32)> = child_states
+            .iter()
+            .map(|s| self.calculate_state_size(s))
+            .collect();
+
+        let child_gap = 20.0;
+        let inner_pad = 16.0;
+        let route_lane = 40.0; // routing lanes on each side for transitions
+        let header_h = self.font_size * 2.0 + 16.0;
+
+        let max_child_w: f32 = child_sizes.iter().map(|(w, _)| *w).fold(0.0, f32::max);
+        let total_child_h: f32 = child_sizes.iter().map(|(_, h)| *h).sum::<f32>()
+            + child_gap * (child_sizes.len().saturating_sub(1)) as f32;
+
+        let width = base_width.max(max_child_w + inner_pad * 2.0 + route_lane * 2.0);
+        let height = header_h + total_child_h + inner_pad * 2.0;
 
         (width, height)
     }
