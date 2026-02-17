@@ -3,6 +3,14 @@ name = "markie"
 version = "0.1.2"
 edition = "2024"
 
+[[bin]]
+name = "markie"
+path = "src/main.rs"
+
+[[bin]]
+name = "markie-mermaid"
+path = "src/bin/mermaid.rs"
+
 [dependencies]
 clap = { version = "4.5.57", features = ["derive"] }
 cosmic-text = "0.17.1"

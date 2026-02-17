@@ -1,15 +1,17 @@
 use clap::Parser;
-use markie::{fonts, renderer, theme};
+use markie::fonts::CosmicTextMeasure;
+use markie::mermaid::{render_diagram, DiagramStyle};
+use markie::theme::Theme;
 use resvg::usvg;
 use std::path::{Path, PathBuf};
 use tiny_skia::{Pixmap, Transform};
 
-/// A pure Rust Markdown to SVG/PNG/PDF renderer
+/// Standalone Mermaid diagram renderer (SVG/PNG/PDF)
 #[derive(Parser, Debug)]
-#[command(name = "markie")]
-#[command(about = "Render Markdown to beautiful SVG, PNG or PDF images", long_about = None)]
+#[command(name = "markie-mermaid")]
+#[command(about = "Render Mermaid diagrams to SVG, PNG or PDF", long_about = None)]
 struct Args {
-    /// Input markdown file (use "-" for stdin)
+    /// Input .mmd file (use "-" for stdin)
     #[arg(value_name = "INPUT")]
     input: PathBuf,
 
@@ -21,28 +23,25 @@ struct Args {
     #[arg(short, long, value_name = "THEME")]
     theme: Option<PathBuf>,
 
-    /// Image width in pixels
-    #[arg(short, long, default_value_t = 800.0)]
-    width: f32,
-
-    /// Raster scale multiplier for PNG output (e.g. 2.0 for sharper output)
+    /// Raster scale multiplier for PNG output
     #[arg(long, default_value_t = 1.0)]
     png_scale: f32,
+
+    /// Padding around the diagram in pixels
+    #[arg(long, default_value_t = 20.0)]
+    padding: f32,
 }
 
 fn main() -> Result<(), String> {
     let args = Args::parse();
 
-    // Load theme
     let theme = if let Some(ref theme_path) = args.theme {
         if theme_path.exists() && theme_path.is_file() {
             let content = std::fs::read_to_string(theme_path)
                 .map_err(|e| format!("Failed to read theme file: {}", e))?;
-
-            // Try TOML first (since Alacritty is moving to TOML), then YAML
-            if let Ok(theme) = theme::Theme::from_alacritty_toml(&content) {
+            if let Ok(theme) = Theme::from_alacritty_toml(&content) {
                 theme
-            } else if let Ok(theme) = theme::Theme::from_alacritty_yaml(&content) {
+            } else if let Ok(theme) = Theme::from_alacritty_yaml(&content) {
                 theme
             } else {
                 return Err("Failed to parse theme file as TOML or YAML".to_string());
@@ -51,11 +50,10 @@ fn main() -> Result<(), String> {
             return Err(format!("Theme file not found: {}", theme_path.display()));
         }
     } else {
-        theme::Theme::default()
+        Theme::default()
     };
 
-    // Read markdown input
-    let markdown = if args.input.to_str() == Some("-") {
+    let source = if args.input.to_str() == Some("-") {
         let mut buffer = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer)
             .map_err(|e| format!("Failed to read from stdin: {}", e))?;
@@ -65,19 +63,33 @@ fn main() -> Result<(), String> {
             .map_err(|e| format!("Failed to read input file: {}", e))?
     };
 
-    let base_path = if args.input.to_str() == Some("-") {
-        None
-    } else {
-        args.input.parent().map(|path| path.to_path_buf())
-    };
+    let style = DiagramStyle::from_theme(
+        &theme.text_color,
+        &theme.background_color,
+        &theme.code_bg_color,
+    );
 
-    // Render to SVG
-    let measure = fonts::CosmicTextMeasure::new()?;
-    let mut renderer =
-        renderer::Renderer::new_with_base_path(theme, measure, args.width, base_path)?;
-    let svg = renderer.render(&markdown)?;
+    let mut measure = CosmicTextMeasure::new()?;
+    let (inner_svg, width, height) = render_diagram(&source, &style, &mut measure)?;
 
-    // Determine output format and save
+    let pad = args.padding;
+    let total_w = width + pad * 2.0;
+    let total_h = height + pad * 2.0;
+
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="{total_h}" viewBox="0 0 {total_w} {total_h}">
+<rect width="{total_w}" height="{total_h}" fill="{bg}"/>
+<g transform="translate({pad},{pad})">
+{inner}
+</g>
+</svg>"#,
+        total_w = total_w,
+        total_h = total_h,
+        bg = style.background,
+        pad = pad,
+        inner = inner_svg,
+    );
+
     let output_ext = args
         .output
         .extension()
@@ -87,7 +99,8 @@ fn main() -> Result<(), String> {
 
     match output_ext.as_str() {
         "svg" => {
-            std::fs::write(&args.output, svg).map_err(|e| format!("Failed to write SVG: {}", e))?;
+            std::fs::write(&args.output, &svg)
+                .map_err(|e| format!("Failed to write SVG: {}", e))?;
             eprintln!("SVG saved to: {}", args.output.display());
         }
         "png" => {
@@ -139,7 +152,6 @@ fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, String> {
 
     let mut pixmap = Pixmap::new(svg_width, svg_height).ok_or("Failed to create pixmap")?;
     let transform = Transform::from_scale(scale, scale);
-
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     pixmap
@@ -150,7 +162,6 @@ fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, String> {
 fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, String> {
     use svg2pdf::usvg::fontdb;
 
-    // Configure font options
     let mut fontdb = fontdb::Database::new();
     fontdb.load_system_fonts();
 
@@ -164,13 +175,9 @@ fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, String> {
     let mut opts = svg2pdf::usvg::Options::default();
     opts.fontdb = std::sync::Arc::new(fontdb);
 
-    // Parse the SVG
     let tree = svg2pdf::usvg::Tree::from_str(svg, &opts)
         .map_err(|e| format!("Failed to parse SVG: {}", e))?;
 
-    // Convert to PDF.
-    // Keep text as paths for broader viewer/font compatibility.
-    // This avoids PDFs with missing text when font embedding fails.
     let mut options = svg2pdf::ConversionOptions::default();
     options.embed_text = false;
     let page_options = svg2pdf::PageOptions::default();
@@ -181,7 +188,6 @@ fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, String> {
 
 fn configure_font_fallbacks(fontdb: &mut usvg::fontdb::Database) {
     let mut sans_family: Option<String> = None;
-    let mut serif_family: Option<String> = None;
     let mut mono_family: Option<String> = None;
     let mut first_family: Option<String> = None;
 
@@ -190,13 +196,9 @@ fn configure_font_fallbacks(fontdb: &mut usvg::fontdb::Database) {
             if first_family.is_none() {
                 first_family = Some(family.clone());
             }
-
             let lower = family.to_ascii_lowercase();
             if sans_family.is_none() && lower.contains("sans") {
                 sans_family = Some(family.clone());
-            }
-            if serif_family.is_none() && lower.contains("serif") {
-                serif_family = Some(family.clone());
             }
             if mono_family.is_none() && (lower.contains("mono") || lower.contains("code")) {
                 mono_family = Some(family.clone());
@@ -206,8 +208,6 @@ fn configure_font_fallbacks(fontdb: &mut usvg::fontdb::Database) {
 
     if let Some(family) = sans_family.as_deref().or(first_family.as_deref()) {
         fontdb.set_sans_serif_family(family);
-    }
-    if let Some(family) = serif_family.as_deref().or(first_family.as_deref()) {
         fontdb.set_serif_family(family);
     }
     if let Some(family) = mono_family
@@ -221,7 +221,6 @@ fn configure_font_fallbacks(fontdb: &mut usvg::fontdb::Database) {
 
 fn configure_font_fallbacks_svg2pdf(fontdb: &mut svg2pdf::usvg::fontdb::Database) {
     let mut sans_family: Option<String> = None;
-    let mut serif_family: Option<String> = None;
     let mut mono_family: Option<String> = None;
     let mut first_family: Option<String> = None;
 
@@ -230,13 +229,9 @@ fn configure_font_fallbacks_svg2pdf(fontdb: &mut svg2pdf::usvg::fontdb::Database
             if first_family.is_none() {
                 first_family = Some(family.clone());
             }
-
             let lower = family.to_ascii_lowercase();
             if sans_family.is_none() && lower.contains("sans") {
                 sans_family = Some(family.clone());
-            }
-            if serif_family.is_none() && lower.contains("serif") {
-                serif_family = Some(family.clone());
             }
             if mono_family.is_none() && (lower.contains("mono") || lower.contains("code")) {
                 mono_family = Some(family.clone());
@@ -246,8 +241,6 @@ fn configure_font_fallbacks_svg2pdf(fontdb: &mut svg2pdf::usvg::fontdb::Database
 
     if let Some(family) = sans_family.as_deref().or(first_family.as_deref()) {
         fontdb.set_sans_serif_family(family);
-    }
-    if let Some(family) = serif_family.as_deref().or(first_family.as_deref()) {
         fontdb.set_serif_family(family);
     }
     if let Some(family) = mono_family
