@@ -79,14 +79,16 @@ fn main() -> Result<(), String> {
 
     let svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="{total_h}" viewBox="0 0 {total_w} {total_h}">
-<rect width="{total_w}" height="{total_h}" fill="{bg}"/>
+<rect width="{total_w}" height="{total_h}" fill="{canvas_bg}"/>
 <g transform="translate({pad},{pad})">
 {inner}
 </g>
 </svg>"#,
         total_w = total_w,
         total_h = total_h,
-        bg = style.background,
+        // Keep standalone rendering consistent with DiagramStyle contrast decisions.
+        // Diagram strokes/text are chosen against code_bg.
+        canvas_bg = style.node_fill,
         pad = pad,
         inner = inner_svg,
     );

@@ -286,6 +286,10 @@ fn render_edge(
         EdgeStyle::Thick => ("", 2.5),
     };
 
+    let mut edge_angle = (y2 - y1).atan2(x2 - x1);
+    let mut head_angle = edge_angle;
+    let mut tail_angle = edge_angle + std::f32::consts::PI;
+
     // Draw line (straight or curved for better look)
     if (x1 - x2).abs() < 1.0 || (y1 - y2).abs() < 1.0 {
         // Straight line
@@ -303,6 +307,12 @@ fn render_edge(
             (mx, y1, mx, y2)
         };
 
+        // Keep marker orientation aligned to the bezier tangents at both ends.
+        // t=1 tangent is P3-P2; t=0 tangent is P1-P0.
+        head_angle = (y2 - cy2).atan2(x2 - cx2);
+        tail_angle = (y1 - cy1).atan2(x1 - cx1);
+        edge_angle = (y2 - y1).atan2(x2 - x1);
+
         svg.push_str(&format!(
             r#"<path d="M {:.2} {:.2} C {:.2} {:.2}, {:.2} {:.2}, {:.2} {:.2}" fill="none" stroke="{}" stroke-width="{:.1}"{} />"#,
             x1, y1, cx1, cy1, cx2, cy2, x2, y2, style.edge_stroke, stroke_width, dash_attr
@@ -310,14 +320,18 @@ fn render_edge(
     }
 
     // Arrow head
-    let angle = (y2 - y1).atan2(x2 - x1);
     if edge.arrow_head != ArrowType::None {
-        svg.push_str(&render_arrow_head(x2, y2, angle, &edge.arrow_head, style));
+        svg.push_str(&render_arrow_head(
+            x2,
+            y2,
+            head_angle,
+            &edge.arrow_head,
+            style,
+        ));
     }
 
     // Arrow tail (for bidirectional)
     if edge.arrow_tail != ArrowType::None {
-        let tail_angle = angle + std::f32::consts::PI;
         svg.push_str(&render_arrow_head(
             x1,
             y1,
@@ -333,8 +347,8 @@ fn render_edge(
         let my = (y1 + y2) / 2.0;
 
         // Offset label slightly perpendicular to the edge
-        let perp_x = -angle.sin() * 38.0;
-        let perp_y = -angle.cos() * 38.0;
+        let perp_x = -edge_angle.sin() * 38.0;
+        let perp_y = -edge_angle.cos() * 38.0;
 
         let label_x = mx + perp_x;
         let label_y = my + perp_y;
@@ -353,6 +367,92 @@ fn render_edge(
     }
 
     svg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockMeasure;
+
+    impl TextMeasure for MockMeasure {
+        fn measure_text(
+            &mut self,
+            text: &str,
+            font_size: f32,
+            _is_code: bool,
+            _is_bold: bool,
+            _is_italic: bool,
+            _max_width: Option<f32>,
+        ) -> (f32, f32) {
+            (text.chars().count() as f32 * font_size * 0.6, font_size)
+        }
+    }
+
+    fn first_polygon_points(svg: &str) -> Vec<(f32, f32)> {
+        let marker = "<polygon points=\"";
+        let start = svg.find(marker).expect("expected polygon");
+        let rest = &svg[start + marker.len()..];
+        let end = rest.find('"').expect("expected polygon points close quote");
+        rest[..end]
+            .split_whitespace()
+            .map(|pair| {
+                let mut it = pair.split(',');
+                let x = it
+                    .next()
+                    .expect("x")
+                    .parse::<f32>()
+                    .expect("x should parse");
+                let y = it
+                    .next()
+                    .expect("y")
+                    .parse::<f32>()
+                    .expect("y should parse");
+                (x, y)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn curved_edge_arrow_uses_curve_tangent_at_endpoint() {
+        let mut measure = MockMeasure;
+        let style = DiagramStyle::default();
+        let edge = super::super::types::FlowchartEdge {
+            from: "A".to_string(),
+            to: "B".to_string(),
+            label: None,
+            style: EdgeStyle::Solid,
+            arrow_head: ArrowType::Arrow,
+            arrow_tail: ArrowType::None,
+            min_length: 1,
+        };
+        let from = LayoutPos::new(0.0, 0.0, 100.0, 40.0);
+        let to = LayoutPos::new(200.0, 100.0, 100.0, 40.0);
+
+        let svg = render_edge(
+            &edge,
+            &from,
+            &to,
+            &style,
+            &FlowDirection::LeftRight,
+            &mut measure,
+        );
+
+        let pts = first_polygon_points(&svg);
+        assert_eq!(pts.len(), 3);
+
+        // Endpoint should be the tip.
+        assert!((pts[0].0 - 200.0).abs() < 0.05);
+        assert!((pts[0].1 - 120.0).abs() < 0.05);
+
+        // With correct tangent on this curve, the arrow should be horizontal:
+        // both base points share nearly the same x and are symmetric in y.
+        assert!((pts[1].0 - pts[2].0).abs() < 0.1);
+        let dy1 = (pts[1].1 - pts[0].1).abs();
+        let dy2 = (pts[2].1 - pts[0].1).abs();
+        assert!((dy1 - 6.0).abs() < 0.3);
+        assert!((dy2 - 6.0).abs() < 0.3);
+    }
 }
 
 fn render_arrow_head(

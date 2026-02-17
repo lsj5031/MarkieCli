@@ -807,10 +807,9 @@ fn draw_marker(marker_type: &str, x: f32, y: f32, angle: f32, style: &DiagramSty
         "hollow_triangle" => {
             let p1 = (x - cos * 14.0 + sin * 7.0, y - sin * 14.0 - cos * 7.0);
             let p2 = (x - cos * 14.0 - sin * 7.0, y - sin * 14.0 + cos * 7.0);
-            let base = (x - cos * 10.0, y - sin * 10.0);
             format!(
-                r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" stroke="{}" stroke-width="1" />"#,
-                x, y, p1.0, p1.1, p2.0, p2.1, base.0, base.1, style.node_fill, style.edge_stroke
+                r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" stroke="{}" stroke-width="1" />"#,
+                x, y, p1.0, p1.1, p2.0, p2.1, style.node_fill, style.edge_stroke
             )
         }
         "filled_diamond" => {
@@ -2203,5 +2202,25 @@ mod tests {
     fn from_theme_uses_code_bg_contrast_for_edge_text() {
         let style = DiagramStyle::from_theme("#586e75", "#fdf6e3", "#073642");
         assert_eq!(style.edge_text, "#fdf6e3");
+    }
+
+    #[test]
+    fn inheritance_marker_is_simple_triangle() {
+        let src = r#"classDiagram
+  class A
+  class B
+  A <|-- B
+"#;
+        let style = DiagramStyle::default();
+        let mut measure = MockMeasure;
+        let (svg, _w, _h) = render_diagram(src, &style, &mut measure).unwrap();
+
+        let marker = "<polygon points=\"";
+        let idx = svg.find(marker).expect("expected class marker polygon");
+        let rest = &svg[idx + marker.len()..];
+        let end = rest.find('"').expect("expected points terminator");
+        let points = &rest[..end];
+        let pair_count = points.split_whitespace().count();
+        assert_eq!(pair_count, 3, "inheritance triangle should have exactly 3 points");
     }
 }
