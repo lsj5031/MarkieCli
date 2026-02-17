@@ -7,6 +7,7 @@ A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents in
 ## Features
 
 - **Pure Rust**: Built entirely with Rust for performance and reliability
+- **Zero Runtime Dependencies**: Single static binary with no Node.js, Python, or external runtime required
 - **Multiple Output Formats**: Export to SVG, PNG, or PDF
 - **High-Resolution PNG Output**: Use `--png-scale` for sharper raster output
 - **Native Mermaid Rendering**: Flowchart, sequence, class, state, and ER diagrams (including advanced edge/control syntax)
@@ -17,6 +18,24 @@ A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents in
 - **Adjustable Width**: Control output image width
 - **Font Support**: Includes local font directory, system fallback, and global font caching
 - **XML-Safe Output**: Invalid XML control characters are stripped during rendering
+
+## Why Markie?
+
+| Feature | Markie | JavaScript-based Alternatives |
+|---------|--------|------------------------------|
+| **Runtime** | Zero - single binary | Requires Node/Bun/Deno |
+| **Output Formats** | SVG, PNG, PDF | Typically SVG only |
+| **Full Markdown** | Complete renderer | Diagrams only |
+| **LaTeX Math** | Native support | Usually not available |
+| **Syntax Highlighting** | Built-in | Separate setup required |
+| **Deployment** | Copy and run | npm install + runtime |
+
+**Key advantages:**
+
+- **All-in-one renderer** - Complete markdown documents with embedded Mermaid diagrams and LaTeX math in a single tool
+- **PDF export** - Production-ready PDFs with text-as-paths for universal viewer compatibility
+- **Single-binary distribution** - No runtime version management, dependency resolution, or `npm install` needed
+- **Native performance** - Rust's zero-cost abstractions for fast, memory-efficient rendering
 
 ## Markdown Support
 
@@ -202,6 +221,10 @@ The binary will be available at `target/release/markie`.
 - `serde`: Serialization/Deserialization (JSON, YAML, TOML)
 - `latex2mathml` + `quick-xml`: Math rendering
 - `lru` + `parking_lot`: Global font measurement cache
+
+## Status
+
+This is an early experiment. The renderer works well for common use cases, but there's plenty of room for improvement in layout, styling, and feature completeness. PRs welcome to make it better!
 
 ## License
 
