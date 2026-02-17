@@ -1,0 +1,61 @@
+sequenceDiagram
+    participant U as User
+    participant FE as Frontend
+    participant GW as API Gateway
+    participant Auth as Auth Service
+    participant DB as Database
+    participant Cache as Redis Cache
+    participant MQ as Message Queue
+
+    U->>FE: Click Login
+    FE->>GW: POST /auth/login
+    
+    alt Valid Credentials
+        GW->>Auth: validateCredentials()
+        Auth->>DB: SELECT user WHERE email=?
+        DB-->>Auth: User record
+        Auth->>Auth: bcrypt.compare()
+        
+        opt MFA Enabled
+            Auth-->>FE: MFA challenge
+            FE->>U: Show MFA prompt
+            U->>FE: Enter TOTP code
+            FE->>Auth: verify MFA
+            Note right of Auth: TOTP window ±30s
+        end
+        
+        Auth->>Cache: Store session (TTL 24h)
+        Auth-->>GW: JWT token + refresh token
+        GW-->>FE: 200 OK {token}
+        FE->>FE: Store in httpOnly cookie
+        
+        par Background Tasks
+            Auth->>MQ: Emit login.success event
+            MQ->>DB: Update last_login timestamp
+        and Audit
+            Auth->>DB: Insert audit_log entry
+        end
+
+    else Invalid Credentials
+        Auth-->>GW: 401 Unauthorized
+        GW-->>FE: 401 error
+        
+        loop Rate Limit Check (max 5 attempts)
+            FE->>GW: Retry login
+            GW->>Auth: Check rate limit
+            Auth->>Cache: INCR failed_attempts
+            Note over Cache,Auth: Key expires after 15min
+        end
+
+    else Account Locked
+        Auth-->>GW: 423 Locked
+        GW-->>FE: Account locked message
+        FE->>U: Show "Contact support"
+    end
+
+    critical Token Refresh Flow
+        FE->>GW: POST /auth/refresh
+        GW->>Auth: validateRefreshToken()
+        Auth->>Cache: Check token not revoked
+        Auth-->>GW: New access token
+    end

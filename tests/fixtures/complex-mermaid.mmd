@@ -1,0 +1,23 @@
+flowchart LR
+    subgraph Frontend
+        A([Start]) --> B{Is authenticated?}
+        B -->|Yes| C[Dashboard]
+        B -->|No| D[[Login Module]]
+        D --> E[(Session DB)]
+        E --> C
+    end
+
+    subgraph Backend
+        C ==> F>API Gateway]
+        F -.->|REST| G{{Load Balancer}}
+        G --> H[/Service A\]
+        G --> I[\Service B/]
+        H & I --> J[("Cache")]
+        J --> K((Central DB))
+    end
+
+    subgraph Monitoring
+        F -.-o L{{"Metrics"}}
+        L --x M[Alert System]
+        L <--> N[Grafana]
+    end

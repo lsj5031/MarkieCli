@@ -1,0 +1,78 @@
+classDiagram
+    class EventEmitter {
+        <<interface>>
+        +on(event: string, handler: Function) void
+        +emit(event: string, data: any) void
+        +off(event: string) void
+    }
+
+    class Observable~T~ {
+        <<abstract>>
+        #subscribers: List~Observer~
+        #state: T
+        +subscribe(observer: Observer) Subscription
+        +unsubscribe(id: string) void
+        #notifyAll() void
+        -validateObserver(o: Observer)$ bool
+    }
+
+    class Repository~T~ {
+        <<interface>>
+        +findById(id: string) T
+        +findAll(filter: Query) List~T~
+        +save(entity: T) T
+        +delete(id: string) void
+    }
+
+    class UserRepository {
+        -db: DatabaseConnection
+        -cache: CacheLayer
+        +findById(id: string) User
+        +findAll(filter: Query) List~User~
+        +save(entity: User) User
+        +delete(id: string) void
+        +findByEmail(email: string) User
+        -invalidateCache(key: string) void
+    }
+
+    class User {
+        +id: string
+        +email: string
+        +name: string
+        -passwordHash: string
+        #roles: List~Role~
+        +hasPermission(perm: string) bool
+        +updateProfile(data: ProfileDTO) void
+        -hashPassword(plain: string)$ string
+    }
+
+    class Role {
+        +id: string
+        +name: string
+        +permissions: Set~string~
+        +includes(permission: string) bool
+    }
+
+    class AuditLogger {
+        -storage: Repository~AuditEntry~
+        -queue: MessageQueue
+        +log(action: string, actor: User, target: string) void
+        +getHistory(filter: AuditFilter) List~AuditEntry~
+    }
+
+    class CacheLayer {
+        -store: Map~string, any~
+        -ttl: number
+        +get(key: string) any
+        +set(key: string, value: any, ttl: number) void
+        +invalidate(pattern: string) void
+    }
+
+    Repository~T~ <|.. UserRepository : implements
+    Observable~T~ <|-- EventEmitter : extends
+    UserRepository *-- CacheLayer : contains
+    UserRepository --> User : manages
+    User "1" --> "*" Role : has
+    AuditLogger o-- Repository~AuditEntry~ : uses
+    AuditLogger ..> User : references
+    UserRepository ..> AuditLogger : depends on

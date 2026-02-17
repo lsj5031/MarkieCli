@@ -1,0 +1,82 @@
+erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    CUSTOMER {
+        string id PK
+        string email
+        string name
+        date created_at
+    }
+
+    ORDER ||--|{ ORDER_LINE : contains
+    ORDER {
+        string id PK
+        string customer_id FK
+        date order_date
+        string status
+        float total_amount
+    }
+
+    ORDER_LINE }o--|| PRODUCT : references
+    ORDER_LINE {
+        string id PK
+        string order_id FK
+        string product_id FK
+        int quantity
+        float unit_price
+    }
+
+    PRODUCT ||--o{ PRODUCT_VARIANT : has
+    PRODUCT {
+        string id PK
+        string name
+        string description
+        string category_id FK
+    }
+
+    PRODUCT_VARIANT {
+        string id PK
+        string product_id FK
+        string sku
+        float price
+        int stock_count
+    }
+
+    CATEGORY ||--o{ PRODUCT : contains
+    CATEGORY {
+        string id PK
+        string name
+        string parent_id FK
+    }
+
+    CUSTOMER ||--o{ ADDRESS : "has many"
+    ADDRESS {
+        string id PK
+        string customer_id FK
+        string street
+        string city
+        string country
+        string postal_code
+    }
+
+    ORDER }o--|| ADDRESS : "ships to"
+
+    CUSTOMER ||--o{ PAYMENT_METHOD : stores
+    PAYMENT_METHOD {
+        string id PK
+        string customer_id FK
+        string type
+        string last_four
+        date expiry
+    }
+
+    ORDER ||--o{ PAYMENT : "paid via"
+    PAYMENT {
+        string id PK
+        string order_id FK
+        string payment_method_id FK
+        float amount
+        string status
+        date processed_at
+    }
+
+    PAYMENT }o--|| PAYMENT_METHOD : uses

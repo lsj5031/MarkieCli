@@ -1,0 +1,50 @@
+stateDiagram-v2
+    [*] --> Idle
+
+    state "Order Processing" as Processing {
+        [*] --> Validating
+        Validating --> PaymentPending : Items available
+        Validating --> BackOrder : Out of stock
+
+        state "Payment" as PaymentPending {
+            [*] --> AwaitingPayment
+            AwaitingPayment --> Authorized : Card charged
+            AwaitingPayment --> Declined : Payment failed
+            Declined --> AwaitingPayment : Retry
+            Authorized --> [*]
+        }
+
+        PaymentPending --> Fulfillment : Payment complete
+        BackOrder --> Cancelled : Customer cancels
+        BackOrder --> Validating : Restocked
+
+        state Fulfillment {
+            [*] --> Picking
+            Picking --> Packing
+            Packing --> ReadyToShip
+            ReadyToShip --> [*]
+        }
+
+        Fulfillment --> Shipped
+    }
+
+    Idle --> Processing : Order placed
+    Processing --> Completed : All items delivered
+    Processing --> Cancelled : Timeout (30 days)
+
+    state Shipped {
+        [*] --> InTransit
+        InTransit --> OutForDelivery
+        OutForDelivery --> Delivered
+        InTransit --> ReturnToSender : Address issue
+        Delivered --> [*]
+    }
+
+    Shipped --> Completed : Delivered
+    Shipped --> Processing : Return requested
+
+    Completed --> [*]
+    Cancelled --> [*]
+
+    note right of Idle : Customer browsing
+    note left of Cancelled : Refund initiated
