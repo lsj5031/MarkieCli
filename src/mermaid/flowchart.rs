@@ -104,29 +104,24 @@ fn render_node(label: &str, shape: &NodeShape, pos: &LayoutPos, style: &DiagramS
         }
         NodeShape::Cylinder => {
             let cap_height = 12.0;
-            // Body
+            let rx = pos.width / 2.0;
+            let bottom_y = pos.y + pos.height - cap_height;
+            // Body: left side, bottom arc, right side (filled, no top/bottom strokes)
             svg.push_str(&format!(
-                r#"<path d="M {:.2} {:.2} L {:.2} {:.2} L {:.2} {:.2} L {:.2} {:.2} Z" fill="{}" stroke="{}" stroke-width="1.5" />"#,
+                r#"<path d="M {:.2} {:.2} L {:.2} {:.2} A {:.2} {:.2} 0 0 0 {:.2} {:.2} L {:.2} {:.2}" fill="{}" stroke="{}" stroke-width="1.5" />"#,
                 pos.x, pos.y + cap_height,
+                pos.x, bottom_y,
+                rx, cap_height,
+                pos.x + pos.width, bottom_y,
                 pos.x + pos.width, pos.y + cap_height,
-                pos.x + pos.width, pos.y + pos.height,
-                pos.x, pos.y + pos.height,
                 style.node_fill, style.node_stroke
             ));
-            // Top ellipse
+            // Top ellipse (full, drawn on top of body)
             svg.push_str(&format!(
                 r#"<ellipse cx="{:.2}" cy="{:.2}" rx="{:.2}" ry="{:.2}" fill="{}" stroke="{}" stroke-width="1.5" />"#,
                 pos.x + pos.width / 2.0, pos.y + cap_height,
-                pos.width / 2.0, cap_height,
+                rx, cap_height,
                 style.node_fill, style.node_stroke
-            ));
-            // Bottom ellipse arc (visible part)
-            svg.push_str(&format!(
-                r#"<path d="M {:.2} {:.2} A {:.2} {:.2} 0 0 0 {:.2} {:.2}" fill="none" stroke="{}" stroke-width="1.5" />"#,
-                pos.x + pos.width, pos.y + pos.height,
-                pos.width / 2.0, cap_height,
-                pos.x, pos.y + pos.height,
-                style.node_stroke
             ));
         }
         NodeShape::Circle => {
@@ -484,21 +479,25 @@ fn render_arrow_head(
             )
         }
         ArrowType::Cross => {
-            let cx = x - cos * 8.0;
-            let cy = y - sin * 8.0;
-            let nc = -sin;
-            let ns = cos;
+            let s = 7.0_f32;
+            let cx = x - cos * s;
+            let cy = y - sin * s;
+            // Rotate ±45° from the edge direction for an "×" shape
+            let angle_a = angle + std::f32::consts::FRAC_PI_4;
+            let angle_b = angle - std::f32::consts::FRAC_PI_4;
+            let (ca, sa) = (angle_a.cos(), angle_a.sin());
+            let (cb, sb) = (angle_b.cos(), angle_b.sin());
             format!(
-                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="2" /><line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="2" />"#,
-                cx + nc * 5.0,
-                cy + ns * 5.0,
-                cx - nc * 5.0,
-                cy - ns * 5.0,
+                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="2.5" /><line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="2.5" />"#,
+                cx + ca * s,
+                cy + sa * s,
+                cx - ca * s,
+                cy - sa * s,
                 style.edge_stroke,
-                cx + ns * 5.0,
-                cy - nc * 5.0,
-                cx - ns * 5.0,
-                cy + nc * 5.0,
+                cx + cb * s,
+                cy + sb * s,
+                cx - cb * s,
+                cy - sb * s,
                 style.edge_stroke
             )
         }

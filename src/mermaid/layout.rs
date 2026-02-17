@@ -210,7 +210,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                 width = width.max(height + 20.0);
             }
             NodeShape::Cylinder => {
-                height += 10.0;
+                height += 24.0;
             }
             NodeShape::Subroutine => {
                 width += 16.0;
