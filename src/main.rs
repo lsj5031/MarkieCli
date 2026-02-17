@@ -7,6 +7,7 @@ use tiny_skia::{Pixmap, Transform};
 /// A pure Rust Markdown to SVG/PNG/PDF renderer
 #[derive(Parser, Debug)]
 #[command(name = "markie")]
+#[command(version)]
 #[command(about = "Render Markdown to beautiful SVG, PNG or PDF images", long_about = None)]
 struct Args {
     /// Input markdown file (use "-" for stdin)

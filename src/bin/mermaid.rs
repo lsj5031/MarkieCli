@@ -9,6 +9,7 @@ use tiny_skia::{Pixmap, Transform};
 /// Standalone Mermaid diagram renderer (SVG/PNG/PDF)
 #[derive(Parser, Debug)]
 #[command(name = "markie-mermaid")]
+#[command(version)]
 #[command(about = "Render Mermaid diagrams to SVG, PNG or PDF", long_about = None)]
 struct Args {
     /// Input .mmd file (use "-" for stdin)
