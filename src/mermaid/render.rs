@@ -1853,31 +1853,32 @@ fn render_state_transition(
             h: label_height,
         };
 
-        let score = |r: &RectF| -> i32 {
-            let mut s = 0;
+        let score = |r: &RectF| -> f32 {
+            let mut s = 0.0;
             if r.x < 0.0 || r.y < 0.0 {
-                s += 1000;
+                s += 1000.0;
             }
             for o in obstacles {
                 if r.overlaps(o) {
-                    s += 500;
+                    s += 140.0;
                 }
             }
             for o in occupied_labels.iter() {
                 if r.overlaps(o) {
-                    s += 800;
+                    s += 220.0;
                 }
             }
             s
         };
 
         // Candidate search: try different anchor t and perpendicular distances on both sides.
-        let t_candidates: [f32; 5] = [0.28, 0.38, 0.5, 0.62, 0.72];
-        let dist_candidates: [f32; 6] = [30.0, 44.0, 58.0, 72.0, 86.0, 100.0];
+        let t_candidates: [f32; 5] = [0.38, 0.46, 0.5, 0.54, 0.62];
+        let dist_candidates: [f32; 6] = [18.0, 28.0, 38.0, 48.0, 60.0, 72.0];
         let side_candidates: [f32; 2] = [route_side, -route_side];
 
         // Always include the previous heuristic as a candidate.
-        let base_dist = 30.0 + lane.abs() * 12.0 + global_lane.abs() * 6.0;
+        let movement_weight = 2.0;
+        let base_dist = 22.0 + lane.abs() * 10.0 + global_lane.abs() * 4.0;
         let base_x = label_anchor_x
             + perp_x * base_dist * route_side
             + tx * tangent_offset;
@@ -1889,9 +1890,9 @@ fn render_state_transition(
         let mut best_x = base_x;
         let mut best_y = base_y;
         let mut best_rect = base_rect;
-        let mut best_score = base_score;
         let mut best_move =
             ((base_x - label_anchor_x).powi(2) + (base_y - label_anchor_y).powi(2)).sqrt();
+        let mut best_cost = base_score + best_move * movement_weight;
 
         for &t in &t_candidates {
             let ax = px1 + dx * t;
@@ -1903,46 +1904,35 @@ fn render_state_transition(
                     let r = rect_for(lx, ly);
                     let sc = score(&r);
                     let mv = ((lx - label_anchor_x).powi(2) + (ly - label_anchor_y).powi(2)).sqrt();
-                    if sc < best_score || (sc == best_score && mv < best_move) {
-                        best_score = sc;
+                    let cost = sc + mv * movement_weight;
+                    if cost < best_cost || ((cost - best_cost).abs() < f32::EPSILON && mv < best_move) {
+                        best_cost = cost;
                         best_move = mv;
                         best_x = lx;
                         best_y = ly;
                         best_rect = r;
-                        if best_score == 0 {
-                            break;
-                        }
                     }
                 }
-                if best_score == 0 {
-                    break;
-                }
-            }
-            if best_score == 0 {
-                break;
             }
         }
 
         // For vertical-ish routes (polyline), also try shifting sideways.
-        if verticalish && best_score > 0 {
+        if verticalish {
             for &side in &side_candidates {
                 for &dist in &dist_candidates {
                     let lx = label_anchor_x + side * dist;
                     let ly = label_anchor_y + lane_offset * 0.5;
                     let r = rect_for(lx, ly);
                     let sc = score(&r);
-                    if sc < best_score {
-                        best_score = sc;
+                    let mv = ((lx - label_anchor_x).powi(2) + (ly - label_anchor_y).powi(2)).sqrt();
+                    let cost = sc + mv * movement_weight;
+                    if cost < best_cost || ((cost - best_cost).abs() < f32::EPSILON && mv < best_move) {
+                        best_cost = cost;
+                        best_move = mv;
                         best_x = lx;
                         best_y = ly;
                         best_rect = r;
-                        if best_score == 0 {
-                            break;
-                        }
                     }
-                }
-                if best_score == 0 {
-                    break;
                 }
             }
         }
