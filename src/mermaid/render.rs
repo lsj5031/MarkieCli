@@ -29,7 +29,7 @@ impl Default for DiagramStyle {
             edge_text: "#666666".to_string(),
             background: "transparent".to_string(),
             font_family: "sans-serif".to_string(),
-            font_size: 14.0,
+            font_size: 13.0,
         }
     }
 }
@@ -37,19 +37,20 @@ impl Default for DiagramStyle {
 impl DiagramStyle {
     pub fn from_theme(text_color: &str, background: &str, code_bg: &str) -> Self {
         let diagram_fg = pick_higher_contrast(code_bg, text_color, background);
-        // Diagram labels/notes are painted on top of the Mermaid block background.
-        // Keep edge text contrast anchored to code_bg, not the page background.
-        let label_fg = pick_higher_contrast(code_bg, text_color, background);
+        let label_fg = mix_color(code_bg, &diagram_fg, 0.60);
+        let edge_color = mix_color(code_bg, &diagram_fg, 0.30);
+        let node_fill_color = mix_color(code_bg, &diagram_fg, 0.03);
+        let node_stroke_color = mix_color(code_bg, &diagram_fg, 0.20);
 
         Self {
-            node_fill: code_bg.to_string(),
-            node_stroke: diagram_fg.clone(),
-            node_text: diagram_fg.clone(),
-            edge_stroke: diagram_fg,
+            node_fill: node_fill_color,
+            node_stroke: node_stroke_color,
+            node_text: diagram_fg,
+            edge_stroke: edge_color,
             edge_text: label_fg,
             background: background.to_string(),
             font_family: "sans-serif".to_string(),
-            font_size: 14.0,
+            font_size: 13.0,
         }
     }
 }
@@ -84,6 +85,21 @@ fn contrast_ratio(a: &str, b: &str) -> Option<f32> {
     let l2 = relative_luminance(parse_hex_rgb(b)?);
     let (hi, lo) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
     Some((hi + 0.05) / (lo + 0.05))
+}
+
+/// Mix two hex colors: result = base * (1-t) + fg * t
+fn mix_color(base: &str, fg: &str, t: f32) -> String {
+    let (br, bg, bb) = parse_hex_rgb(base).unwrap_or((0.95, 0.95, 0.95));
+    let (fr, fg_g, fb) = parse_hex_rgb(fg).unwrap_or((0.2, 0.2, 0.2));
+    let r = (br * (1.0 - t) + fr * t).clamp(0.0, 1.0);
+    let g = (bg * (1.0 - t) + fg_g * t).clamp(0.0, 1.0);
+    let b = (bb * (1.0 - t) + fb * t).clamp(0.0, 1.0);
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        (r * 255.0).round() as u8,
+        (g * 255.0).round() as u8,
+        (b * 255.0).round() as u8
+    )
 }
 
 fn pick_higher_contrast(base: &str, primary: &str, secondary: &str) -> String {
@@ -192,9 +208,9 @@ fn render_sequence(
                 pos.x, pos.y, pos.width, pos.height, style.node_fill, style.node_stroke
             ));
             svg.push_str(&format!(
-                r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
+                r#"<text x="{:.2}" y="{:.2}" dy="0.35em" font-family="{}" font-size="{:.1}" font-weight="500" fill="{}" text-anchor="middle">{}</text>"#,
                 text_x,
-                pos.y + pos.height / 2.0 + style.font_size / 3.0,
+                pos.y + pos.height / 2.0,
                 style.font_family,
                 style.font_size,
                 style.node_text,
@@ -230,7 +246,7 @@ fn render_sequence(
     for participant in &diagram.participants {
         if let Some(x) = participant_centers.get(participant.id.as_str()) {
             svg.push_str(&format!(
-                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" stroke-dasharray="4,4" />"#,
+                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75" stroke-dasharray="6,4" />"#,
                 x, lifeline_start_y, x, lifeline_end_y, style.edge_stroke
             ));
         }
@@ -272,7 +288,7 @@ fn render_sequence_elements(
                         };
 
                     svg.push_str(&format!(
-                        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5"{} />"#,
+                        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75"{} />"#,
                         x1, *message_y, x2, *message_y, style.edge_stroke, dash
                     ));
 
@@ -283,7 +299,7 @@ fn render_sequence_elements(
                             let p1 = (arrow_x + arrow_dir * 10.0, *message_y - 5.0);
                             let p2 = (arrow_x + arrow_dir * 10.0, *message_y + 5.0);
                             svg.push_str(&format!(
-                                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="1.5" />"#,
+                                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="0.75" />"#,
                                 p1.0, p1.1, arrow_x, *message_y, p2.0, p2.1, style.edge_stroke
                             ));
                         }
@@ -303,7 +319,7 @@ fn render_sequence_elements(
                             let p1 = (arrow_x + arrow_dir * 10.0, *message_y - 5.0);
                             let p2 = (arrow_x + arrow_dir * 10.0, *message_y + 5.0);
                             svg.push_str(&format!(
-                                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="1.5" />"#,
+                                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="0.75" />"#,
                                 p1.0, p1.1, arrow_x, *message_y, p2.0, p2.1, style.edge_stroke
                             ));
                         }
@@ -535,7 +551,7 @@ fn render_class_box(class: &ClassDefinition, pos: &LayoutPos, style: &DiagramSty
 
     // Main box
     svg.push_str(&format!(
-        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" stroke="{}" stroke-width="1.5" />"#,
+        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" stroke="{}" stroke-width="1" />"#,
         pos.x, pos.y, pos.width, pos.height,
         style.node_fill, style.node_stroke
     ));
@@ -566,10 +582,19 @@ fn render_class_box(class: &ClassDefinition, pos: &LayoutPos, style: &DiagramSty
         ""
     };
 
+    // Header band (subtle tinted background for class name area)
+    let header_h = y + 6.0 - pos.y;
+    let header_fill = mix_color(&style.node_fill, &style.node_text, 0.05);
     svg.push_str(&format!(
-        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle" font-weight="bold"{}>{}</text>"#,
+        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" />"#,
+        pos.x + 0.5, pos.y + 0.5, pos.width - 1.0, header_h,
+        header_fill
+    ));
+
+    svg.push_str(&format!(
+        r#"<text x="{:.2}" y="{:.2}" dy="0.35em" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle" font-weight="bold"{}>{}</text>"#,
         pos.x + pos.width / 2.0,
-        y,
+        pos.y + header_h / 2.0,
         style.font_family,
         style.font_size,
         style.node_text,
@@ -580,7 +605,7 @@ fn render_class_box(class: &ClassDefinition, pos: &LayoutPos, style: &DiagramSty
     // Divider line after name
     y += 6.0;
     svg.push_str(&format!(
-        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
+        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75" />"#,
         pos.x,
         y,
         pos.x + pos.width,
@@ -719,7 +744,7 @@ fn render_class_relation(
     };
 
     svg.push_str(&format!(
-        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5"{} />"#,
+        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75"{} />"#,
         x1, y1, x2, y2, style.edge_stroke, line_style
     ));
 
@@ -964,7 +989,7 @@ fn render_state(
 
     let state_obstacles: Vec<RectF> = positions
         .values()
-        .map(|p| rect_from_pos(p, 3.0))
+        .map(|p| rect_from_pos(p, 8.0))
         .collect();
 
     let mut transition_min_x = f32::MAX;
@@ -1095,7 +1120,7 @@ fn render_state_node(
         ));
     } else {
         svg.push_str(&format!(
-            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" stroke="{}" stroke-width="1.5" />"#,
+            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="{}" stroke="{}" stroke-width="1" />"#,
             pos.x, pos.y, pos.width, pos.height,
             10.0, style.node_fill, style.node_stroke
         ));
@@ -1437,7 +1462,7 @@ fn render_state_transition(
             }
         }
     };
-    let verticalish = (from_cx - to_cx).abs() < (from.width + to.width) / 4.0 && (py2 - py1).abs() > 30.0;
+    let verticalish = (from_cx - to_cx).abs() < (from.width.min(to.width)) / 2.0 && (py2 - py1).abs() > 30.0;
 
     let label_anchor_x;
     let label_anchor_y;
@@ -1454,15 +1479,28 @@ fn render_state_transition(
             (to.bottom(), from.y)
         };
         let mid_x = (from_cx + to_cx) / 2.0;
-        let from_rect_obs = rect_from_pos(from, 3.0);
-        let to_rect_obs = rect_from_pos(to, 3.0);
+        let is_src_or_dst = |r: &RectF| -> bool {
+            let rcx = r.x + r.w / 2.0;
+            let rcy = r.y + r.h / 2.0;
+            ((rcx - from_cx).abs() < 1.0 && (rcy - from_cy).abs() < 1.0)
+                || ((rcx - to_cx).abs() < 1.0 && (rcy - to_cy).abs() < 1.0)
+        };
         let has_obstacle_between = gap > 0.0 && obstacles.iter().any(|r| {
-            if r.overlaps(&from_rect_obs) || r.overlaps(&to_rect_obs) {
+            if is_src_or_dst(r) {
                 return false;
             }
-            mid_x >= r.x && mid_x <= r.x + r.w && r.y < bot_y && r.y + r.h > top_y
+            // Check if a straight vertical line from from→to would cross this obstacle
+            let line_x = mid_x;
+            line_x >= r.x && line_x <= r.x + r.w && r.y < bot_y && r.y + r.h > top_y
         });
-        let adjacent = gap > 0.0 && gap < 80.0 && !has_obstacle_between;
+        // Also check if the straight line crosses any obstacle using full intersection test
+        let straight_crosses = obstacles.iter().any(|r| {
+            if is_src_or_dst(r) {
+                return false;
+            }
+            line_intersects_rect(px1, py1, px2, py2, r)
+        });
+        let adjacent = gap > 0.0 && gap < 60.0 && !has_obstacle_between && !straight_crosses;
 
         if adjacent {
             // Adjacent states: draw a straight vertical line
@@ -1470,7 +1508,7 @@ fn render_state_transition(
             let y1 = if from_cy < to_cy { from.bottom() } else { from.y };
             let y2 = if from_cy < to_cy { to.y } else { to.bottom() };
             svg.push_str(&format!(
-                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
+                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75" />"#,
                 x, y1, x, y2, style.edge_stroke
             ));
             track_point!(x, y1);
@@ -1489,18 +1527,22 @@ fn render_state_transition(
             let max_half_width = (from.width / 2.0).max(to.width / 2.0);
             let exit_y = from_cy;
             let enter_y = to_cy;
-            let from_rect = rect_from_pos(from, 3.0);
-            let to_rect = rect_from_pos(to, 3.0);
+            let is_endpoint = |r: &RectF| -> bool {
+                let rcx = r.x + r.w / 2.0;
+                let rcy = r.y + r.h / 2.0;
+                ((rcx - from_cx).abs() < 1.0 && (rcy - from_cy).abs() < 1.0)
+                    || ((rcx - to_cx).abs() < 1.0 && (rcy - to_cy).abs() < 1.0)
+            };
 
             // Try both sides and pick the one that clears first (fewer steps)
-            let step = 14.0;
+            let step = 18.0;
             let max_steps = 30;
 
-            let mut best_lane_x = from_cx + route_side * (max_half_width + 20.0);
+            let mut best_lane_x = from_cx + route_side * (max_half_width + 30.0);
             let mut best_step_count = max_steps;
 
             for &try_side in &[route_side, -route_side] {
-                let base = from_cx + try_side * (max_half_width + 20.0 + lane.abs() * 12.0);
+                let base = from_cx + try_side * (max_half_width + 30.0 + lane.abs() * 14.0);
                 let fex = if base >= from_cx {
                     from.x + from.width
                 } else {
@@ -1514,10 +1556,10 @@ fn render_state_transition(
                 for i in 0..max_steps {
                     let candidate = base + try_side * (i as f32) * step;
                     let clear = obstacles.iter().all(|r| {
-                        if r.overlaps(&from_rect) || r.overlaps(&to_rect) {
+                        if is_endpoint(r) {
                             return true;
                         }
-                        let rr = r.expanded(2.0);
+                        let rr = r.expanded(6.0);
                         !hseg_hits_rect(exit_y, fex, candidate, &rr)
                             && !vseg_hits_rect(candidate, exit_y, enter_y, &rr)
                             && !hseg_hits_rect(enter_y, candidate, tex, &rr)
@@ -1543,7 +1585,7 @@ fn render_state_transition(
             };
 
             svg.push_str(&format!(
-                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="1.5" />"#,
+                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="0.75" />"#,
                 from_exit_x, exit_y, lane_x, exit_y, lane_x, enter_y, to_enter_x, enter_y,
                 style.edge_stroke
             ));
@@ -1563,43 +1605,197 @@ fn render_state_transition(
         }
     } else {
         // Check if a straight line would cross any obstacles
-        let from_rect_obs = rect_from_pos(from, 3.0);
-        let to_rect_obs = rect_from_pos(to, 3.0);
+        let is_from_or_to = |r: &RectF| -> bool {
+            let rcx = r.x + r.w / 2.0;
+            let rcy = r.y + r.h / 2.0;
+            ((rcx - from_cx).abs() < 1.0 && (rcy - from_cy).abs() < 1.0)
+                || ((rcx - to_cx).abs() < 1.0 && (rcy - to_cy).abs() < 1.0)
+        };
         let straight_blocked = obstacles.iter().any(|r| {
-            if r.overlaps(&from_rect_obs) || r.overlaps(&to_rect_obs) {
+            if is_from_or_to(r) {
                 return false;
             }
             line_intersects_rect(px1, py1, px2, py2, r)
         });
 
         if straight_blocked {
-            // Use orthogonal routing for non-verticalish blocked paths
-            let going_right = to_cx > from_cx;
-            let from_exit_x = if going_right { from.x + from.width } else { from.x };
-            let to_enter_x = if going_right { to.x } else { to.x + to.width };
-            let mid_y = (from_cy + to_cy) / 2.0;
-
-            svg.push_str(&format!(
-                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="1.5" />"#,
-                from_exit_x, from_cy, from_exit_x, mid_y, to_enter_x, mid_y, to_enter_x, to_cy,
-                style.edge_stroke
-            ));
-            track_point!(from_exit_x, from_cy);
-            track_point!(from_exit_x, mid_y);
-            track_point!(to_enter_x, mid_y);
-            track_point!(to_enter_x, to_cy);
-            label_anchor_x = (from_exit_x + to_enter_x) / 2.0;
-            label_anchor_y = mid_y;
-            arrow_angle = if to_cy > mid_y {
-                -std::f32::consts::FRAC_PI_2
-            } else {
-                std::f32::consts::FRAC_PI_2
+            // Obstacle-aware orthogonal routing for non-verticalish blocked paths.
+            // We try multiple strategies and pick the first clear one:
+            //   1. Simple Z-route (exit side → horizontal mid → enter side)
+            //   2. U-route via vertical center exit (exit top/bottom → horizontal lane → enter top/bottom)
+            //   3. Side-exit L-route (exit side → vertical lane → enter side) - like verticalish routing
+            let is_endpoint = |r: &RectF| -> bool {
+                let rcx = r.x + r.w / 2.0;
+                let rcy = r.y + r.h / 2.0;
+                ((rcx - from_cx).abs() < 1.0 && (rcy - from_cy).abs() < 1.0)
+                    || ((rcx - to_cx).abs() < 1.0 && (rcy - to_cy).abs() < 1.0)
             };
-            arrow_x = to_enter_x;
-            arrow_y = to_cy;
+
+            let step = 18.0;
+            let max_steps = 30;
+
+            // Strategy 1: Simple Z-route (exit from side, horizontal midline, enter from side)
+            let going_right = to_cx > from_cx;
+            let simple_from_exit_x = if going_right { from.x + from.width } else { from.x };
+            let simple_to_enter_x = if going_right { to.x } else { to.x + to.width };
+            let mid_y = (from_cy + to_cy) / 2.0;
+            let simple_clear = obstacles.iter().all(|r| {
+                if is_endpoint(r) {
+                    return true;
+                }
+                let rr = r.expanded(6.0);
+                !vseg_hits_rect(simple_from_exit_x, from_cy, mid_y, &rr)
+                    && !hseg_hits_rect(mid_y, simple_from_exit_x, simple_to_enter_x, &rr)
+                    && !vseg_hits_rect(simple_to_enter_x, mid_y, to_cy, &rr)
+            });
+
+            if simple_clear {
+                // Use simpler Z-route since it's clear
+                svg.push_str(&format!(
+                    r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="0.75" />"#,
+                    simple_from_exit_x, from_cy, simple_from_exit_x, mid_y, simple_to_enter_x, mid_y, simple_to_enter_x, to_cy,
+                    style.edge_stroke
+                ));
+                track_point!(simple_from_exit_x, from_cy);
+                track_point!(simple_from_exit_x, mid_y);
+                track_point!(simple_to_enter_x, mid_y);
+                track_point!(simple_to_enter_x, to_cy);
+                label_anchor_x = (simple_from_exit_x + simple_to_enter_x) / 2.0;
+                label_anchor_y = mid_y;
+                arrow_angle = if to_cy > mid_y {
+                    -std::f32::consts::FRAC_PI_2
+                } else {
+                    std::f32::consts::FRAC_PI_2
+                };
+                arrow_x = simple_to_enter_x;
+                arrow_y = to_cy;
+            } else {
+                // Strategy 2: U-route via vertical center exit
+                let going_down = to_cy > from_cy;
+                let pref_side: f32 = if going_down { 1.0 } else { -1.0 };
+                let mut best_u_lane_y = f32::NAN;
+                let mut best_u_steps = max_steps;
+
+                for &try_side in &[pref_side, -pref_side] {
+                    let base = if try_side > 0.0 {
+                        from.bottom().max(to.bottom()) + 30.0 + lane.abs() * 14.0
+                    } else {
+                        from.y.min(to.y) - 30.0 - lane.abs() * 14.0
+                    };
+                    let fey = if try_side > 0.0 { from.bottom() } else { from.y };
+                    let tey = if try_side > 0.0 { to.bottom() } else { to.y };
+                    for i in 0..max_steps {
+                        let candidate = base + try_side * (i as f32) * step;
+                        let clear = obstacles.iter().all(|r| {
+                            if is_endpoint(r) {
+                                return true;
+                            }
+                            let rr = r.expanded(6.0);
+                            !vseg_hits_rect(from_cx, fey, candidate, &rr)
+                                && !hseg_hits_rect(candidate, from_cx, to_cx, &rr)
+                                && !vseg_hits_rect(to_cx, candidate, tey, &rr)
+                        });
+                        if clear && i < best_u_steps {
+                            best_u_lane_y = candidate;
+                            best_u_steps = i;
+                            break;
+                        }
+                    }
+                }
+
+                // Strategy 3: Side-exit L-route (exit from side, vertical lane, enter from side)
+                // Same approach as the verticalish non-adjacent routing.
+                let max_half_width = (from.width / 2.0).max(to.width / 2.0);
+                let exit_y = from_cy;
+                let enter_y = to_cy;
+                let mut best_side_lane_x = f32::NAN;
+                let mut best_side_steps = max_steps;
+
+                for &try_side in &[route_side, -route_side] {
+                    let base_x = from_cx + try_side * (max_half_width + 30.0 + lane.abs() * 14.0);
+                    let fex = if base_x >= from_cx { from.x + from.width } else { from.x };
+                    let tex = if base_x >= to_cx { to.x + to.width } else { to.x };
+                    for i in 0..max_steps {
+                        let candidate = base_x + try_side * (i as f32) * step;
+                        let clear = obstacles.iter().all(|r| {
+                            if is_endpoint(r) {
+                                return true;
+                            }
+                            let rr = r.expanded(6.0);
+                            !hseg_hits_rect(exit_y, fex, candidate, &rr)
+                                && !vseg_hits_rect(candidate, exit_y, enter_y, &rr)
+                                && !hseg_hits_rect(enter_y, candidate, tex, &rr)
+                        });
+                        if clear && i < best_side_steps {
+                            best_side_lane_x = candidate;
+                            best_side_steps = i;
+                            break;
+                        }
+                    }
+                }
+
+                // Pick the best strategy: prefer fewer steps (closer route)
+                let use_u_route = !best_u_lane_y.is_nan()
+                    && (best_side_lane_x.is_nan() || best_u_steps <= best_side_steps);
+
+                if use_u_route {
+                    let lane_y = best_u_lane_y;
+                    let from_exit_y = if lane_y > from_cy { from.bottom() } else { from.y };
+                    let to_enter_y = if lane_y > to_cy { to.bottom() } else { to.y };
+
+                    svg.push_str(&format!(
+                        r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="0.75" />"#,
+                        from_cx, from_exit_y, from_cx, lane_y, to_cx, lane_y, to_cx, to_enter_y,
+                        style.edge_stroke
+                    ));
+                    track_point!(from_cx, from_exit_y);
+                    track_point!(from_cx, lane_y);
+                    track_point!(to_cx, lane_y);
+                    track_point!(to_cx, to_enter_y);
+                    label_anchor_x = (from_cx + to_cx) / 2.0;
+                    label_anchor_y = lane_y;
+                    arrow_angle = if to_enter_y > lane_y {
+                        -std::f32::consts::FRAC_PI_2
+                    } else {
+                        std::f32::consts::FRAC_PI_2
+                    };
+                    arrow_x = to_cx;
+                    arrow_y = to_enter_y;
+                } else if !best_side_lane_x.is_nan() {
+                    let lane_x = best_side_lane_x;
+                    let from_exit_x = if lane_x >= from_cx { from.x + from.width } else { from.x };
+                    let to_enter_x = if lane_x >= to_cx { to.x + to.width } else { to.x };
+
+                    svg.push_str(&format!(
+                        r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="0.75" />"#,
+                        from_exit_x, exit_y, lane_x, exit_y, lane_x, enter_y, to_enter_x, enter_y,
+                        style.edge_stroke
+                    ));
+                    track_point!(from_exit_x, exit_y);
+                    track_point!(lane_x, exit_y);
+                    track_point!(lane_x, enter_y);
+                    track_point!(to_enter_x, enter_y);
+                    label_anchor_x = lane_x;
+                    label_anchor_y = (exit_y + enter_y) / 2.0;
+                    arrow_angle = if to_enter_x > lane_x { 0.0 } else { std::f32::consts::PI };
+                    arrow_x = to_enter_x;
+                    arrow_y = enter_y;
+                } else {
+                    // Fallback: draw the straight line anyway
+                    svg.push_str(&format!(
+                        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75" />"#,
+                        px1, py1, px2, py2, style.edge_stroke
+                    ));
+                    track_point!(px1, py1);
+                    track_point!(px2, py2);
+                    arrow_angle = (py1 - py2).atan2(px1 - px2);
+                    label_anchor_x = (px1 + px2) / 2.0;
+                    label_anchor_y = (py1 + py2) / 2.0;
+                }
+            }
         } else {
             svg.push_str(&format!(
-                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
+                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75" />"#,
                 px1, py1, px2, py2, style.edge_stroke
             ));
             track_point!(px1, py1);
@@ -1838,7 +2034,7 @@ fn render_er_entity(entity: &ErEntity, pos: &LayoutPos, style: &DiagramStyle) ->
 
     // Entity box
     svg.push_str(&format!(
-        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" stroke="{}" stroke-width="1.5" />"#,
+        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" stroke="{}" stroke-width="1" />"#,
         pos.x, pos.y, pos.width, pos.height,
         style.node_fill, style.node_stroke
     ));
@@ -1895,7 +2091,7 @@ fn render_er_relationship(
 
     // Line
     svg.push_str(&format!(
-        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
+        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75" />"#,
         x1, y1, x2, y2, style.edge_stroke
     ));
 
@@ -2091,7 +2287,7 @@ fn render_er_cardinality_marker(
 
     let draw_one = |dist: f32| {
         format!(
-            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
+            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75" />"#,
             x + ux * dist + nx * 6.0,
             y + uy * dist + ny * 6.0,
             x + ux * dist - nx * 6.0,
@@ -2114,7 +2310,7 @@ fn render_er_cardinality_marker(
         let cx = x + ux * dist;
         let cy = y + uy * dist;
         format!(
-            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" /><line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" /><line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
+            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75" /><line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75" /><line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75" />"#,
             cx,
             cy,
             cx + ux * 8.0 + nx * 8.0,
@@ -2199,9 +2395,14 @@ mod tests {
     }
 
     #[test]
-    fn from_theme_uses_code_bg_contrast_for_edge_text() {
+    fn from_theme_produces_color_hierarchy() {
         let style = DiagramStyle::from_theme("#586e75", "#fdf6e3", "#073642");
-        assert_eq!(style.edge_text, "#fdf6e3");
+        // edge_text should be a 60% mix of code_bg toward fg (not raw fg)
+        assert_ne!(style.edge_text, style.node_text);
+        // node_fill should be very close to code_bg (3% fg mix)
+        assert_ne!(style.node_fill, "#073642");
+        // node_stroke should be lighter than node_text (20% vs 100% fg)
+        assert_ne!(style.node_stroke, style.node_text);
     }
 
     #[test]

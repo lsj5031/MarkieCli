@@ -88,7 +88,8 @@ pub struct LayoutEngine<'a, T: TextMeasure> {
     pub node_spacing_x: f32,
     pub node_spacing_y: f32,
     pub edge_label_padding: f32,
-    pub node_padding: f32,
+    pub node_padding_h: f32,
+    pub node_padding_v: f32,
 }
 
 impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
@@ -96,11 +97,11 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         Self {
             measure,
             font_size,
-            // Prefer sparse layouts; it's easier to read and reduces incidental overlaps.
-            node_spacing_x: 88.0,
-            node_spacing_y: 72.0,
-            edge_label_padding: 14.0,
-            node_padding: 12.0,
+            node_spacing_x: 48.0,
+            node_spacing_y: 52.0,
+            edge_label_padding: 8.0,
+            node_padding_h: 16.0,
+            node_padding_v: 10.0,
         }
     }
 
@@ -175,11 +176,12 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         let line_height = self.font_size * 1.2;
         let (text_width, lines) =
             self.measure_multiline(label, self.font_size, false, false, false);
-        let padding = self.node_padding * 2.0;
+        let pad_w = self.node_padding_h * 2.0;
+        let pad_h = self.node_padding_v * 2.0;
 
         let text_h = line_height * lines as f32;
-        let mut width = (text_width + padding).max(56.0);
-        let mut height = (text_h + padding).max(36.0);
+        let mut width = (text_width + pad_w).max(56.0);
+        let mut height = (text_h + pad_h).max(36.0);
 
         match shape {
             NodeShape::Circle => {
@@ -507,7 +509,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
             method_lines += 1;
         }
 
-        let width = (max_width + self.node_padding * 2.0).max(180.0);
+        let width = (max_width + self.node_padding_h * 2.0).max(180.0);
 
         let mut height = self.font_size + 16.0;
         height += if attr_lines > 0 {
@@ -585,7 +587,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         }
 
         let label_w = self.measure_text_width(&state.label, self.font_size, false, false, false);
-        let base_width = (label_w + self.node_padding * 2.0).max(120.0);
+        let base_width = (label_w + self.node_padding_h * 2.0).max(120.0);
         let base_height = (self.font_size * 2.2).max(40.0);
 
         if !state.is_composite {
@@ -667,7 +669,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
             max_w = max_w.max(self.measure_text_width(&attr_name, attr_font, false, false, false));
         }
 
-        let width = (max_w + self.node_padding * 2.0).max(150.0);
+        let width = (max_w + self.node_padding_h * 2.0).max(150.0);
         let height = (34.0 + entity.attributes.len() as f32 * (attr_font * 1.25) + 10.0).max(56.0);
         (width, height)
     }
