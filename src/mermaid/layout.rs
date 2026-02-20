@@ -31,14 +31,6 @@ impl BBox {
         self.y + self.height
     }
 
-    pub fn center_x(&self) -> f32 {
-        self.x + self.width / 2.0
-    }
-
-    pub fn center_y(&self) -> f32 {
-        self.y + self.height / 2.0
-    }
-
     pub fn with_padding(&self, padding: f32) -> Self {
         Self::new(
             self.x - padding,
@@ -352,7 +344,18 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                                 false,
                                 false,
                             );
-                            out.push((a, b, (label_w + 42.0).max(120.0)));
+                            let total_req = (label_w + 42.0).max(120.0);
+                            out.push((a, b, total_req));
+
+                            // For messages spanning multiple participants, push
+                            // intermediate pairs apart so labels have room.
+                            if b - a > 1 {
+                                let pill_w = label_w + 20.0;
+                                let per_pair = (pill_w / (b - a - 1).max(1) as f32 + 40.0).max(140.0);
+                                for i in a..b {
+                                    out.push((i, i + 1, per_pair));
+                                }
+                            }
                         }
                     }
                 }
@@ -398,10 +401,11 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                     *current_y += 42.0;
                 }
                 SequenceElement::Block(block) => {
-                    *current_y += 28.0;
+                    // 6 (pre-padding) + 22 (title + post-gap)
+                    *current_y += 34.0;
                     self.measure_sequence_metrics(&block.messages, current_y, max_label_half_width);
                     for (_, branch_elements) in &block.else_branches {
-                        *current_y += 22.0;
+                        *current_y += 30.0;
                         self.measure_sequence_metrics(
                             branch_elements,
                             current_y,
@@ -446,8 +450,17 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         let member_font = self.font_size * 0.85;
         let line_h = member_font * 1.2;
 
+        // Measure header including stereotype prefix (e.g. "<<interface>> ClassName")
+        let header_text = if class.is_interface {
+            let stereo = class.stereotype.as_deref().unwrap_or("interface");
+            format!("<<{}>> {}", stereo, class.name)
+        } else if let Some(ref stereo) = class.stereotype {
+            format!("<<{}>> {}", stereo, class.name)
+        } else {
+            class.name.clone()
+        };
         let mut max_width = self
-            .measure_text_width(&class.name, header_font, false, true, class.is_abstract)
+            .measure_text_width(&header_text, header_font, false, true, class.is_abstract)
             .max(120.0);
 
         let mut attr_lines = 0usize;
@@ -516,17 +529,17 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         let width = (max_width + self.node_padding_h * 2.0).max(180.0);
 
         let mut height = self.font_size + 16.0;
-        height += if attr_lines > 0 {
-            attr_lines as f32 * line_h + 8.0
-        } else {
-            8.0
-        };
+        // The render always advances by font_size + 4.0 before the first attribute,
+        // so account for that even when there are no attributes.
+        height += self.font_size + 4.0;
+        height += attr_lines as f32 * line_h;
         if method_lines > 0 {
-            height += method_lines as f32 * line_h + 10.0;
+            // Divider gap + first method offset + method lines
+            height += 4.0 + self.font_size + 2.0;
+            height += method_lines as f32 * line_h;
         }
-        // Leave some breathing room so the last member row doesn't collide with the box border.
-        // This also makes room for descenders in the monospace font.
-        height += 10.0;
+        // Breathing room for descenders in the last member row.
+        height += 14.0;
         height = height.max(64.0);
 
         (width, height)

@@ -283,7 +283,7 @@ fn render_sequence_elements(
                         // Self-message: draw a loop to the right
                         let cx = *x1;
                         let loop_w = 40.0;
-                        let loop_h = 20.0;
+                        let loop_h = 36.0;
                         let y_top = *message_y;
                         let y_bot = y_top + loop_h;
 
@@ -311,14 +311,30 @@ fn render_sequence_elements(
                             style.edge_stroke
                         ));
 
-                        // Label
+                        // Label with background pill for readability
                         if !msg.label.is_empty() {
                             let cleaned = crate::xml::sanitize_xml_text(&msg.label);
                             let label_font = style.font_size * 0.82;
+                            let text_w = measure
+                                .measure_text(&cleaned, label_font, false, false, false, None)
+                                .0;
+                            let pill_pad = 4.0;
+                            let pill_w = text_w + pill_pad * 2.0;
+                            let pill_h = label_font + pill_pad * 2.0;
+                            let lx = cx + loop_w + 4.0 + text_w / 2.0;
+                            let ly = y_top + loop_h / 2.0;
                             svg.push_str(&format!(
-                                r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
-                                cx + loop_w + 4.0,
-                                y_top + loop_h / 2.0 + label_font * 0.35,
+                                r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="3" fill="{}" />"#,
+                                lx - pill_w / 2.0,
+                                ly - pill_h / 2.0,
+                                pill_w,
+                                pill_h,
+                                style.node_fill
+                            ));
+                            svg.push_str(&format!(
+                                r#"<text x="{:.2}" y="{:.2}" dy="0.35em" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
+                                lx,
+                                ly,
                                 style.font_family,
                                 label_font,
                                 style.edge_text,
@@ -326,7 +342,7 @@ fn render_sequence_elements(
                             ));
                         }
 
-                        *message_y = y_bot + 16.0;
+                        *message_y = y_bot + 20.0;
                     } else {
                         let is_right = x2 > x1;
                         let dash =
@@ -380,9 +396,9 @@ fn render_sequence_elements(
                             let text_w = measure
                                 .measure_text(&cleaned, label_font, false, false, false, None)
                                 .0;
-                            let pill_pad = 5.0;
+                            let pill_pad = 6.0;
                             let pill_w = text_w + pill_pad * 2.0;
-                            let pill_h = label_font + pill_pad * 1.6;
+                            let pill_h = label_font + pill_pad * 2.0;
                             let label_x = (x1 + x2) / 2.0;
                             let label_y = *message_y - 10.0;
 
@@ -485,6 +501,7 @@ fn render_sequence_elements(
                 *message_y += 42.0;
             }
             SequenceElement::Block(block) => {
+                *message_y += 6.0;
                 let start_y = *message_y - 14.0;
                 let inset = block_depth as f32 * 8.0;
                 let block_left = left_edge - 36.0 + inset;
@@ -504,14 +521,14 @@ fn render_sequence_elements(
 
                 svg.push_str(&format!(
                     r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" font-weight="bold">{}</text>"#,
-                    block_left + 6.0,
+                    block_left + 10.0,
                     *message_y,
                     style.font_family,
                     style.font_size * 0.8,
                     style.node_text,
                     escape_xml(&title)
                 ));
-                *message_y += 18.0;
+                *message_y += 22.0;
 
                 svg.push_str(&render_sequence_elements(
                     &block.messages,
@@ -538,8 +555,8 @@ fn render_sequence_elements(
                     if !label.is_empty() {
                         svg.push_str(&format!(
                             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
-                            block_left + 6.0,
-                            separator_y - 4.0,
+                            block_left + 10.0,
+                            separator_y - 6.0,
                             style.font_family,
                             style.font_size * 0.78,
                             style.node_text,
@@ -824,7 +841,7 @@ fn render_class_relation(
         ClassRelationType::Composition => (Some("filled_diamond"), None),
         ClassRelationType::Aggregation => (Some("hollow_diamond"), None),
         ClassRelationType::Association => (None, Some("arrow")),
-        ClassRelationType::Dependency => (Some("hollow_triangle"), None),
+        ClassRelationType::Dependency => (Some("arrow"), None),
         ClassRelationType::Realization => (Some("hollow_triangle"), None),
     };
 

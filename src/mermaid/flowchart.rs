@@ -25,7 +25,12 @@ pub fn render_flowchart(
     let node_map: HashMap<&str, &super::types::FlowchartNode> =
         flowchart.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
-    // Draw edges first (behind nodes)
+    // Draw subgraph boxes first (background layer)
+    for subgraph in &flowchart.subgraphs {
+        svg.push_str(&render_subgraph_box(subgraph, &positions, style));
+    }
+
+    // Draw edges (behind nodes but on top of subgraph boxes)
     for edge in &flowchart.edges {
         let from_pos = positions.get(&edge.from);
         let to_pos = positions.get(&edge.to);
@@ -53,16 +58,22 @@ pub fn render_flowchart(
         }
     }
 
-    // Draw nodes
+    // Draw nodes on top
     for node in &flowchart.nodes {
         if let Some(pos) = positions.get(&node.id) {
             svg.push_str(&render_node(&node.label, &node.shape, pos, style));
         }
     }
 
-    // Draw subgraphs
+    // Draw subgraph titles last (on top of everything) with collision avoidance
+    let mut used_title_rects: Vec<(f32, f32, f32, f32)> = Vec::new();
     for subgraph in &flowchart.subgraphs {
-        svg.push_str(&render_subgraph(subgraph, &positions, style));
+        svg.push_str(&render_subgraph_title(
+            subgraph,
+            &positions,
+            style,
+            &mut used_title_rects,
+        ));
     }
 
     let total_width = bbox.right() + padding;
@@ -574,14 +585,10 @@ fn render_arrow_head(
     }
 }
 
-fn render_subgraph(
+fn subgraph_bbox(
     subgraph: &super::types::Subgraph,
     positions: &HashMap<String, LayoutPos>,
-    style: &DiagramStyle,
-) -> String {
-    let mut svg = String::new();
-
-    // Find bounding box of all nodes in subgraph
+) -> Option<(f32, f32, f32, f32)> {
     let mut min_x = f32::MAX;
     let mut min_y = f32::MAX;
     let mut max_right = f32::MIN;
@@ -599,39 +606,80 @@ fn render_subgraph(
     }
 
     if !found {
-        return svg;
+        return None;
     }
 
     let content_bbox = BBox::new(min_x, min_y, max_right - min_x, max_bottom - min_y);
     let padded_bbox = content_bbox.with_padding(20.0);
-    let min_x = padded_bbox.x;
-    let min_y = padded_bbox.y - 20.0;
-    let width = padded_bbox.width;
-    let height = padded_bbox.height + 20.0;
-    let title_center_y = (min_y + padded_bbox.y) / 2.0;
-    let title_x = padded_bbox.center_x();
-    let _title_anchor_hint = padded_bbox.center_y().min(title_center_y);
+    Some((
+        padded_bbox.x,
+        padded_bbox.y - 20.0,
+        padded_bbox.width,
+        padded_bbox.height + 20.0,
+    ))
+}
 
-    svg.push_str(&format!(r#"<g id="{}">"#, escape_xml(&subgraph.id)));
+fn render_subgraph_box(
+    subgraph: &super::types::Subgraph,
+    positions: &HashMap<String, LayoutPos>,
+    style: &DiagramStyle,
+) -> String {
+    let Some((min_x, min_y, width, height)) = subgraph_bbox(subgraph, positions) else {
+        return String::new();
+    };
 
-    // Draw subgraph box
-    svg.push_str(&format!(
+    format!(
         r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="8" fill="{}" fill-opacity="0.3" stroke="{}" stroke-width="1" stroke-dasharray="4,2" />"#,
         min_x, min_y, width, height,
         style.node_fill, style.node_stroke
-    ));
+    )
+}
 
-    // Draw title
-    if !subgraph.title.is_empty() {
-        let title_y = title_center_y + style.font_size * 0.3;
-
-        svg.push_str(&format!(
-            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" font-weight="bold" text-anchor="middle">{}</text>"#,
-            title_x, title_y, style.font_family, style.font_size * 0.9, style.node_text, escape_xml(&subgraph.title)
-        ));
+fn render_subgraph_title(
+    subgraph: &super::types::Subgraph,
+    positions: &HashMap<String, LayoutPos>,
+    style: &DiagramStyle,
+    used_rects: &mut Vec<(f32, f32, f32, f32)>,
+) -> String {
+    if subgraph.title.is_empty() {
+        return String::new();
     }
 
-    svg.push_str("</g>");
+    let Some((min_x, min_y, _width, _height)) = subgraph_bbox(subgraph, positions) else {
+        return String::new();
+    };
+
+    let title_font = style.font_size * 0.9;
+    let approx_char_w = title_font * 0.6;
+    let title_w = subgraph.title.len() as f32 * approx_char_w + 12.0;
+    let title_h = title_font + 6.0;
+
+    let title_x = min_x + 12.0;
+    let mut title_y = min_y + title_font + 4.0;
+
+    // Offset title if it would overlap a previously placed title
+    for &(ux, uy, uw, uh) in used_rects.iter() {
+        let rx = title_x - 4.0;
+        let ry = title_y - title_h / 2.0 - 1.0;
+        let overlaps = rx < ux + uw && rx + title_w > ux && ry < uy + uh && ry + title_h > uy;
+        if overlaps {
+            title_y = uy + uh + title_h / 2.0 + 3.0;
+        }
+    }
+
+    let pill_x = title_x - 4.0;
+    let pill_y = title_y - title_h / 2.0 - 1.0;
+    used_rects.push((pill_x, pill_y, title_w, title_h));
+
+    let mut svg = String::new();
+    svg.push_str(&format!(
+        r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="3" fill="{}" fill-opacity="0.9" />"#,
+        pill_x, pill_y, title_w, title_h, style.node_fill
+    ));
+    svg.push_str(&format!(
+        r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" font-weight="bold" text-anchor="start">{}</text>"#,
+        title_x, title_y, style.font_family, title_font, style.node_text, escape_xml(&subgraph.title)
+    ));
 
     svg
 }

@@ -738,6 +738,20 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
 
         // If inside a class body
         if let Some(ref mut cls) = current_class {
+            // Stereotype annotation inside body (e.g. <<abstract>>, <<interface>>)
+            if line.starts_with("<<") {
+                if let Some(end) = line.find(">>") {
+                    let stereo = line[2..end].trim().to_ascii_lowercase();
+                    cls.stereotype = Some(line[2..end].trim().to_string());
+                    if stereo == "abstract" {
+                        cls.is_abstract = true;
+                    } else if stereo == "interface" {
+                        cls.is_interface = true;
+                    }
+                }
+                continue;
+            }
+
             // Attribute or method
             if line.starts_with('+')
                 || line.starts_with('-')
