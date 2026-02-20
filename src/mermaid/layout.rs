@@ -81,6 +81,9 @@ impl LayoutPos {
     }
 }
 
+/// Intermediate waypoints for edges routed through dummy nodes.
+pub type EdgeWaypoints = HashMap<(String, String), Vec<(f32, f32)>>;
+
 /// Layout engine for diagrams
 pub struct LayoutEngine<'a, T: TextMeasure> {
     measure: &'a mut T,
@@ -97,11 +100,12 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         Self {
             measure,
             font_size,
-            node_spacing_x: 48.0,
-            node_spacing_y: 52.0,
+            // Slightly larger default spacing improves readability in dense docs.
+            node_spacing_x: 64.0,
+            node_spacing_y: 72.0,
             edge_label_padding: 8.0,
-            node_padding_h: 16.0,
-            node_padding_v: 10.0,
+            node_padding_h: 18.0,
+            node_padding_v: 12.0,
         }
     }
 
@@ -148,11 +152,11 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
     pub fn layout_flowchart(
         &mut self,
         flowchart: &Flowchart,
-    ) -> (HashMap<String, LayoutPos>, BBox) {
+    ) -> (HashMap<String, LayoutPos>, EdgeWaypoints, BBox) {
         let positions: HashMap<String, LayoutPos> = HashMap::new();
 
         if flowchart.nodes.is_empty() {
-            return (positions, BBox::default());
+            return (positions, HashMap::new(), BBox::default());
         }
 
         let nodes: Vec<String> = flowchart.nodes.iter().map(|n| n.id.clone()).collect();
@@ -411,11 +415,11 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
     }
 
     /// Layout a class diagram.
-    pub fn layout_class(&mut self, diagram: &ClassDiagram) -> (HashMap<String, LayoutPos>, BBox) {
+    pub fn layout_class(&mut self, diagram: &ClassDiagram) -> (HashMap<String, LayoutPos>, EdgeWaypoints, BBox) {
         let positions: HashMap<String, LayoutPos> = HashMap::new();
 
         if diagram.classes.is_empty() {
-            return (positions, BBox::default());
+            return (positions, HashMap::new(), BBox::default());
         }
 
         let mut node_sizes: HashMap<String, (f32, f32)> = HashMap::new();
@@ -529,11 +533,11 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
     }
 
     /// Layout a state diagram.
-    pub fn layout_state(&mut self, diagram: &StateDiagram) -> (HashMap<String, LayoutPos>, BBox) {
+    pub fn layout_state(&mut self, diagram: &StateDiagram) -> (HashMap<String, LayoutPos>, EdgeWaypoints, BBox) {
         let positions: HashMap<String, LayoutPos> = HashMap::new();
 
         if diagram.states.is_empty() {
-            return (positions, BBox::default());
+            return (positions, HashMap::new(), BBox::default());
         }
 
         let child_state_ids: HashSet<&str> = diagram
@@ -628,11 +632,11 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
     }
 
     /// Layout an ER diagram.
-    pub fn layout_er(&mut self, diagram: &ErDiagram) -> (HashMap<String, LayoutPos>, BBox) {
+    pub fn layout_er(&mut self, diagram: &ErDiagram) -> (HashMap<String, LayoutPos>, EdgeWaypoints, BBox) {
         let positions: HashMap<String, LayoutPos> = HashMap::new();
 
         if diagram.entities.is_empty() {
-            return (positions, BBox::default());
+            return (positions, HashMap::new(), BBox::default());
         }
 
         let nodes: Vec<String> = diagram.entities.iter().map(|e| e.name.clone()).collect();
@@ -682,10 +686,10 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         start_y: f32,
         spacing_x: f32,
         spacing_y: f32,
-    ) -> (HashMap<String, LayoutPos>, BBox) {
+    ) -> (HashMap<String, LayoutPos>, EdgeWaypoints, BBox) {
         let mut positions: HashMap<String, LayoutPos> = HashMap::new();
         if nodes.is_empty() {
-            return (positions, BBox::default());
+            return (positions, HashMap::new(), BBox::default());
         }
 
         let cols = (nodes.len() as f32).sqrt().ceil() as usize;
@@ -708,7 +712,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         }
 
         let bbox = Self::calculate_bbox(&positions);
-        (positions, bbox)
+        (positions, HashMap::new(), bbox)
     }
 
     fn layout_layered_graph(
@@ -717,10 +721,10 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         edges: &[(String, String, usize)],
         node_sizes: &HashMap<String, (f32, f32)>,
         direction: FlowDirection,
-    ) -> (HashMap<String, LayoutPos>, BBox) {
+    ) -> (HashMap<String, LayoutPos>, EdgeWaypoints, BBox) {
         let mut positions: HashMap<String, LayoutPos> = HashMap::new();
         if nodes.is_empty() {
-            return (positions, BBox::default());
+            return (positions, HashMap::new(), BBox::default());
         }
 
         let order_index: HashMap<&str, usize> = nodes
@@ -729,23 +733,23 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
             .map(|(i, n)| (n.as_str(), i))
             .collect();
 
-        let mut incoming: HashMap<&str, Vec<(&str, usize)>> = HashMap::new();
-        let mut outgoing: HashMap<&str, Vec<(&str, usize)>> = HashMap::new();
+        let mut incoming_init: HashMap<&str, Vec<(&str, usize)>> = HashMap::new();
+        let mut outgoing_init: HashMap<&str, Vec<(&str, usize)>> = HashMap::new();
 
         for node in nodes {
-            incoming.entry(node.as_str()).or_default();
-            outgoing.entry(node.as_str()).or_default();
+            incoming_init.entry(node.as_str()).or_default();
+            outgoing_init.entry(node.as_str()).or_default();
         }
 
         for (from, to, min_len) in edges {
             if !order_index.contains_key(from.as_str()) || !order_index.contains_key(to.as_str()) {
                 continue;
             }
-            outgoing
+            outgoing_init
                 .entry(from.as_str())
                 .or_default()
                 .push((to.as_str(), *min_len));
-            incoming
+            incoming_init
                 .entry(to.as_str())
                 .or_default()
                 .push((from.as_str(), *min_len));
@@ -755,7 +759,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         let roots: Vec<&str> = nodes
             .iter()
             .map(String::as_str)
-            .filter(|n| incoming.get(n).map_or(true, |parents| parents.is_empty()))
+            .filter(|n| incoming_init.get(n).map_or(true, |parents| parents.is_empty()))
             .collect();
 
         let mut queue: VecDeque<&str> = VecDeque::new();
@@ -773,7 +777,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
 
         while let Some(node) = queue.pop_front() {
             let rank = *ranks.get(node).unwrap_or(&0);
-            if let Some(neighbors) = outgoing.get(node) {
+            if let Some(neighbors) = outgoing_init.get(node) {
                 for &(neighbor, min_len) in neighbors {
                     if !ranks.contains_key(neighbor) {
                         ranks.insert(neighbor, rank + min_len.max(1));
@@ -792,7 +796,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
 
                 while let Some(cur) = queue.pop_front() {
                     let rank = *ranks.get(cur).unwrap_or(&0);
-                    if let Some(neighbors) = outgoing.get(cur) {
+                    if let Some(neighbors) = outgoing_init.get(cur) {
                         for &(neighbor, min_len) in neighbors {
                             if !ranks.contains_key(neighbor) {
                                 ranks.insert(neighbor, rank + min_len.max(1));
@@ -804,15 +808,75 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
             }
         }
 
-        max_rank = ranks.values().copied().max().unwrap_or(0);
+        // --- Phase 2: Insert dummy nodes for long edges ---
+        let mut all_node_ids: Vec<String> = nodes.to_vec();
+        let mut all_sizes: HashMap<String, (f32, f32)> = node_sizes.clone();
+        let mut ranks_owned: HashMap<String, usize> = ranks.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        let mut dummy_set: HashSet<String> = HashSet::new();
+        let mut edge_dummy_chains: HashMap<(String, String), Vec<String>> = HashMap::new();
+        let mut augmented_edges: Vec<(String, String, usize)> = Vec::new();
+
+        for (from, to, min_len) in edges {
+            if !order_index.contains_key(from.as_str()) || !order_index.contains_key(to.as_str()) {
+                augmented_edges.push((from.clone(), to.clone(), *min_len));
+                continue;
+            }
+            let from_rank = ranks.get(from.as_str()).copied().unwrap_or(0);
+            let to_rank = ranks.get(to.as_str()).copied().unwrap_or(0);
+
+            if to_rank > from_rank + 1 {
+                let mut chain: Vec<String> = Vec::new();
+                let mut prev = from.clone();
+                for rank in (from_rank + 1)..to_rank {
+                    let dummy_id = format!("__d_{}_{}_{}", from, to, rank);
+                    all_node_ids.push(dummy_id.clone());
+                    all_sizes.insert(dummy_id.clone(), (0.0, 0.0));
+                    ranks_owned.insert(dummy_id.clone(), rank);
+                    dummy_set.insert(dummy_id.clone());
+                    chain.push(dummy_id.clone());
+                    augmented_edges.push((prev, dummy_id.clone(), 1));
+                    prev = dummy_id;
+                }
+                augmented_edges.push((prev, to.clone(), 1));
+                edge_dummy_chains.insert((from.clone(), to.clone()), chain);
+            } else {
+                augmented_edges.push((from.clone(), to.clone(), *min_len));
+            }
+        }
+
+        // Rebuild data structures with dummies
+        let max_rank = ranks_owned.values().copied().max().unwrap_or(0);
+        let aug_order: HashMap<&str, usize> = all_node_ids
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.as_str(), i))
+            .collect();
+
+        let mut incoming: HashMap<&str, Vec<(&str, usize)>> = HashMap::new();
+        let mut outgoing: HashMap<&str, Vec<(&str, usize)>> = HashMap::new();
+
+        for node in &all_node_ids {
+            incoming.entry(node.as_str()).or_default();
+            outgoing.entry(node.as_str()).or_default();
+        }
+
+        for (from, to, min_len) in &augmented_edges {
+            if aug_order.contains_key(from.as_str()) && aug_order.contains_key(to.as_str()) {
+                outgoing.entry(from.as_str()).or_default().push((to.as_str(), *min_len));
+                incoming.entry(to.as_str()).or_default().push((from.as_str(), *min_len));
+            }
+        }
+
         let mut rank_nodes: Vec<Vec<&str>> = vec![Vec::new(); max_rank + 1];
-        for node in nodes {
-            let rank = *ranks.get(node.as_str()).unwrap_or(&0);
-            rank_nodes[rank].push(node.as_str());
+        for node in &all_node_ids {
+            let rank = ranks_owned.get(node.as_str()).copied().unwrap_or(0);
+            if rank < rank_nodes.len() {
+                rank_nodes[rank].push(node.as_str());
+            }
         }
 
         for rank in &mut rank_nodes {
-            rank.sort_by_key(|id| order_index.get(id).copied().unwrap_or(usize::MAX));
+            rank.sort_by_key(|id| aug_order.get(id).copied().unwrap_or(usize::MAX));
         }
 
         for _ in 0..6 {
@@ -836,19 +900,19 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                             .partial_cmp(&y)
                             .unwrap_or(std::cmp::Ordering::Equal)
                             .then_with(|| {
-                                order_index
+                                aug_order
                                     .get(a)
                                     .copied()
                                     .unwrap_or(usize::MAX)
-                                    .cmp(&order_index.get(b).copied().unwrap_or(usize::MAX))
+                                    .cmp(&aug_order.get(b).copied().unwrap_or(usize::MAX))
                             }),
                         (Some(_), None) => std::cmp::Ordering::Less,
                         (None, Some(_)) => std::cmp::Ordering::Greater,
-                        (None, None) => order_index
+                        (None, None) => aug_order
                             .get(a)
                             .copied()
                             .unwrap_or(usize::MAX)
-                            .cmp(&order_index.get(b).copied().unwrap_or(usize::MAX)),
+                            .cmp(&aug_order.get(b).copied().unwrap_or(usize::MAX)),
                     }
                 });
             }
@@ -873,19 +937,19 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                             .partial_cmp(&y)
                             .unwrap_or(std::cmp::Ordering::Equal)
                             .then_with(|| {
-                                order_index
+                                aug_order
                                     .get(a)
                                     .copied()
                                     .unwrap_or(usize::MAX)
-                                    .cmp(&order_index.get(b).copied().unwrap_or(usize::MAX))
+                                    .cmp(&aug_order.get(b).copied().unwrap_or(usize::MAX))
                             }),
                         (Some(_), None) => std::cmp::Ordering::Less,
                         (None, Some(_)) => std::cmp::Ordering::Greater,
-                        (None, None) => order_index
+                        (None, None) => aug_order
                             .get(a)
                             .copied()
                             .unwrap_or(usize::MAX)
-                            .cmp(&order_index.get(b).copied().unwrap_or(usize::MAX)),
+                            .cmp(&aug_order.get(b).copied().unwrap_or(usize::MAX)),
                     }
                 });
             }
@@ -903,7 +967,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                         0.0
                     } else {
                         rank.iter()
-                            .map(|id| node_sizes.get(*id).copied().unwrap_or((100.0, 40.0)).0)
+                            .map(|id| all_sizes.get(*id).copied().unwrap_or((100.0, 40.0)).0)
                             .sum::<f32>()
                             + self.node_spacing_x * rank.len().saturating_sub(1) as f32
                     }
@@ -918,13 +982,73 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                 let mut rank_max_h: f32 = 0.0;
 
                 for node_id in rank {
-                    let (w, h) = node_sizes.get(*node_id).copied().unwrap_or((100.0, 40.0));
+                    let (w, h) = all_sizes.get(*node_id).copied().unwrap_or((100.0, 40.0));
                     positions.insert((*node_id).to_string(), LayoutPos::new(x, y, w, h));
                     x += w + self.node_spacing_x;
                     rank_max_h = rank_max_h.max(h);
                 }
 
                 y += rank_max_h + self.node_spacing_y;
+            }
+
+            // Phase 3: Coordinate refinement
+            for _ in 0..4 {
+                // Forward pass
+                for rank_idx in 1..rank_nodes.len() {
+                    for node_id in &rank_nodes[rank_idx] {
+                        if let Some(neighbors) = incoming.get(node_id) {
+                            let mut centers: Vec<f32> = neighbors
+                                .iter()
+                                .filter_map(|(n, _)| positions.get(*n))
+                                .map(|p| p.x + p.width / 2.0)
+                                .collect();
+                            if !centers.is_empty() {
+                                centers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                                let median = centers[centers.len() / 2];
+                                let w = all_sizes.get(*node_id).map(|s| s.0).unwrap_or(100.0);
+                                if let Some(pos) = positions.get_mut(*node_id) {
+                                    pos.x = median - w / 2.0;
+                                }
+                            }
+                        }
+                    }
+                    // Enforce minimum spacing
+                    let mut prev_right = f32::NEG_INFINITY;
+                    for node_id in &rank_nodes[rank_idx] {
+                        if let Some(pos) = positions.get_mut(*node_id) {
+                            pos.x = pos.x.max(prev_right + self.node_spacing_x);
+                            prev_right = pos.x + pos.width;
+                        }
+                    }
+                }
+
+                // Backward pass
+                for rank_idx in (0..rank_nodes.len().saturating_sub(1)).rev() {
+                    for node_id in &rank_nodes[rank_idx] {
+                        if let Some(neighbors) = outgoing.get(node_id) {
+                            let mut centers: Vec<f32> = neighbors
+                                .iter()
+                                .filter_map(|(n, _)| positions.get(*n))
+                                .map(|p| p.x + p.width / 2.0)
+                                .collect();
+                            if !centers.is_empty() {
+                                centers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                                let median = centers[centers.len() / 2];
+                                let w = all_sizes.get(*node_id).map(|s| s.0).unwrap_or(100.0);
+                                if let Some(pos) = positions.get_mut(*node_id) {
+                                    pos.x = median - w / 2.0;
+                                }
+                            }
+                        }
+                    }
+                    let mut prev_right = f32::NEG_INFINITY;
+                    for node_id in &rank_nodes[rank_idx] {
+                        if let Some(pos) = positions.get_mut(*node_id) {
+                            pos.x = pos.x.max(prev_right + self.node_spacing_x);
+                            prev_right = pos.x + pos.width;
+                        }
+                    }
+                }
             }
         } else {
             let rank_heights: Vec<f32> = rank_nodes
@@ -934,7 +1058,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                         0.0
                     } else {
                         rank.iter()
-                            .map(|id| node_sizes.get(*id).copied().unwrap_or((100.0, 40.0)).1)
+                            .map(|id| all_sizes.get(*id).copied().unwrap_or((100.0, 40.0)).1)
                             .sum::<f32>()
                             + self.node_spacing_y * rank.len().saturating_sub(1) as f32
                     }
@@ -949,7 +1073,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                 let mut rank_max_w: f32 = 0.0;
 
                 for node_id in rank {
-                    let (w, h) = node_sizes.get(*node_id).copied().unwrap_or((100.0, 40.0));
+                    let (w, h) = all_sizes.get(*node_id).copied().unwrap_or((100.0, 40.0));
                     positions.insert((*node_id).to_string(), LayoutPos::new(x, y, w, h));
                     y += h + self.node_spacing_y;
                     rank_max_w = rank_max_w.max(w);
@@ -957,23 +1081,149 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
 
                 x += rank_max_w + self.node_spacing_x;
             }
+
+            // Phase 3: Coordinate refinement (horizontal)
+            for _ in 0..4 {
+                // Forward pass
+                for rank_idx in 1..rank_nodes.len() {
+                    for node_id in &rank_nodes[rank_idx] {
+                        if let Some(neighbors) = incoming.get(node_id) {
+                            let mut centers: Vec<f32> = neighbors
+                                .iter()
+                                .filter_map(|(n, _)| positions.get(*n))
+                                .map(|p| p.y + p.height / 2.0)
+                                .collect();
+                            if !centers.is_empty() {
+                                centers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                                let median = centers[centers.len() / 2];
+                                let h = all_sizes.get(*node_id).map(|s| s.1).unwrap_or(40.0);
+                                if let Some(pos) = positions.get_mut(*node_id) {
+                                    pos.y = median - h / 2.0;
+                                }
+                            }
+                        }
+                    }
+                    // Enforce minimum spacing
+                    let mut prev_bottom = f32::NEG_INFINITY;
+                    for node_id in &rank_nodes[rank_idx] {
+                        if let Some(pos) = positions.get_mut(*node_id) {
+                            pos.y = pos.y.max(prev_bottom + self.node_spacing_y);
+                            prev_bottom = pos.y + pos.height;
+                        }
+                    }
+                }
+
+                // Backward pass
+                for rank_idx in (0..rank_nodes.len().saturating_sub(1)).rev() {
+                    for node_id in &rank_nodes[rank_idx] {
+                        if let Some(neighbors) = outgoing.get(node_id) {
+                            let mut centers: Vec<f32> = neighbors
+                                .iter()
+                                .filter_map(|(n, _)| positions.get(*n))
+                                .map(|p| p.y + p.height / 2.0)
+                                .collect();
+                            if !centers.is_empty() {
+                                centers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                                let median = centers[centers.len() / 2];
+                                let h = all_sizes.get(*node_id).map(|s| s.1).unwrap_or(40.0);
+                                if let Some(pos) = positions.get_mut(*node_id) {
+                                    pos.y = median - h / 2.0;
+                                }
+                            }
+                        }
+                    }
+                    let mut prev_bottom = f32::NEG_INFINITY;
+                    for node_id in &rank_nodes[rank_idx] {
+                        if let Some(pos) = positions.get_mut(*node_id) {
+                            pos.y = pos.y.max(prev_bottom + self.node_spacing_y);
+                            prev_bottom = pos.y + pos.height;
+                        }
+                    }
+                }
+            }
         }
 
+        // Extract waypoints from dummy positions
+        let mut edge_waypoints: EdgeWaypoints = HashMap::new();
+        for ((from, to), chain) in &edge_dummy_chains {
+            let waypoints: Vec<(f32, f32)> = chain
+                .iter()
+                .filter_map(|dummy_id| positions.get(dummy_id))
+                .map(|pos| pos.center())
+                .collect();
+            if !waypoints.is_empty() {
+                edge_waypoints.insert((from.clone(), to.clone()), waypoints);
+            }
+        }
+
+        // Remove dummy positions
+        for dummy_id in &dummy_set {
+            positions.remove(dummy_id);
+        }
+
+        // Normalize positions so diagram starts near origin
+        Self::normalize_positions(&mut positions, &mut edge_waypoints, base_x, base_y);
+
+        // Direction flip
         let mut bbox = Self::calculate_bbox(&positions);
 
         if matches!(direction, FlowDirection::BottomUp) {
+            let bottom = bbox.bottom();
             for pos in positions.values_mut() {
-                pos.y = bbox.bottom() - (pos.y + pos.height);
+                pos.y = bottom - (pos.y + pos.height);
+            }
+            for wps in edge_waypoints.values_mut() {
+                for wp in wps.iter_mut() {
+                    wp.1 = bottom - wp.1;
+                }
             }
             bbox = Self::calculate_bbox(&positions);
         } else if matches!(direction, FlowDirection::RightLeft) {
+            let right = bbox.right();
             for pos in positions.values_mut() {
-                pos.x = bbox.right() - (pos.x + pos.width);
+                pos.x = right - (pos.x + pos.width);
+            }
+            for wps in edge_waypoints.values_mut() {
+                for wp in wps.iter_mut() {
+                    wp.0 = right - wp.0;
+                }
             }
             bbox = Self::calculate_bbox(&positions);
         }
 
-        (positions, bbox)
+        (positions, edge_waypoints, bbox)
+    }
+
+    fn normalize_positions(
+        positions: &mut HashMap<String, LayoutPos>,
+        edge_waypoints: &mut EdgeWaypoints,
+        target_x: f32,
+        target_y: f32,
+    ) {
+        if positions.is_empty() {
+            return;
+        }
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        for pos in positions.values() {
+            min_x = min_x.min(pos.x);
+            min_y = min_y.min(pos.y);
+        }
+        let dx = target_x - min_x;
+        let dy = target_y - min_y;
+        if dx.abs() < 0.01 && dy.abs() < 0.01 {
+            return;
+        }
+        for pos in positions.values_mut() {
+            pos.x += dx;
+            pos.y += dy;
+        }
+        for wps in edge_waypoints.values_mut() {
+            for wp in wps.iter_mut() {
+                wp.0 += dx;
+                wp.1 += dy;
+            }
+        }
     }
 
     fn calculate_bbox(positions: &HashMap<String, LayoutPos>) -> BBox {

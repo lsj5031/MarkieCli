@@ -279,65 +279,136 @@ fn render_sequence_elements(
                     participant_centers.get(msg.from.as_str()),
                     participant_centers.get(msg.to.as_str()),
                 ) {
-                    let is_right = x2 > x1;
-                    let dash =
-                        if msg.msg_type == MessageType::Dotted || msg.kind == MessageKind::Reply {
+                    if (x1 - x2).abs() < 0.5 {
+                        // Self-message: draw a loop to the right
+                        let cx = *x1;
+                        let loop_w = 40.0;
+                        let loop_h = 20.0;
+                        let y_top = *message_y;
+                        let y_bot = y_top + loop_h;
+
+                        let dash = if msg.msg_type == MessageType::Dotted || msg.kind == MessageKind::Reply {
                             " stroke-dasharray=\"4,4\""
                         } else {
                             ""
                         };
 
-                    svg.push_str(&format!(
-                        r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75"{} />"#,
-                        x1, *message_y, x2, *message_y, style.edge_stroke, dash
-                    ));
-
-                    let arrow_dir = if is_right { -1.0 } else { 1.0 };
-                    let arrow_x = *x2;
-                    match msg.kind {
-                        MessageKind::Async => {
-                            let p1 = (arrow_x + arrow_dir * 10.0, *message_y - 5.0);
-                            let p2 = (arrow_x + arrow_dir * 10.0, *message_y + 5.0);
-                            svg.push_str(&format!(
-                                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="0.75" />"#,
-                                p1.0, p1.1, arrow_x, *message_y, p2.0, p2.1, style.edge_stroke
-                            ));
-                        }
-                        MessageKind::Sync => {
-                            svg.push_str(&format!(
-                                r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" />"#,
-                                arrow_x,
-                                *message_y,
-                                arrow_x + arrow_dir * 10.0,
-                                *message_y - 5.0,
-                                arrow_x + arrow_dir * 10.0,
-                                *message_y + 5.0,
-                                style.edge_stroke
-                            ));
-                        }
-                        MessageKind::Reply => {
-                            let p1 = (arrow_x + arrow_dir * 10.0, *message_y - 5.0);
-                            let p2 = (arrow_x + arrow_dir * 10.0, *message_y + 5.0);
-                            svg.push_str(&format!(
-                                r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="0.75" />"#,
-                                p1.0, p1.1, arrow_x, *message_y, p2.0, p2.1, style.edge_stroke
-                            ));
-                        }
-                    }
-
-                    if !msg.label.is_empty() {
                         svg.push_str(&format!(
-                            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
-                            (x1 + x2) / 2.0,
-                            *message_y - 8.0,
-                            style.font_family,
-                            style.font_size * 0.85,
-                            style.node_text,
-                            escape_xml(&msg.label)
+                            r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="0.75"{} />"#,
+                            cx, y_top,
+                            cx + loop_w, y_top,
+                            cx + loop_w, y_bot,
+                            cx, y_bot,
+                            style.edge_stroke, dash
                         ));
+
+                        // Arrowhead pointing left at return point
+                        svg.push_str(&format!(
+                            r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" />"#,
+                            cx, y_bot,
+                            cx + 7.0, y_bot - 3.5,
+                            cx + 7.0, y_bot + 3.5,
+                            style.edge_stroke
+                        ));
+
+                        // Label
+                        if !msg.label.is_empty() {
+                            let cleaned = crate::xml::sanitize_xml_text(&msg.label);
+                            let label_font = style.font_size * 0.82;
+                            svg.push_str(&format!(
+                                r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
+                                cx + loop_w + 4.0,
+                                y_top + loop_h / 2.0 + label_font * 0.35,
+                                style.font_family,
+                                label_font,
+                                style.edge_text,
+                                escape_xml(&cleaned)
+                            ));
+                        }
+
+                        *message_y = y_bot + 16.0;
+                    } else {
+                        let is_right = x2 > x1;
+                        let dash =
+                            if msg.msg_type == MessageType::Dotted || msg.kind == MessageKind::Reply {
+                                " stroke-dasharray=\"4,4\""
+                            } else {
+                                ""
+                            };
+
+                        svg.push_str(&format!(
+                            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75"{} />"#,
+                            x1, *message_y, x2, *message_y, style.edge_stroke, dash
+                        ));
+
+                        let arrow_dir = if is_right { -1.0 } else { 1.0 };
+                        let arrow_x = *x2;
+                        match msg.kind {
+                            MessageKind::Async => {
+                                let p1 = (arrow_x + arrow_dir * 7.0, *message_y - 3.5);
+                                let p2 = (arrow_x + arrow_dir * 7.0, *message_y + 3.5);
+                                svg.push_str(&format!(
+                                    r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="0.75" />"#,
+                                    p1.0, p1.1, arrow_x, *message_y, p2.0, p2.1, style.edge_stroke
+                                ));
+                            }
+                            MessageKind::Sync => {
+                                svg.push_str(&format!(
+                                    r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" />"#,
+                                    arrow_x,
+                                    *message_y,
+                                    arrow_x + arrow_dir * 7.0,
+                                    *message_y - 3.5,
+                                    arrow_x + arrow_dir * 7.0,
+                                    *message_y + 3.5,
+                                    style.edge_stroke
+                                ));
+                            }
+                            MessageKind::Reply => {
+                                let p1 = (arrow_x + arrow_dir * 7.0, *message_y - 3.5);
+                                let p2 = (arrow_x + arrow_dir * 7.0, *message_y + 3.5);
+                                svg.push_str(&format!(
+                                    r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="0.75" />"#,
+                                    p1.0, p1.1, arrow_x, *message_y, p2.0, p2.1, style.edge_stroke
+                                ));
+                            }
+                        }
+
+                        if !msg.label.is_empty() {
+                            let cleaned = crate::xml::sanitize_xml_text(&msg.label);
+                            let label_font = style.font_size * 0.82;
+                            let text_w = measure
+                                .measure_text(&cleaned, label_font, false, false, false, None)
+                                .0;
+                            let pill_pad = 5.0;
+                            let pill_w = text_w + pill_pad * 2.0;
+                            let pill_h = label_font + pill_pad * 1.6;
+                            let label_x = (x1 + x2) / 2.0;
+                            let label_y = *message_y - 10.0;
+
+                            svg.push_str(&format!(
+                                r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="4" fill="{}" stroke="{}" stroke-width="0.5" />"#,
+                                label_x - pill_w / 2.0,
+                                label_y - pill_h / 2.0,
+                                pill_w,
+                                pill_h,
+                                style.node_fill,
+                                style.node_stroke
+                            ));
+                            svg.push_str(&format!(
+                                r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
+                                label_x,
+                                label_y + 0.35,
+                                style.font_family,
+                                label_font,
+                                style.edge_text,
+                                escape_xml(&cleaned)
+                            ));
+                        }
+
+                        *message_y += 50.0;
                     }
                 }
-                *message_y += 50.0;
             }
             SequenceElement::Activation(activation) => {
                 if let Some(cx) = participant_centers.get(activation.participant.as_str()) {
@@ -518,7 +589,7 @@ fn render_class(
     }
 
     let mut layout = LayoutEngine::new(measure, style.font_size);
-    let (positions, bbox) = layout.layout_class(diagram);
+    let (positions, _edge_waypoints, bbox) = layout.layout_class(diagram);
 
     let mut svg = String::new();
     let padding = 20.0;
@@ -725,7 +796,7 @@ fn render_class_relation(
     from: &LayoutPos,
     to: &LayoutPos,
     style: &DiagramStyle,
-    _measure: &mut impl TextMeasure,
+    measure: &mut impl TextMeasure,
 ) -> String {
     let mut svg = String::new();
 
@@ -777,13 +848,33 @@ fn render_class_relation(
         let mx = (x1 + x2) / 2.0;
         let my = (y1 + y2) / 2.0;
         let cleaned = crate::xml::sanitize_xml_text(label);
-        let label_offset = 16.0;
+        let label_font = style.font_size * 0.8;
+        let label_offset = 18.0;
+        let label_x = mx + normal_x * label_offset;
+        let label_y = my + normal_y * label_offset;
+        let text_w = measure
+            .measure_text(&cleaned, label_font, false, false, false, None)
+            .0;
+        let pill_pad = 5.0;
+        let pill_w = text_w + pill_pad * 2.0;
+        let pill_h = label_font + pill_pad * 1.6;
+
+        svg.push_str(&format!(
+            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="4" fill="{}" stroke="{}" stroke-width="0.5" />"#,
+            label_x - pill_w / 2.0,
+            label_y - pill_h / 2.0,
+            pill_w,
+            pill_h,
+            style.node_fill,
+            style.node_stroke
+        ));
+
         svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
-            mx + normal_x * label_offset,
-            my + normal_y * label_offset,
+            label_x,
+            label_y + 0.35,
             style.font_family,
-            style.font_size * 0.8,
+            label_font,
             style.edge_text,
             escape_xml(&cleaned)
         ));
@@ -956,7 +1047,7 @@ fn render_state(
     }
 
     let mut layout = LayoutEngine::new(measure, style.font_size);
-    let (positions, bbox) = layout.layout_state(diagram);
+    let (positions, _edge_waypoints, bbox) = layout.layout_state(diagram);
 
     let mut svg = String::new();
     let padding = 20.0;
@@ -1942,6 +2033,16 @@ fn render_state_transition(
         track_point!(best_rect.x + best_rect.w, best_rect.y + best_rect.h);
 
         svg.push_str(&format!(
+            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="3" fill="{}" stroke="{}" stroke-width="0.5" />"#,
+            best_rect.x,
+            best_rect.y,
+            best_rect.w,
+            best_rect.h,
+            style.node_fill,
+            style.node_stroke
+        ));
+
+        svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
             best_x,
             best_y,
@@ -1983,7 +2084,7 @@ fn render_er(
     }
 
     let mut layout = LayoutEngine::new(measure, style.font_size);
-    let (positions, bbox) = layout.layout_er(diagram);
+    let (positions, _edge_waypoints, bbox) = layout.layout_er(diagram);
 
     let mut svg = String::new();
     let padding = 20.0;
@@ -2224,6 +2325,16 @@ fn render_er_relationship(
         }
 
         occupied_labels.push(best_rect);
+
+        svg.push_str(&format!(
+            r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="3" fill="{}" stroke="{}" stroke-width="0.5" />"#,
+            best_rect.x,
+            best_rect.y,
+            best_rect.w,
+            best_rect.h,
+            style.node_fill,
+            style.node_stroke
+        ));
 
         svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,

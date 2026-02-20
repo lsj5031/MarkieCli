@@ -17,7 +17,7 @@ pub fn render_flowchart(
     }
 
     let mut layout = LayoutEngine::new(measure, style.font_size);
-    let (positions, bbox) = layout.layout_flowchart(flowchart);
+    let (positions, edge_waypoints, bbox) = layout.layout_flowchart(flowchart);
 
     let mut svg = String::new();
     let padding = 20.0;
@@ -35,6 +35,10 @@ pub fn render_flowchart(
         if let (Some(from), Some(to), Some(fn_), Some(tn)) =
             (from_pos, to_pos, from_node, to_node)
         {
+            let waypoints = edge_waypoints
+                .get(&(edge.from.clone(), edge.to.clone()))
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
             svg.push_str(&render_edge(
                 edge,
                 fn_,
@@ -43,6 +47,7 @@ pub fn render_flowchart(
                 to,
                 style,
                 &flowchart.direction,
+                waypoints,
                 measure,
             ));
         }
@@ -68,7 +73,8 @@ pub fn render_flowchart(
 
 fn render_node(label: &str, shape: &NodeShape, pos: &LayoutPos, style: &DiagramStyle) -> String {
     let mut svg = String::new();
-    let escaped_label = escape_xml(label);
+    let label = label.replace("<br/>", "\n").replace("<br>", "\n").replace("<br />", "\n");
+    let escaped_label = escape_xml(&label);
 
     match shape {
         NodeShape::Rect => {
@@ -247,68 +253,19 @@ fn render_node(label: &str, shape: &NodeShape, pos: &LayoutPos, style: &DiagramS
     svg
 }
 
-/// Clip a point from center of a node to its shape boundary.
-fn clip_to_shape(
-    node: &super::types::FlowchartNode,
-    pos: &LayoutPos,
-    target_x: f32,
-    target_y: f32,
-) -> (f32, f32) {
-    let cx = pos.x + pos.width / 2.0;
-    let cy = pos.y + pos.height / 2.0;
-    let dx = target_x - cx;
-    let dy = target_y - cy;
-    if dx.abs() < 0.001 && dy.abs() < 0.001 {
-        return (cx, cy);
-    }
-
-    match node.shape {
-        NodeShape::Circle | NodeShape::DoubleCircle => {
-            let r = pos.width.min(pos.height) / 2.0;
-            let dist = (dx * dx + dy * dy).sqrt();
-            (cx + dx / dist * r, cy + dy / dist * r)
-        }
-        NodeShape::Rhombus => {
-            let hw = pos.width / 2.0;
-            let hh = pos.height / 2.0;
-            // Diamond boundary: |dx|/hw + |dy|/hh = 1
-            let t = 1.0 / (dx.abs() / hw + dy.abs() / hh);
-            (cx + dx * t, cy + dy * t)
-        }
-        _ => {
-            // Rectangle boundary clipping
-            let hw = pos.width / 2.0;
-            let hh = pos.height / 2.0;
-            let scale_x = if dx.abs() > 0.001 { hw / dx.abs() } else { f32::MAX };
-            let scale_y = if dy.abs() > 0.001 { hh / dy.abs() } else { f32::MAX };
-            let scale = scale_x.min(scale_y);
-            (cx + dx * scale, cy + dy * scale)
-        }
-    }
-}
-
 fn render_edge(
     edge: &super::types::FlowchartEdge,
-    from_node: &super::types::FlowchartNode,
+    _from_node: &super::types::FlowchartNode,
     from: &LayoutPos,
-    to_node: &super::types::FlowchartNode,
+    _to_node: &super::types::FlowchartNode,
     to: &LayoutPos,
     style: &DiagramStyle,
     direction: &FlowDirection,
+    waypoints: &[(f32, f32)],
     measure: &mut impl TextMeasure,
 ) -> String {
     let mut svg = String::new();
-
-    let is_vertical = matches!(direction, FlowDirection::TopDown | FlowDirection::BottomUp);
-
-    let from_cx = from.x + from.width / 2.0;
-    let from_cy = from.y + from.height / 2.0;
-    let to_cx = to.x + to.width / 2.0;
-    let to_cy = to.y + to.height / 2.0;
-
-    // Clip endpoints to actual shape boundaries
-    let (x1, y1) = clip_to_shape(from_node, from, to_cx, to_cy);
-    let (x2, y2) = clip_to_shape(to_node, to, from_cx, from_cy);
+    let vertical = matches!(direction, FlowDirection::TopDown | FlowDirection::BottomUp);
 
     let (dash_attr, stroke_width) = match edge.style {
         EdgeStyle::Solid => ("", 0.75),
@@ -316,85 +273,126 @@ fn render_edge(
         EdgeStyle::Thick => ("", 1.5),
     };
 
-    let head_angle;
-    let tail_angle;
+    let from_cx = from.x + from.width / 2.0;
+    let from_cy = from.y + from.height / 2.0;
+    let to_cx = to.x + to.width / 2.0;
+    let to_cy = to.y + to.height / 2.0;
 
-    // Orthogonal routing with Z-shaped (3-segment) paths to avoid crossing nodes
-    let is_aligned = if is_vertical {
-        (from_cx - to_cx).abs() < 1.0
+    // Determine exit and entry ports based on flow direction and relative position
+    let (exit_x, exit_y, enter_x, enter_y) = if vertical {
+        let going_down = from_cy <= to_cy;
+        let ey = if going_down { from.bottom() } else { from.y };
+        let ny = if going_down { to.y } else { to.bottom() };
+        // Handle same-rank (same y) case: route horizontally
+        if (from_cy - to_cy).abs() < 1.0 {
+            let going_right = from_cx < to_cx;
+            let ex = if going_right { from.right() } else { from.x };
+            let nx = if going_right { to.x } else { to.right() };
+            (ex, from_cy, nx, to_cy)
+        } else {
+            (from_cx, ey, to_cx, ny)
+        }
     } else {
-        (from_cy - to_cy).abs() < 1.0
+        let going_right = from_cx <= to_cx;
+        let ex = if going_right { from.right() } else { from.x };
+        let nx = if going_right { to.x } else { to.right() };
+        // Handle same-column case: route vertically
+        if (from_cx - to_cx).abs() < 1.0 {
+            let going_down = from_cy < to_cy;
+            let ey = if going_down { from.bottom() } else { from.y };
+            let ny = if going_down { to.y } else { to.bottom() };
+            (from_cx, ey, to_cx, ny)
+        } else {
+            (ex, from_cy, nx, to_cy)
+        }
     };
 
-    // Label anchor: where to place the label pill
-    let mut label_x = (x1 + x2) / 2.0;
-    let mut label_y = (y1 + y2) / 2.0;
+    // Build polyline points through waypoints
+    let mut all_x = vec![exit_x];
+    let mut all_y = vec![exit_y];
+    for &(wx, wy) in waypoints {
+        all_x.push(wx);
+        all_y.push(wy);
+    }
+    all_x.push(enter_x);
+    all_y.push(enter_y);
 
-    if is_aligned {
-        // Straight line
-        let edge_angle = (y2 - y1).atan2(x2 - x1);
-        head_angle = edge_angle;
-        tail_angle = edge_angle + std::f32::consts::PI;
-        svg.push_str(&format!(
-            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="{:.2}"{} />"#,
-            x1, y1, x2, y2, style.edge_stroke, stroke_width, dash_attr
-        ));
-    } else if is_vertical {
-        // Z-shaped: vertical → horizontal → vertical
-        // Bend at midpoint Y between source bottom and target top
-        let mid_y = (y1 + y2) / 2.0;
-        head_angle = std::f32::consts::FRAC_PI_2; // entering from top
-        tail_angle = -std::f32::consts::FRAC_PI_2; // leaving from bottom
+    let mut points: Vec<(f32, f32)> = Vec::new();
+    points.push((all_x[0], all_y[0]));
 
-        svg.push_str(&format!(
-            r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="{:.2}"{} />"#,
-            x1, y1, x1, mid_y, x2, mid_y, x2, y2,
-            style.edge_stroke, stroke_width, dash_attr
-        ));
+    for i in 0..all_x.len() - 1 {
+        let x1 = all_x[i];
+        let y1 = all_y[i];
+        let x2 = all_x[i + 1];
+        let y2 = all_y[i + 1];
 
-        // Place label on the horizontal segment
-        label_x = (x1 + x2) / 2.0;
-        label_y = mid_y;
+        if vertical || (from_cy - to_cy).abs() < 1.0 && waypoints.is_empty() {
+            // Vertical primary axis (or horizontal same-rank): dogleg with vertical-first
+            if (x1 - x2).abs() > 0.5 {
+                let mid_y = (y1 + y2) / 2.0;
+                points.push((x1, mid_y));
+                points.push((x2, mid_y));
+            }
+        } else {
+            // Horizontal primary axis: dogleg with horizontal-first
+            if (y1 - y2).abs() > 0.5 {
+                let mid_x = (x1 + x2) / 2.0;
+                points.push((mid_x, y1));
+                points.push((mid_x, y2));
+            }
+        }
+        points.push((x2, y2));
+    }
+
+    // Render polyline
+    let points_str: String = points
+        .iter()
+        .map(|(x, y)| format!("{:.2},{:.2}", x, y))
+        .collect::<Vec<_>>()
+        .join(" ");
+    svg.push_str(&format!(
+        r#"<polyline points="{}" fill="none" stroke="{}" stroke-width="{:.2}" stroke-linecap="round" stroke-linejoin="round"{} />"#,
+        points_str, style.edge_stroke, stroke_width, dash_attr
+    ));
+
+    // Arrow head aligned to final segment
+    let head_angle = if points.len() >= 2 {
+        let last = points[points.len() - 1];
+        let prev = points[points.len() - 2];
+        (last.1 - prev.1).atan2(last.0 - prev.0)
     } else {
-        // Z-shaped: horizontal → vertical → horizontal
-        let mid_x = (x1 + x2) / 2.0;
-        head_angle = if x2 > x1 { 0.0 } else { std::f32::consts::PI };
-        tail_angle = head_angle + std::f32::consts::PI;
+        (enter_y - exit_y).atan2(enter_x - exit_x)
+    };
 
-        svg.push_str(&format!(
-            r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="{:.2}"{} />"#,
-            x1, y1, mid_x, y1, mid_x, y2, x2, y2,
-            style.edge_stroke, stroke_width, dash_attr
-        ));
-
-        // Place label on the vertical segment
-        label_x = mid_x;
-        label_y = (y1 + y2) / 2.0;
-    }
-
-    // Arrow head
     if edge.arrow_head != ArrowType::None {
-        svg.push_str(&render_arrow_head(
-            x2,
-            y2,
-            head_angle,
-            &edge.arrow_head,
-            style,
-        ));
+        svg.push_str(&render_arrow_head(enter_x, enter_y, head_angle, &edge.arrow_head, style));
     }
 
-    // Arrow tail (for bidirectional)
+    // Arrow tail
     if edge.arrow_tail != ArrowType::None {
-        svg.push_str(&render_arrow_head(
-            x1,
-            y1,
-            tail_angle,
-            &edge.arrow_tail,
-            style,
-        ));
+        let tail_angle = if points.len() >= 2 {
+            let first = points[0];
+            let second = points[1];
+            (first.1 - second.1).atan2(first.0 - second.0)
+        } else {
+            head_angle + std::f32::consts::PI
+        };
+        svg.push_str(&render_arrow_head(exit_x, exit_y, tail_angle, &edge.arrow_tail, style));
     }
 
-    // Edge label with pill background
+    // Label on middle segment
+    let mid = points.len() / 2;
+    let label_x = if points.len() >= 2 {
+        (points[mid.saturating_sub(1)].0 + points[mid.min(points.len() - 1)].0) / 2.0
+    } else {
+        (exit_x + enter_x) / 2.0
+    };
+    let label_y = if points.len() >= 2 {
+        (points[mid.saturating_sub(1)].1 + points[mid.min(points.len() - 1)].1) / 2.0
+    } else {
+        (exit_y + enter_y) / 2.0
+    };
+
     if let Some(ref label) = edge.label {
         let cleaned = crate::xml::sanitize_xml_text(label);
         let label_font_size = style.font_size * 0.85;
@@ -507,16 +505,17 @@ mod tests {
             &to,
             &style,
             &FlowDirection::LeftRight,
+            &[],
             &mut measure,
         );
 
         let pts = first_polygon_points(&svg);
         assert_eq!(pts.len(), 3);
 
-        // With shape clipping: to center=(250,120), from center=(50,20).
-        // Rect clip hits top edge at (210, 100).
-        assert!((pts[0].0 - 210.0).abs() < 1.0, "tip x={}", pts[0].0);
-        assert!((pts[0].1 - 100.0).abs() < 1.0, "tip y={}", pts[0].1);
+        // Orthogonal routing: exit right of from=(100,20), enter left of to=(200,120)
+        // Arrow tip at entry point (200, 120), pointing right (angle=0)
+        assert!((pts[0].0 - 200.0).abs() < 1.0, "tip x={}", pts[0].0);
+        assert!((pts[0].1 - 120.0).abs() < 1.0, "tip y={}", pts[0].1);
     }
 }
 
@@ -604,7 +603,7 @@ fn render_subgraph(
     }
 
     let content_bbox = BBox::new(min_x, min_y, max_right - min_x, max_bottom - min_y);
-    let padded_bbox = content_bbox.with_padding(15.0);
+    let padded_bbox = content_bbox.with_padding(20.0);
     let min_x = padded_bbox.x;
     let min_y = padded_bbox.y - 20.0;
     let width = padded_bbox.width;

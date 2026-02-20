@@ -78,11 +78,21 @@ fn parse_flowchart(input: &str) -> Result<Flowchart, String> {
 
         // Subgraph start
         if line.starts_with("subgraph ") {
-            let title = line.strip_prefix("subgraph ").unwrap_or("").trim();
+            let raw_title = line.strip_prefix("subgraph ").unwrap_or("").trim();
+            let title = if let Some(bracket_pos) = raw_title.find("[\"") {
+                let after = &raw_title[bracket_pos + 2..];
+                if let Some(end) = after.find("\"]") {
+                    after[..end].to_string()
+                } else {
+                    raw_title.to_string()
+                }
+            } else {
+                raw_title.to_string()
+            };
             let id = format!("subgraph_{}", subgraphs.len());
             current_subgraph = Some(Subgraph {
                 id: id.clone(),
-                title: title.to_string(),
+                title,
                 nodes: Vec::new(),
             });
             continue;
@@ -116,6 +126,16 @@ fn parse_flowchart(input: &str) -> Result<Flowchart, String> {
                     shape: to_info.2,
                 });
                 node_labels.insert(to_info.0.clone(), to_info.1.clone());
+            }
+
+            // Add edge endpoint nodes to current subgraph if inside one
+            if let Some(ref mut sg) = current_subgraph {
+                if !sg.nodes.contains(&from_info.0) {
+                    sg.nodes.push(from_info.0.clone());
+                }
+                if !sg.nodes.contains(&to_info.0) {
+                    sg.nodes.push(to_info.0.clone());
+                }
             }
 
             edges.push(FlowchartEdge {
@@ -354,7 +374,7 @@ fn extract_node_info(part: &str) -> Option<(String, String, NodeShape)> {
             let after_open = &part[pos + open.len()..];
             if let Some(end_pos) = after_open.find(close) {
                 let id = part[..pos].trim().to_string();
-                let label = after_open[..end_pos].trim().to_string();
+                let label = normalize_flowchart_label(&after_open[..end_pos]);
 
                 if !id.is_empty() {
                     return Some((id, label, shape.clone()));
@@ -394,7 +414,7 @@ fn parse_node_definition(line: &str) -> Option<(String, String, NodeShape)> {
             let after_open = &line[pos + open.len()..];
             if let Some(end_pos) = after_open.find(close) {
                 let id = line[..pos].trim().to_string();
-                let label = after_open[..end_pos].trim().to_string();
+                let label = normalize_flowchart_label(&after_open[..end_pos]);
 
                 if !id.is_empty() {
                     return Some((id, label, shape.clone()));
@@ -404,6 +424,26 @@ fn parse_node_definition(line: &str) -> Option<(String, String, NodeShape)> {
     }
 
     None
+}
+
+fn normalize_flowchart_label(raw: &str) -> String {
+    let mut label = raw.trim().to_string();
+
+    // Mermaid line-break tags should become actual newlines before layout/measurement.
+    label = label
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n")
+        .replace("<br>", "\n");
+
+    // Labels like A["Text"] should render as Text, not "Text".
+    if let Some(inner) = label
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+    {
+        label = inner.trim().to_string();
+    }
+
+    label
 }
 
 // ============================================
@@ -1295,6 +1335,20 @@ fn parse_er(input: &str) -> Result<ErDiagram, String> {
         });
     }
 
+    // Auto-create entities referenced in relationships but not explicitly declared
+    let existing: std::collections::HashSet<String> =
+        entities.iter().map(|e| e.name.clone()).collect();
+    for rel in &relationships {
+        for name in [&rel.from, &rel.to] {
+            if !existing.contains(name) {
+                entities.push(ErEntity {
+                    name: name.clone(),
+                    attributes: Vec::new(),
+                });
+            }
+        }
+    }
+
     Ok(ErDiagram {
         entities,
         relationships,
@@ -1303,6 +1357,7 @@ fn parse_er(input: &str) -> Result<ErDiagram, String> {
 
 fn parse_er_relationship(line: &str) -> Option<ErRelationship> {
     let patterns = [
+        // Solid line patterns (--)
         (
             "||--||",
             ErCardinality::ExactlyOne,
@@ -1344,6 +1399,80 @@ fn parse_er_relationship(line: &str) -> Option<ErRelationship> {
             ErCardinality::ExactlyOne,
         ),
         ("|o--|{", ErCardinality::ZeroOrOne, ErCardinality::OneOrMore),
+        // Dotted line patterns (..)
+        (
+            "||..||",
+            ErCardinality::ExactlyOne,
+            ErCardinality::ExactlyOne,
+        ),
+        (
+            "||..o{",
+            ErCardinality::ExactlyOne,
+            ErCardinality::ZeroOrMore,
+        ),
+        (
+            "||..|{",
+            ErCardinality::ExactlyOne,
+            ErCardinality::OneOrMore,
+        ),
+        (
+            "}o..o{",
+            ErCardinality::ZeroOrMore,
+            ErCardinality::ZeroOrMore,
+        ),
+        (
+            "}o..||",
+            ErCardinality::ZeroOrMore,
+            ErCardinality::ExactlyOne,
+        ),
+        (
+            "}o..|{",
+            ErCardinality::ZeroOrMore,
+            ErCardinality::OneOrMore,
+        ),
+        (
+            "|o..o{",
+            ErCardinality::ZeroOrOne,
+            ErCardinality::ZeroOrMore,
+        ),
+        (
+            "|o..||",
+            ErCardinality::ZeroOrOne,
+            ErCardinality::ExactlyOne,
+        ),
+        ("|o..|{", ErCardinality::ZeroOrOne, ErCardinality::OneOrMore),
+        // }| patterns (OneOrMore from-side) - solid
+        (
+            "}|--||",
+            ErCardinality::OneOrMore,
+            ErCardinality::ExactlyOne,
+        ),
+        (
+            "}|--o{",
+            ErCardinality::OneOrMore,
+            ErCardinality::ZeroOrMore,
+        ),
+        (
+            "}|--|{",
+            ErCardinality::OneOrMore,
+            ErCardinality::OneOrMore,
+        ),
+        // }| patterns (OneOrMore from-side) - dotted
+        (
+            "}|..||",
+            ErCardinality::OneOrMore,
+            ErCardinality::ExactlyOne,
+        ),
+        (
+            "}|..o{",
+            ErCardinality::OneOrMore,
+            ErCardinality::ZeroOrMore,
+        ),
+        (
+            "}|..|{",
+            ErCardinality::OneOrMore,
+            ErCardinality::OneOrMore,
+        ),
     ];
 
     for (pattern, from_card, to_card) in &patterns {
@@ -1521,6 +1650,32 @@ flowchart LR
         assert_eq!(id, "D");
         assert_eq!(label, "D");
         assert_eq!(shape, NodeShape::RoundedRect);
+    }
+
+    #[test]
+    fn test_extract_node_info_normalizes_quoted_labels_and_breaks() {
+        let (id, label, shape) = extract_node_info(r#"A["Build<br/>Render"]"#).unwrap();
+        assert_eq!(id, "A");
+        assert_eq!(label, "Build\nRender");
+        assert_eq!(shape, NodeShape::Rect);
+    }
+
+    #[test]
+    fn test_parse_flowchart_normalizes_quoted_labels() {
+        let input = r#"
+flowchart TD
+    A["Start Here"] --> B["Ship<br>Now"]
+"#;
+        let result = parse_mermaid(input).unwrap();
+
+        if let MermaidDiagram::Flowchart(fc) = result {
+            let node_a = fc.nodes.iter().find(|n| n.id == "A").unwrap();
+            let node_b = fc.nodes.iter().find(|n| n.id == "B").unwrap();
+            assert_eq!(node_a.label, "Start Here");
+            assert_eq!(node_b.label, "Ship\nNow");
+        } else {
+            panic!("Expected flowchart");
+        }
     }
 
     #[test]
