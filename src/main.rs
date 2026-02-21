@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use markie::{fonts, renderer, theme};
 use resvg::usvg;
 use std::path::{Path, PathBuf};
@@ -11,65 +11,112 @@ use tiny_skia::{Pixmap, Transform};
 #[command(about = "Render Markdown to beautiful SVG, PNG or PDF images", long_about = None)]
 struct Args {
     /// Input markdown file (use "-" for stdin)
-    #[arg(value_name = "INPUT")]
-    input: PathBuf,
+    #[arg(value_name = "INPUT", required_unless_present_any = ["completions", "list_themes"])]
+    input: Option<PathBuf>,
 
-    /// Output file path (extension determines format: .svg, .png or .pdf)
+    /// Output file path (extension determines format: .svg, .png or .pdf) [default: INPUT.png]
     #[arg(short, long, value_name = "OUTPUT")]
-    output: PathBuf,
+    output: Option<PathBuf>,
 
-    /// Path to Alacritty theme file (YAML or TOML)
+    /// Theme name or path to Alacritty theme file (YAML or TOML)
     #[arg(short, long, value_name = "THEME")]
-    theme: Option<PathBuf>,
+    theme: Option<String>,
+
+    /// List available built-in themes and exit
+    #[arg(long)]
+    list_themes: bool,
 
     /// Image width in pixels
-    #[arg(short, long, default_value_t = 800.0)]
+    #[arg(short, long, default_value_t = 1200.0)]
     width: f32,
 
     /// Raster scale multiplier for PNG output (e.g. 2.0 for sharper output)
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = 2.0)]
     png_scale: f32,
+
+    /// Generate shell completions and exit
+    #[arg(long, value_name = "SHELL")]
+    completions: Option<clap_complete::Shell>,
 }
 
-fn main() -> Result<(), String> {
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), String> {
     let args = Args::parse();
 
-    // Load theme
-    let theme = if let Some(ref theme_path) = args.theme {
-        if theme_path.exists() && theme_path.is_file() {
-            let content = std::fs::read_to_string(theme_path)
-                .map_err(|e| format!("Failed to read theme file: {}", e))?;
+    if let Some(shell) = args.completions {
+        let mut cmd = Args::command();
+        clap_complete::generate(shell, &mut cmd, "markie", &mut std::io::stdout());
+        return Ok(());
+    }
 
-            // Try TOML first (since Alacritty is moving to TOML), then YAML
-            if let Ok(theme) = theme::Theme::from_alacritty_toml(&content) {
-                theme
-            } else if let Ok(theme) = theme::Theme::from_alacritty_yaml(&content) {
-                theme
-            } else {
-                return Err("Failed to parse theme file as TOML or YAML".to_string());
-            }
+    if args.list_themes {
+        for name in theme::Theme::list_builtins() {
+            println!("{}", name);
+        }
+        return Ok(());
+    }
+
+    let input = args
+        .input
+        .expect("input is required unless --completions or --list-themes is used");
+    let output = args.output.unwrap_or_else(|| {
+        if input.to_str() == Some("-") {
+            PathBuf::from("output.png")
         } else {
-            return Err(format!("Theme file not found: {}", theme_path.display()));
+            input.with_extension("png")
+        }
+    });
+
+    // Load theme: try built-in name first, then file path
+    let theme = if let Some(ref theme_arg) = args.theme {
+        if let Ok(builtin) = theme::Theme::from_builtin(theme_arg) {
+            builtin
+        } else {
+            let theme_path = Path::new(theme_arg);
+            if theme_path.exists() && theme_path.is_file() {
+                let content = std::fs::read_to_string(theme_path)
+                    .map_err(|e| format!("Failed to read theme file: {}", e))?;
+
+                // Try TOML first (since Alacritty is moving to TOML), then YAML
+                if let Ok(theme) = theme::Theme::from_alacritty_toml(&content) {
+                    theme
+                } else if let Ok(theme) = theme::Theme::from_alacritty_yaml(&content) {
+                    theme
+                } else {
+                    return Err("Failed to parse theme file as TOML or YAML".to_string());
+                }
+            } else {
+                return Err(format!(
+                    "Unknown theme '{}'. Use --list-themes to see built-in themes, or provide a valid file path.",
+                    theme_arg
+                ));
+            }
         }
     } else {
         theme::Theme::default()
     };
 
     // Read markdown input
-    let markdown = if args.input.to_str() == Some("-") {
+    let markdown = if input.to_str() == Some("-") {
         let mut buffer = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer)
             .map_err(|e| format!("Failed to read from stdin: {}", e))?;
         buffer
     } else {
-        std::fs::read_to_string(&args.input)
+        std::fs::read_to_string(&input)
             .map_err(|e| format!("Failed to read input file: {}", e))?
     };
 
-    let base_path = if args.input.to_str() == Some("-") {
+    let base_path = if input.to_str() == Some("-") {
         None
     } else {
-        args.input.parent().map(|path| path.to_path_buf())
+        input.parent().map(|path| path.to_path_buf())
     };
 
     // Render to SVG
@@ -79,8 +126,7 @@ fn main() -> Result<(), String> {
     let svg = renderer.render(&markdown)?;
 
     // Determine output format and save
-    let output_ext = args
-        .output
+    let output_ext = output
         .extension()
         .and_then(|e| e.to_str())
         .ok_or("Output file has no extension")?
@@ -88,20 +134,20 @@ fn main() -> Result<(), String> {
 
     match output_ext.as_str() {
         "svg" => {
-            std::fs::write(&args.output, svg).map_err(|e| format!("Failed to write SVG: {}", e))?;
-            eprintln!("SVG saved to: {}", args.output.display());
+            std::fs::write(&output, svg).map_err(|e| format!("Failed to write SVG: {}", e))?;
+            eprintln!("SVG saved to: {}", output.display());
         }
         "png" => {
             let png_data = svg_to_png(&svg, args.png_scale)?;
-            std::fs::write(&args.output, png_data)
+            std::fs::write(&output, png_data)
                 .map_err(|e| format!("Failed to write PNG: {}", e))?;
-            eprintln!("PNG saved to: {}", args.output.display());
+            eprintln!("PNG saved to: {}", output.display());
         }
         "pdf" => {
             let pdf_data = svg_to_pdf(&svg)?;
-            std::fs::write(&args.output, pdf_data)
+            std::fs::write(&output, pdf_data)
                 .map_err(|e| format!("Failed to write PDF: {}", e))?;
-            eprintln!("PDF saved to: {}", args.output.display());
+            eprintln!("PDF saved to: {}", output.display());
         }
         _ => {
             return Err(format!(

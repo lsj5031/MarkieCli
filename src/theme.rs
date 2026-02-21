@@ -9,6 +9,21 @@ const GITHUB_LIGHT_CODE_TEXT: &str = "#24292f";
 const GITHUB_LIGHT_QUOTE_BORDER: &str = "#d0d7de";
 const GITHUB_LIGHT_QUOTE_TEXT: &str = "#57606a";
 
+const BUILTIN_THEMES: &[(&str, &str)] = &[
+    ("catppuccin_latte", include_str!("../themes/catppuccin_latte.toml")),
+    ("catppuccin_mocha", include_str!("../themes/catppuccin_mocha.toml")),
+    ("dracula", include_str!("../themes/dracula.toml")),
+    ("github_dark", include_str!("../themes/github_dark.toml")),
+    ("github_light", include_str!("../themes/github_light.toml")),
+    ("gruvbox_dark", include_str!("../themes/gruvbox_dark.toml")),
+    ("gruvbox_light", include_str!("../themes/gruvbox_light.toml")),
+    ("monokai_pro", include_str!("../themes/monokai_pro.toml")),
+    ("nord", include_str!("../themes/nord.toml")),
+    ("solarized_dark", include_str!("../themes/solarized_dark.toml")),
+    ("solarized_light", include_str!("../themes/solarized_light.toml")),
+    ("tokyo_night", include_str!("../themes/tokyo_night.toml")),
+];
+
 const FONT_SIZE_BASE: f32 = 16.0;
 const FONT_SIZE_CODE: f32 = 13.0;
 const LINE_HEIGHT: f32 = 1.6;
@@ -112,7 +127,7 @@ fn default_code_radius() -> f32 {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::github_light()
+        Self::from_builtin("solarized_light").expect("built-in solarized_light theme must parse")
     }
 }
 
@@ -168,6 +183,26 @@ impl Theme {
         }
     }
 
+    pub fn from_builtin(name: &str) -> Result<Self, String> {
+        let normalized = name.trim().to_ascii_lowercase().replace('-', "_");
+        let content = BUILTIN_THEMES
+            .iter()
+            .find(|(n, _)| *n == normalized)
+            .map(|(_, c)| *c)
+            .ok_or_else(|| {
+                format!(
+                    "Unknown built-in theme '{}'. Available: {}",
+                    name,
+                    Self::list_builtins().join(", ")
+                )
+            })?;
+        Self::from_alacritty_toml(content)
+    }
+
+    pub fn list_builtins() -> Vec<&'static str> {
+        BUILTIN_THEMES.iter().map(|(n, _)| *n).collect()
+    }
+
     pub fn from_alacritty_yaml(content: &str) -> Result<Self, String> {
         let alacritty: AlacrittyTheme = serde_yaml::from_str(content)
             .map_err(|e| format!("Failed to parse Alacritty YAML: {}", e))?;
@@ -206,5 +241,19 @@ impl Theme {
             code_padding_y: CODE_PADDING_Y,
             code_radius: CODE_RADIUS,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Theme;
+
+    #[test]
+    fn from_builtin_accepts_hyphenated_and_case_insensitive_names() {
+        let underscore = Theme::from_builtin("solarized_light").expect("underscore variant");
+        let hyphen = Theme::from_builtin("Solarized-Light").expect("hyphen variant");
+
+        assert_eq!(underscore.background_color, hyphen.background_color);
+        assert_eq!(underscore.text_color, hyphen.text_color);
     }
 }

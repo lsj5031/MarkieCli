@@ -14,8 +14,11 @@ A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents in
 - **Improved Mermaid Layout**: Sparser node spacing and collision-aware edge label placement
 - **Enhanced Math Rendering**: LaTeX-style math including nth roots, binomials, and matrices
 - **Customizable Themes**: Supports Alacritty theme files (`.yaml`/`.toml`)
+- **12 Built-in Themes**: Dracula, Nord, Tokyo Night, Catppuccin, Gruvbox, and more — or use any Alacritty theme file
+- **Smart Defaults**: `markie input.md` → `input.png` at 2× retina scale, no flags needed
+- **Shell Completions**: `--completions bash/zsh/fish/powershell/elvish`
 - **Flexible Input**: Read from file or stdin
-- **Adjustable Width**: Control output image width
+- **Adjustable Width**: Control output image width (default: 1200px)
 - **Font Support**: Includes local font directory, system fallback, and global font caching
 - **XML-Safe Output**: Invalid XML control characters are stripped during rendering
 
@@ -109,38 +112,34 @@ $$
 
 ## Installation
 
+### From crates.io
+
+```bash
+cargo install markie
+```
+
 ### From source
 
 ```bash
 cargo install --path .
 ```
 
+### Prebuilt binaries
+
+Download from [GitHub Releases](https://github.com/lsj5031/markiecli/releases) for Linux (x86_64, aarch64), macOS (x86_64, Apple Silicon), and Windows.
+
 ## Usage
 
 ### Basic usage
 
-Render a Markdown file to SVG:
-
 ```bash
+# Render to PNG (default output format, 2× retina scale)
+markie input.md
+
+# Explicit output format
 markie input.md -o output.svg
-```
-
-Render to PNG:
-
-```bash
 markie input.md -o output.png
-```
-
-Render to PDF:
-
-```bash
 markie input.md -o output.pdf
-```
-
-Render a sharper PNG (2x raster scale):
-
-```bash
-markie input.md -o output.png --png-scale 2
 ```
 
 ### From stdin
@@ -155,19 +154,23 @@ cat README.md | markie - -o output.svg
 markie input.md -o output.png --width 1200
 ```
 
-### With Alacritty theme (YAML or TOML)
+### Built-in themes
 
-You can use any Alacritty theme directly (both `.yaml` and `.toml` formats are supported).
-A great collection of themes can be found at [alacritty-theme](https://github.com/alacritty/alacritty-theme).
+12 built-in themes from [alacritty-theme](https://github.com/alacritty/alacritty-theme) are bundled:
 
 ```bash
-markie input.md -o output.svg --theme tests/fixtures/solarized_light.toml
+markie input.md --theme dracula
+markie input.md --theme nord
+markie input.md --theme tokyo_night
+markie --list-themes   # Show all available themes
 ```
 
-Combine theme + high-res PNG:
+Available: `catppuccin_latte`, `catppuccin_mocha`, `dracula`, `github_dark`, `github_light`, `gruvbox_dark`, `gruvbox_light`, `monokai_pro`, `nord`, `solarized_dark`, `solarized_light` (default), `tokyo_night`
+
+You can also pass a path to any Alacritty theme file (YAML or TOML):
 
 ```bash
-markie input.md -o output.png --theme tests/fixtures/solarized_light.toml --png-scale 2
+markie input.md --theme ~/my-custom-theme.toml
 ```
 
 ### Smoke test script
@@ -228,7 +231,7 @@ This is an early experiment. The renderer works well for common use cases, but t
 
 ## License
 
-This project is provided as-is for educational and personal use.
+MIT License. See [LICENSE](LICENSE) for details.
 
 ## Contributing
 

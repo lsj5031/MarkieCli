@@ -24,25 +24,25 @@ pub fn parse_mermaid(input: &str) -> Result<MermaidDiagram, String> {
         || first_line.starts_with("graph ")
     {
         let diagram =
-            parse_flowchart(input).map_err(|e| format!("Flowchart parse error: {:?}", e))?;
+            parse_flowchart(input).map_err(|e| format!("Flowchart parse error: {}", e))?;
         Ok(MermaidDiagram::Flowchart(diagram))
     } else if first_line.starts_with("sequenceDiagram") || first_line.starts_with("sequence") {
         let diagram =
-            parse_sequence(input).map_err(|e| format!("Sequence parse error: {:?}", e))?;
+            parse_sequence(input).map_err(|e| format!("Sequence parse error: {}", e))?;
         Ok(MermaidDiagram::Sequence(diagram))
     } else if first_line.starts_with("classDiagram") || first_line.starts_with("class") {
-        let diagram = parse_class(input).map_err(|e| format!("Class parse error: {:?}", e))?;
+        let diagram = parse_class(input).map_err(|e| format!("Class parse error: {}", e))?;
         Ok(MermaidDiagram::ClassDiagram(diagram))
     } else if first_line.starts_with("stateDiagram") || first_line.starts_with("state") {
-        let diagram = parse_state(input).map_err(|e| format!("State parse error: {:?}", e))?;
+        let diagram = parse_state(input).map_err(|e| format!("State parse error: {}", e))?;
         Ok(MermaidDiagram::StateDiagram(diagram))
     } else if first_line.starts_with("erDiagram") || first_line.starts_with("er") {
-        let diagram = parse_er(input).map_err(|e| format!("ER parse error: {:?}", e))?;
+        let diagram = parse_er(input).map_err(|e| format!("ER parse error: {}", e))?;
         Ok(MermaidDiagram::ErDiagram(diagram))
     } else {
         // Default to flowchart for backward compatibility
         let diagram =
-            parse_flowchart(input).map_err(|e| format!("Flowchart parse error: {:?}", e))?;
+            parse_flowchart(input).map_err(|e| format!("Flowchart parse error: {}", e))?;
         Ok(MermaidDiagram::Flowchart(diagram))
     }
 }
@@ -685,7 +685,8 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
     let mut relations: Vec<ClassRelation> = Vec::new();
     let mut current_class: Option<ClassDefinition> = None;
 
-    for line in &mut lines {
+    for (line_idx, line) in (&mut lines).enumerate() {
+        let line_num = line_idx + 2; // +2: skip first line + 1-indexed
         let line = line.trim();
         if line.is_empty() || line.starts_with("%%") {
             continue;
@@ -705,7 +706,7 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
 
             // Check for stereotype
             let (name, stereotype) = if rest.starts_with("<<") {
-                let end = rest.find(">>").ok_or("Missing >> in stereotype")?;
+                let end = rest.find(">>").ok_or_else(|| format!("line {}: missing '>>' in stereotype", line_num))?;
                 let st = &rest[2..end];
                 let after = rest[end + 2..].trim();
                 (after.to_string(), Some(st.trim().to_string()))
@@ -924,7 +925,8 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
         children: Vec::new(),
     });
 
-    for line in &mut lines {
+    for (line_idx, line) in (&mut lines).enumerate() {
+        let line_num = line_idx + 2; // +2: skip first line + 1-indexed
         let line = line.trim();
         if line.is_empty() || line.starts_with("%%") {
             continue;
@@ -944,7 +946,8 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
         if line.starts_with("state ") {
             let rest = line.strip_prefix("state ").unwrap_or("");
 
-            let (id, label, is_composite) = parse_state_definition(rest)?;
+            let (id, label, is_composite) = parse_state_definition(rest)
+                .map_err(|e| format!("line {}: {}", line_num, e))?;
             let state = ensure_state(&mut states, &id, &label, false, false, is_composite);
 
             if let Some(parent_id) = composite_stack.last().cloned() {
@@ -965,7 +968,7 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
                 let rest = &line[pos + arrow.len()..];
 
                 let (to, label) = if rest.contains(':') {
-                    let colon_pos = rest.find(':').ok_or("Expected colon in transition")?;
+                    let colon_pos = rest.find(':').ok_or_else(|| format!("line {}: expected ':' separator in transition", line_num))?;
                     (
                         rest[..colon_pos].trim().to_string(),
                         Some(rest[colon_pos + 1..].trim().to_string()),

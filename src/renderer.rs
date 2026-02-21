@@ -400,6 +400,8 @@ pub struct Renderer<T: TextMeasure = crate::fonts::CosmicTextMeasure> {
     in_code_block: bool,
     code_block_buffer: String,
     code_block_lang: Option<String>,
+    code_block_start_line: usize,
+    current_event_line: usize,
 
     in_html_block: bool,
     html_block_buffer: String,
@@ -463,6 +465,8 @@ impl<T: TextMeasure> Renderer<T> {
             in_code_block: false,
             code_block_buffer: String::new(),
             code_block_lang: None,
+            code_block_start_line: 0,
+            current_event_line: 0,
             in_html_block: false,
             html_block_buffer: String::new(),
             in_metadata_block: false,
@@ -494,7 +498,8 @@ impl<T: TextMeasure> Renderer<T> {
 
         let parser = Parser::new_ext(&markdown, options);
 
-        for event in parser {
+        for (event, range) in parser.into_offset_iter() {
+            self.current_event_line = markdown[..range.start].bytes().filter(|&b| b == b'\n').count() + 1;
             if self.in_metadata_block {
                 if matches!(event, Event::End(TagEnd::MetadataBlock(_))) {
                     self.in_metadata_block = false;
@@ -633,6 +638,7 @@ impl<T: TextMeasure> Renderer<T> {
                 self.start_block(0.0, false);
                 self.in_code_block = true;
                 self.code_block_buffer.clear();
+                self.code_block_start_line = self.current_event_line;
                 self.code_block_lang = match kind {
                     pulldown_cmark::CodeBlockKind::Fenced(lang) => Some(lang.to_string()),
                     _ => None,
@@ -1109,7 +1115,8 @@ impl<T: TextMeasure> Renderer<T> {
                 self.at_line_start = false;
                 self.last_margin_added = 0.0;
             }
-            Err(_) => {
+            Err(e) => {
+                eprintln!("Warning: math render failed (line {}): {}", self.current_event_line, e);
                 self.render_inline_code(math_src)?;
             }
         }
@@ -1166,7 +1173,8 @@ impl<T: TextMeasure> Renderer<T> {
 
                 self.finish_block(self.theme.margin_bottom);
             }
-            Err(_) => {
+            Err(e) => {
+                eprintln!("Warning: math render failed (line {}): {}", self.current_event_line, e);
                 self.start_block(self.theme.margin_top, false);
                 self.render_inline_code(&math_src)?;
                 self.finish_block(self.theme.margin_bottom);
@@ -1343,7 +1351,8 @@ impl<T: TextMeasure> Renderer<T> {
             &self.theme.code_bg_color,
         );
 
-        let (svg, width, height) = render_diagram(source, &style, &mut self.measure)?;
+        let (svg, width, height) = render_diagram(source, &style, &mut self.measure)
+            .map_err(|e| format!("Mermaid diagram (line {}): {}", self.code_block_start_line, e))?;
 
         // Scale down oversized diagrams so they never overflow the code-block frame.
         let available_width = self.right_edge() - x;

@@ -1,7 +1,15 @@
 [package]
 name = "markie"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
+description = "A pure Rust Markdown to SVG/PNG/PDF renderer with native Mermaid diagrams and LaTeX math"
+license = "MIT"
+repository = "https://github.com/lsj5031/markiecli"
+homepage = "https://github.com/lsj5031/markiecli"
+readme = "README.md"
+keywords = ["markdown", "svg", "png", "pdf", "mermaid"]
+categories = ["command-line-utilities", "rendering"]
+default-run = "markie"
 
 [[bin]]
 name = "markie"
@@ -30,3 +38,4 @@ quick-xml = "0.39.0"
 lru = "0.13"
 parking_lot = "0.12"
 svg2pdf = "0.13"
+clap_complete = "4.5"
