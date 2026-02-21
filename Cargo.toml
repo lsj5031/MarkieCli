@@ -11,6 +11,13 @@ keywords = ["markdown", "svg", "png", "pdf", "mermaid"]
 categories = ["command-line-utilities", "rendering"]
 default-run = "markie"
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [[bin]]
 name = "markie"
 path = "src/main.rs"
