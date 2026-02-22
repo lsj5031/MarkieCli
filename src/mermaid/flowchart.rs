@@ -264,11 +264,49 @@ fn render_node(label: &str, shape: &NodeShape, pos: &LayoutPos, style: &DiagramS
     svg
 }
 
+/// Clip a point from center of a node to its shape boundary.
+fn clip_to_shape(
+    node: &super::types::FlowchartNode,
+    pos: &LayoutPos,
+    target_x: f32,
+    target_y: f32,
+) -> (f32, f32) {
+    let cx = pos.x + pos.width / 2.0;
+    let cy = pos.y + pos.height / 2.0;
+    let dx = target_x - cx;
+    let dy = target_y - cy;
+    if dx.abs() < 0.001 && dy.abs() < 0.001 {
+        return (cx, cy);
+    }
+
+    match node.shape {
+        NodeShape::Circle | NodeShape::DoubleCircle => {
+            let r = pos.width.min(pos.height) / 2.0;
+            let dist = (dx * dx + dy * dy).sqrt();
+            (cx + dx / dist * r, cy + dy / dist * r)
+        }
+        NodeShape::Rhombus => {
+            let hw = pos.width / 2.0;
+            let hh = pos.height / 2.0;
+            let t = 1.0 / (dx.abs() / hw + dy.abs() / hh);
+            (cx + dx * t, cy + dy * t)
+        }
+        _ => {
+            let hw = pos.width / 2.0;
+            let hh = pos.height / 2.0;
+            let scale_x = if dx.abs() > 0.001 { hw / dx.abs() } else { f32::MAX };
+            let scale_y = if dy.abs() > 0.001 { hh / dy.abs() } else { f32::MAX };
+            let scale = scale_x.min(scale_y);
+            (cx + dx * scale, cy + dy * scale)
+        }
+    }
+}
+
 fn render_edge(
     edge: &super::types::FlowchartEdge,
-    _from_node: &super::types::FlowchartNode,
+    from_node: &super::types::FlowchartNode,
     from: &LayoutPos,
-    _to_node: &super::types::FlowchartNode,
+    to_node: &super::types::FlowchartNode,
     to: &LayoutPos,
     style: &DiagramStyle,
     direction: &FlowDirection,
@@ -318,6 +356,10 @@ fn render_edge(
         }
     };
 
+    // Clip exit/enter points to actual shape boundaries
+    let (exit_x, exit_y) = clip_to_shape(from_node, from, exit_x, exit_y);
+    let (enter_x, enter_y) = clip_to_shape(to_node, to, enter_x, enter_y);
+
     // Build polyline points through waypoints
     let mut all_x = vec![exit_x];
     let mut all_y = vec![exit_y];
@@ -337,7 +379,7 @@ fn render_edge(
         let x2 = all_x[i + 1];
         let y2 = all_y[i + 1];
 
-        if vertical || (from_cy - to_cy).abs() < 1.0 && waypoints.is_empty() {
+        if vertical || ((from_cy - to_cy).abs() < 1.0 && waypoints.is_empty()) {
             // Vertical primary axis (or horizontal same-rank): dogleg with vertical-first
             if (x1 - x2).abs() > 0.5 {
                 let mid_y = (y1 + y2) / 2.0;

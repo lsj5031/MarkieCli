@@ -175,14 +175,18 @@ fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, String> {
 
     configure_font_fallbacks_svg2pdf(&mut fontdb);
 
-    let mut opts = svg2pdf::usvg::Options::default();
-    opts.fontdb = std::sync::Arc::new(fontdb);
+    let opts = svg2pdf::usvg::Options {
+        fontdb: std::sync::Arc::new(fontdb),
+        ..Default::default()
+    };
 
     let tree = svg2pdf::usvg::Tree::from_str(svg, &opts)
         .map_err(|e| format!("Failed to parse SVG: {}", e))?;
 
-    let mut options = svg2pdf::ConversionOptions::default();
-    options.embed_text = false;
+    let options = svg2pdf::ConversionOptions {
+        embed_text: false,
+        ..Default::default()
+    };
     let page_options = svg2pdf::PageOptions::default();
 
     svg2pdf::to_pdf(&tree, options, page_options)
