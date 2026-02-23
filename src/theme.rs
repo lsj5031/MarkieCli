@@ -127,7 +127,7 @@ fn default_code_radius() -> f32 {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::from_builtin("solarized_light").expect("built-in solarized_light theme must parse")
+        Self::from_builtin_or_fallback("solarized_light")
     }
 }
 
@@ -157,6 +157,10 @@ struct AlacrittyTheme {
 }
 
 impl Theme {
+    fn from_builtin_or_fallback(name: &str) -> Self {
+        Self::from_builtin(name).unwrap_or_else(|_| Self::github_light())
+    }
+
     pub fn github_light() -> Self {
         Theme {
             background_color: GITHUB_LIGHT_BACKGROUND.to_string(),
@@ -255,5 +259,15 @@ mod tests {
 
         assert_eq!(underscore.background_color, hyphen.background_color);
         assert_eq!(underscore.text_color, hyphen.text_color);
+    }
+
+    #[test]
+    fn fallback_uses_github_light_for_unknown_builtin_theme() {
+        let fallback = Theme::from_builtin_or_fallback("does_not_exist");
+        let github_light = Theme::github_light();
+
+        assert_eq!(fallback.background_color, github_light.background_color);
+        assert_eq!(fallback.text_color, github_light.text_color);
+        assert_eq!(fallback.code_bg_color, github_light.code_bg_color);
     }
 }
