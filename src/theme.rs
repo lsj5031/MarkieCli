@@ -13,6 +13,7 @@ const BUILTIN_THEMES: &[(&str, &str)] = &[
     ("catppuccin_latte", include_str!("../themes/catppuccin_latte.toml")),
     ("catppuccin_mocha", include_str!("../themes/catppuccin_mocha.toml")),
     ("dracula", include_str!("../themes/dracula.toml")),
+    ("everforest", include_str!("../themes/everforest.toml")),
     ("github_dark", include_str!("../themes/github_dark.toml")),
     ("github_light", include_str!("../themes/github_light.toml")),
     ("gruvbox_dark", include_str!("../themes/gruvbox_dark.toml")),

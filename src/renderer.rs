@@ -10,310 +10,6 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style as SyntectStyle, ThemeSet};
 use syntect::parsing::SyntaxSet;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::fonts::TextMeasure;
-    use crate::theme::Theme;
-
-    // Mock TextMeasure for testing
-    struct MockMeasure;
-    impl TextMeasure for MockMeasure {
-        fn measure_text(
-            &mut self,
-            text: &str,
-            font_size: f32,
-            _is_code: bool,
-            _is_bold: bool,
-            _is_italic: bool,
-            _max_width: Option<f32>,
-        ) -> (f32, f32) {
-            // Simple approximation: width = len * size * 0.6, height = size
-            (text.len() as f32 * font_size * 0.6, font_size)
-        }
-    }
-
-    struct ZeroSpaceMeasure;
-    impl TextMeasure for ZeroSpaceMeasure {
-        fn measure_text(
-            &mut self,
-            text: &str,
-            font_size: f32,
-            _is_code: bool,
-            _is_bold: bool,
-            _is_italic: bool,
-            _max_width: Option<f32>,
-        ) -> (f32, f32) {
-            let width = match text {
-                " " => 0.0,
-                "m m" => 30.0,
-                "mm" => 20.0,
-                _ => text.len() as f32 * font_size * 0.6,
-            };
-            (width, font_size)
-        }
-    }
-
-    #[test]
-    fn test_renderer_initialization() {
-        let theme = Theme::default();
-        let measure = MockMeasure;
-        let renderer = Renderer::new(theme, measure, 800.0);
-        assert!(renderer.is_ok());
-    }
-
-    #[test]
-    fn test_inline_code_rendering() {
-        let mut theme = Theme::default();
-        theme.code_padding_y = 10.0;
-        theme.font_size_code = 14.0;
-
-        let measure = MockMeasure;
-        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
-
-        // This should trigger render_inline_code
-        let markdown = "`code`";
-        let result = renderer.render(markdown);
-
-        assert!(result.is_ok());
-        let svg = result.unwrap();
-
-        // Check if rect height is calculated correctly according to the new logic
-        // rect_height = font_size_code + code_padding_y
-        // 14.0 + 10.0 = 24.0
-        assert!(svg.contains("height=\"24.00\""));
-    }
-
-    #[test]
-    fn test_code_block_syntax_highlighting() {
-        let theme = Theme::default();
-        let measure = MockMeasure;
-        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
-
-        let markdown = "```rust\nfn main() {}\n```";
-        let result = renderer.render(markdown);
-
-        assert!(result.is_ok());
-        let svg = result.unwrap();
-
-        // Check for syntax highlighting colors
-        // Rust keywords like 'fn' should be colored.
-        // In Solarized themes (used in logic), keywords are often colored.
-        // We look for fill attributes that are NOT the default text color
-
-        // Note: The specific color depends on the syntect theme loaded.
-        // But we can check that we have multiple different fill colors in the output
-        // or specifically that we have spans/tspan/text with fill attributes.
-
-        // In the implementation, draw_text_at uses text tag with fill attribute.
-        // Let's verify we have text tags with fill colors.
-        assert!(svg.contains("<text"));
-        assert!(svg.contains("fill=\"#"));
-    }
-
-    #[test]
-    fn test_syntax_highlighting_language_detection() {
-        let theme = Theme::default();
-        let measure = MockMeasure;
-        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
-
-        // Python code
-        let markdown = "```python\ndef foo():\n    pass\n```";
-        let result = renderer.render(markdown);
-        assert!(result.is_ok());
-        let svg_py = result.unwrap();
-
-        // Rust code
-        let markdown_rs = "```rust\nfn main() {}\n```";
-        let result_rs = renderer.render(markdown_rs);
-        assert!(result_rs.is_ok());
-        let svg_rs = result_rs.unwrap();
-
-        // The SVGs should be different (different content and potentially different colors)
-        assert_ne!(svg_py, svg_rs);
-    }
-
-    #[test]
-    fn test_svg_output_strips_xml_invalid_control_chars() {
-        let theme = Theme::default();
-        let measure = MockMeasure;
-        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
-
-        let markdown = "Intro\n\n\u{0007}## 1) Summary\n";
-        let result = renderer.render(markdown);
-
-        assert!(result.is_ok());
-        let svg = result.unwrap();
-        assert!(!svg.contains('\u{0007}'));
-        assert!(svg.contains("Summary"));
-        assert!(!svg.contains(">##<"));
-    }
-
-    #[test]
-    fn test_mermaid_class_relations_rendered_from_markdown_fence() {
-        let theme = Theme::default();
-        let measure = MockMeasure;
-        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
-
-        let markdown = r#"
-# Class Example
-
-```mermaid
-classDiagram
-  class User {
-    +String id
-  }
-  class Session {
-    +String token
-  }
-  class AuditLog {
-    +record(event: String): void
-  }
-
-  User --> Session : creates
-  User ..> AuditLog : writes
-```
-"#;
-        let svg = renderer.render(markdown).unwrap();
-        assert!(
-            svg.contains("creates") && svg.contains("writes"),
-            "Expected class relation labels to be present in SVG"
-        );
-    }
-
-    #[test]
-    fn test_markdown_mermaid_fence_preserves_relation_lines() {
-        let markdown = r#"
-# Class Example
-
-```mermaid
-classDiagram
-  class User {
-    +String id
-  }
-  class Session {
-    +String token
-  }
-  User --> Session : creates
-```
-"#;
-        let mut options = Options::empty();
-        options.insert(Options::ENABLE_TABLES);
-        options.insert(Options::ENABLE_STRIKETHROUGH);
-        options.insert(Options::ENABLE_TASKLISTS);
-        options.insert(Options::ENABLE_MATH);
-        options.insert(Options::ENABLE_SMART_PUNCTUATION);
-        options.insert(Options::ENABLE_FOOTNOTES);
-        options.insert(Options::ENABLE_DEFINITION_LIST);
-        options.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
-        options.insert(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS);
-
-        let parser = Parser::new_ext(markdown, options);
-        let mut in_code = false;
-        let mut lang = None::<String>;
-        let mut code = String::new();
-
-        for event in parser {
-            match event {
-                Event::Start(Tag::CodeBlock(kind)) => {
-                    in_code = true;
-                    lang = match kind {
-                        pulldown_cmark::CodeBlockKind::Fenced(l) => Some(l.to_string()),
-                        _ => None,
-                    };
-                }
-                Event::End(TagEnd::CodeBlock) => break,
-                Event::Text(t) if in_code => code.push_str(&t),
-                Event::Code(t) if in_code => code.push_str(&t),
-                Event::SoftBreak | Event::HardBreak if in_code => code.push('\n'),
-                _ => {}
-            }
-        }
-
-        assert_eq!(lang.as_deref(), Some("mermaid"));
-        assert!(code.contains("User --> Session : creates"));
-    }
-
-    #[test]
-    fn test_whitespace_fallback_prevents_collapsed_words() {
-        let theme = Theme::default();
-        let measure = ZeroSpaceMeasure;
-        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
-
-        let svg = renderer.render("Hello World").unwrap();
-
-        let hello_idx = svg.find(">Hello</text>").expect("Hello text missing");
-        let world_idx = svg.find(">World</text>").expect("World text missing");
-        assert!(world_idx > hello_idx, "World should render after Hello");
-
-        let world_prefix = &svg[..world_idx];
-        let x_start = world_prefix
-            .rfind("x=\"")
-            .expect("missing x attribute for World")
-            + 3;
-        let x_end = world_prefix[x_start..]
-            .find('"')
-            .expect("unterminated x attribute for World")
-            + x_start;
-        let world_x: f32 = world_prefix[x_start..x_end].parse().unwrap_or(0.0);
-
-        // 32px left padding + Hello width (42) + inferred space (10) = 84
-        assert!(world_x >= 84.0, "Expected non-zero spacing between words");
-    }
-
-    #[test]
-    fn test_parser_preserves_space_in_heading_text_event() {
-        let mut options = Options::empty();
-        options.insert(Options::ENABLE_TABLES);
-        options.insert(Options::ENABLE_STRIKETHROUGH);
-        options.insert(Options::ENABLE_TASKLISTS);
-        options.insert(Options::ENABLE_MATH);
-        options.insert(Options::ENABLE_SMART_PUNCTUATION);
-        options.insert(Options::ENABLE_FOOTNOTES);
-        options.insert(Options::ENABLE_DEFINITION_LIST);
-        options.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
-        options.insert(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS);
-        let parser = Parser::new_ext("# Hello World\n", options);
-        let texts: Vec<String> = parser
-            .filter_map(|event| match event {
-                Event::Text(t) => Some(t.to_string()),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            texts.iter().any(|t| t == "Hello World"),
-            "Expected heading text event 'Hello World', got: {:?}",
-            texts
-        );
-    }
-
-    #[test]
-    fn test_mermaid_block_scales_down_when_wider_than_content() {
-        let theme = Theme::default();
-        let measure = MockMeasure;
-        let mut renderer = Renderer::new(theme, measure, 360.0).unwrap();
-
-        let markdown = r#"
-```mermaid
-flowchart LR
-    A[Start] --> B[Gateway]
-    B --> C[Auth]
-    C --> D[Query]
-    D --> E[Transform]
-    E --> F[Cache]
-    F --> G[Publish]
-    G --> H[Done]
-```
-"#;
-
-        let svg = renderer.render(markdown).unwrap();
-        assert!(
-            svg.contains("scale("),
-            "Expected Mermaid block to be scaled when too wide"
-        );
-    }
-}
-
 const LIST_INDENT_RATIO: f32 = 1.5;
 const LIST_MARKER_GAP_RATIO: f32 = 0.5;
 const QUOTE_INDENT_RATIO: f32 = 1.25;
@@ -924,8 +620,8 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         let fill = self.current_fill().to_string();
-        if self.pending_list_marker.is_some() && !self.at_line_start {
-            if let Some(pending) = self.pending_list_marker.take() {
+        if self.pending_list_marker.is_some() && !self.at_line_start
+            && let Some(pending) = self.pending_list_marker.take() {
                 self.draw_text_at(
                     pending.marker_x,
                     self.cursor_y,
@@ -937,7 +633,6 @@ impl<T: TextMeasure> Renderer<T> {
                     false,
                 );
             }
-        }
 
         self.draw_text_at(
             self.cursor_x,
@@ -1037,30 +732,30 @@ impl<T: TextMeasure> Renderer<T> {
         let tag = html.trim().to_ascii_lowercase();
 
         match tag.as_str() {
-            "<br>" | "<br/>" | "<br />" => return self.render_newline(),
+            "<br>" | "<br/>" | "<br />" => self.render_newline(),
             "<del>" => {
                 self.in_strikethrough = true;
-                return Ok(());
+                Ok(())
             }
             "</del>" => {
                 self.in_strikethrough = false;
-                return Ok(());
+                Ok(())
             }
             "<em>" | "<i>" => {
                 self.emphasis_depth += 1;
-                return Ok(());
+                Ok(())
             }
             "</em>" | "</i>" => {
                 self.emphasis_depth = self.emphasis_depth.saturating_sub(1);
-                return Ok(());
+                Ok(())
             }
             "<strong>" | "<b>" => {
                 self.strong_depth += 1;
-                return Ok(());
+                Ok(())
             }
             "</strong>" | "</b>" => {
                 self.strong_depth = self.strong_depth.saturating_sub(1);
-                return Ok(());
+                Ok(())
             }
             _ => Ok(()),
         }
@@ -1068,7 +763,7 @@ impl<T: TextMeasure> Renderer<T> {
 
     fn render_footnote_reference(&mut self, label: &str) -> Result<(), String> {
         let font_size = self.current_font_size();
-        let marker = format!("{}", label);
+        let marker = label.to_string();
         let superscript_size = font_size * 0.65;
         let (marker_width, _) =
             self.measure
@@ -1196,7 +891,7 @@ impl<T: TextMeasure> Renderer<T> {
         lang: Option<&str>,
     ) -> Result<(), String> {
         // Check for mermaid diagram
-        if lang.map_or(false, |l| l == "mermaid") {
+        if lang == Some("mermaid") {
             return self.render_mermaid_block(code_buffer);
         }
 
@@ -1466,12 +1161,11 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         let font_size = self.current_font_size();
-        if let Some(state) = self.list_stack.last() {
-            if !state.needs_ascent {
+        if let Some(state) = self.list_stack.last()
+            && !state.needs_ascent {
                 self.advance_line(font_size);
                 return Ok(());
             }
-        }
 
         self.new_line();
         Ok(())
@@ -1540,11 +1234,10 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn finish_table_row(&mut self) {
-        if let Some(state) = self.table_state.as_mut() {
-            if let Some(row) = state.current_row.take() {
+        if let Some(state) = self.table_state.as_mut()
+            && let Some(row) = state.current_row.take() {
                 state.rows.push(row);
             }
-        }
     }
 
     fn start_table_cell(&mut self) {
@@ -1556,21 +1249,18 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn finish_table_cell(&mut self) {
-        if let Some(state) = self.table_state.as_mut() {
-            if let Some(cell) = state.current_cell.take() {
-                if let Some(row) = state.current_row.as_mut() {
+        if let Some(state) = self.table_state.as_mut()
+            && let Some(cell) = state.current_cell.take()
+                && let Some(row) = state.current_row.as_mut() {
                     row.cells.push(cell);
                 }
-            }
-        }
     }
 
     fn render_table_text(&mut self, text: &str) {
-        if let Some(state) = self.table_state.as_mut() {
-            if let Some(cell) = state.current_cell.as_mut() {
+        if let Some(state) = self.table_state.as_mut()
+            && let Some(cell) = state.current_cell.as_mut() {
                 cell.text.push_str(text);
             }
-        }
     }
 
     fn finish_table(&mut self) -> Result<(), String> {
@@ -1609,7 +1299,7 @@ impl<T: TextMeasure> Renderer<T> {
                     false,
                     None,
                 );
-                column_widths[idx] = column_widths[idx].max(width as f32);
+                column_widths[idx] = column_widths[idx].max(width);
             }
         }
 
@@ -1909,7 +1599,7 @@ impl<T: TextMeasure> Renderer<T> {
             let tree = usvg::Tree::from_data(bytes, &opts)
                 .map_err(|e| format!("Failed to read SVG size: {}", e))?;
             let size = tree.size();
-            return Ok((size.width() as f32, size.height() as f32));
+            return Ok((size.width(), size.height()));
         }
 
         let size =
@@ -1959,12 +1649,11 @@ impl<T: TextMeasure> Renderer<T> {
     fn start_list_item(&mut self) -> Result<(), String> {
         if self.at_line_start {
             // Move from list block top to first list-item baseline.
-            if let Some(state) = self.list_stack.last_mut() {
-                if state.needs_ascent {
+            if let Some(state) = self.list_stack.last_mut()
+                && state.needs_ascent {
                     self.cursor_y += self.theme.font_size_base * 0.8;
                     state.needs_ascent = false;
                 }
-            }
         } else {
             self.new_line();
         }
@@ -2223,5 +1912,311 @@ impl<T: TextMeasure> Renderer<T> {
         )
         .unwrap();
         svg
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fonts::TextMeasure;
+    use crate::theme::Theme;
+
+    // Mock TextMeasure for testing
+    struct MockMeasure;
+    impl TextMeasure for MockMeasure {
+        fn measure_text(
+            &mut self,
+            text: &str,
+            font_size: f32,
+            _is_code: bool,
+            _is_bold: bool,
+            _is_italic: bool,
+            _max_width: Option<f32>,
+        ) -> (f32, f32) {
+            // Simple approximation: width = len * size * 0.6, height = size
+            (text.len() as f32 * font_size * 0.6, font_size)
+        }
+    }
+
+    struct ZeroSpaceMeasure;
+    impl TextMeasure for ZeroSpaceMeasure {
+        fn measure_text(
+            &mut self,
+            text: &str,
+            font_size: f32,
+            _is_code: bool,
+            _is_bold: bool,
+            _is_italic: bool,
+            _max_width: Option<f32>,
+        ) -> (f32, f32) {
+            let width = match text {
+                " " => 0.0,
+                "m m" => 30.0,
+                "mm" => 20.0,
+                _ => text.len() as f32 * font_size * 0.6,
+            };
+            (width, font_size)
+        }
+    }
+
+    #[test]
+    fn test_renderer_initialization() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let renderer = Renderer::new(theme, measure, 800.0);
+        assert!(renderer.is_ok());
+    }
+
+    #[test]
+    fn test_inline_code_rendering() {
+        let theme = Theme {
+            code_padding_y: 10.0,
+            font_size_code: 14.0,
+            ..Theme::default()
+        };
+
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        // This should trigger render_inline_code
+        let markdown = "`code`";
+        let result = renderer.render(markdown);
+
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Check if rect height is calculated correctly according to the new logic
+        // rect_height = font_size_code + code_padding_y
+        // 14.0 + 10.0 = 24.0
+        assert!(svg.contains("height=\"24.00\""));
+    }
+
+    #[test]
+    fn test_code_block_syntax_highlighting() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "```rust\nfn main() {}\n```";
+        let result = renderer.render(markdown);
+
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Check for syntax highlighting colors
+        // Rust keywords like 'fn' should be colored.
+        // In Solarized themes (used in logic), keywords are often colored.
+        // We look for fill attributes that are NOT the default text color
+
+        // Note: The specific color depends on the syntect theme loaded.
+        // But we can check that we have multiple different fill colors in the output
+        // or specifically that we have spans/tspan/text with fill attributes.
+
+        // In the implementation, draw_text_at uses text tag with fill attribute.
+        // Let's verify we have text tags with fill colors.
+        assert!(svg.contains("<text"));
+        assert!(svg.contains("fill=\"#"));
+    }
+
+    #[test]
+    fn test_syntax_highlighting_language_detection() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        // Python code
+        let markdown = "```python\ndef foo():\n    pass\n```";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg_py = result.unwrap();
+
+        // Rust code
+        let markdown_rs = "```rust\nfn main() {}\n```";
+        let result_rs = renderer.render(markdown_rs);
+        assert!(result_rs.is_ok());
+        let svg_rs = result_rs.unwrap();
+
+        // The SVGs should be different (different content and potentially different colors)
+        assert_ne!(svg_py, svg_rs);
+    }
+
+    #[test]
+    fn test_svg_output_strips_xml_invalid_control_chars() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "Intro\n\n\u{0007}## 1) Summary\n";
+        let result = renderer.render(markdown);
+
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+        assert!(!svg.contains('\u{0007}'));
+        assert!(svg.contains("Summary"));
+        assert!(!svg.contains(">##<"));
+    }
+
+    #[test]
+    fn test_mermaid_class_relations_rendered_from_markdown_fence() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = r#"
+# Class Example
+
+```mermaid
+classDiagram
+  class User {
+    +String id
+  }
+  class Session {
+    +String token
+  }
+  class AuditLog {
+    +record(event: String): void
+  }
+
+  User --> Session : creates
+  User ..> AuditLog : writes
+```
+"#;
+        let svg = renderer.render(markdown).unwrap();
+        assert!(
+            svg.contains("creates") && svg.contains("writes"),
+            "Expected class relation labels to be present in SVG"
+        );
+    }
+
+    #[test]
+    fn test_markdown_mermaid_fence_preserves_relation_lines() {
+        let markdown = r#"
+# Class Example
+
+```mermaid
+classDiagram
+  class User {
+    +String id
+  }
+  class Session {
+    +String token
+  }
+  User --> Session : creates
+```
+"#;
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_TABLES);
+        options.insert(Options::ENABLE_STRIKETHROUGH);
+        options.insert(Options::ENABLE_TASKLISTS);
+        options.insert(Options::ENABLE_MATH);
+        options.insert(Options::ENABLE_SMART_PUNCTUATION);
+        options.insert(Options::ENABLE_FOOTNOTES);
+        options.insert(Options::ENABLE_DEFINITION_LIST);
+        options.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
+        options.insert(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS);
+
+        let parser = Parser::new_ext(markdown, options);
+        let mut in_code = false;
+        let mut lang = None::<String>;
+        let mut code = String::new();
+
+        for event in parser {
+            match event {
+                Event::Start(Tag::CodeBlock(kind)) => {
+                    in_code = true;
+                    lang = match kind {
+                        pulldown_cmark::CodeBlockKind::Fenced(l) => Some(l.to_string()),
+                        _ => None,
+                    };
+                }
+                Event::End(TagEnd::CodeBlock) => break,
+                Event::Text(t) if in_code => code.push_str(&t),
+                Event::Code(t) if in_code => code.push_str(&t),
+                Event::SoftBreak | Event::HardBreak if in_code => code.push('\n'),
+                _ => {}
+            }
+        }
+
+        assert_eq!(lang.as_deref(), Some("mermaid"));
+        assert!(code.contains("User --> Session : creates"));
+    }
+
+    #[test]
+    fn test_whitespace_fallback_prevents_collapsed_words() {
+        let theme = Theme::default();
+        let measure = ZeroSpaceMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let svg = renderer.render("Hello World").unwrap();
+
+        let hello_idx = svg.find(">Hello</text>").expect("Hello text missing");
+        let world_idx = svg.find(">World</text>").expect("World text missing");
+        assert!(world_idx > hello_idx, "World should render after Hello");
+
+        let world_prefix = &svg[..world_idx];
+        let x_start = world_prefix
+            .rfind("x=\"")
+            .expect("missing x attribute for World")
+            + 3;
+        let x_end = world_prefix[x_start..]
+            .find('"')
+            .expect("unterminated x attribute for World")
+            + x_start;
+        let world_x: f32 = world_prefix[x_start..x_end].parse().unwrap_or(0.0);
+
+        // 32px left padding + Hello width (42) + inferred space (10) = 84
+        assert!(world_x >= 84.0, "Expected non-zero spacing between words");
+    }
+
+    #[test]
+    fn test_parser_preserves_space_in_heading_text_event() {
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_TABLES);
+        options.insert(Options::ENABLE_STRIKETHROUGH);
+        options.insert(Options::ENABLE_TASKLISTS);
+        options.insert(Options::ENABLE_MATH);
+        options.insert(Options::ENABLE_SMART_PUNCTUATION);
+        options.insert(Options::ENABLE_FOOTNOTES);
+        options.insert(Options::ENABLE_DEFINITION_LIST);
+        options.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
+        options.insert(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS);
+        let parser = Parser::new_ext("# Hello World\n", options);
+        let texts: Vec<String> = parser
+            .filter_map(|event| match event {
+                Event::Text(t) => Some(t.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|t| t == "Hello World"),
+            "Expected heading text event 'Hello World', got: {:?}",
+            texts
+        );
+    }
+
+    #[test]
+    fn test_mermaid_block_scales_down_when_wider_than_content() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 360.0).unwrap();
+
+        let markdown = r#"
+```mermaid
+flowchart LR
+    A[Start] --> B[Gateway]
+    B --> C[Auth]
+    C --> D[Query]
+    D --> E[Transform]
+    E --> F[Cache]
+    F --> G[Publish]
+    G --> H[Done]
+```
+"#;
+
+        let svg = renderer.render(markdown).unwrap();
+        assert!(
+            svg.contains("scale("),
+            "Expected Mermaid block to be scaled when too wide"
+        );
     }
 }

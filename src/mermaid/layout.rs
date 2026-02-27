@@ -333,8 +333,8 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                     if let (Some(&from), Some(&to)) = (
                         index_by_id.get(msg.from.as_str()),
                         index_by_id.get(msg.to.as_str()),
-                    ) {
-                        if from != to {
+                    )
+                        && from != to {
                             let a = from.min(to);
                             let b = from.max(to);
                             let label_w = self.measure_text_width(
@@ -357,7 +357,6 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                                 }
                             }
                         }
-                    }
                 }
                 SequenceElement::Block(block) => {
                     self.collect_sequence_pair_requirements(&block.messages, index_by_id, out);
@@ -772,7 +771,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         let roots: Vec<&str> = nodes
             .iter()
             .map(String::as_str)
-            .filter(|n| incoming_init.get(n).map_or(true, |parents| parents.is_empty()))
+            .filter(|n| incoming_init.get(n).is_none_or(|parents| parents.is_empty()))
             .collect();
 
         let mut queue: VecDeque<&str> = VecDeque::new();
@@ -1007,8 +1006,8 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
             // Phase 3: Coordinate refinement
             for _ in 0..4 {
                 // Forward pass
-                for rank_idx in 1..rank_nodes.len() {
-                    for node_id in &rank_nodes[rank_idx] {
+                for rank in rank_nodes.iter().skip(1) {
+                    for node_id in rank {
                         if let Some(neighbors) = incoming.get(node_id) {
                             let mut centers: Vec<f32> = neighbors
                                 .iter()
@@ -1027,7 +1026,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                     }
                     // Enforce minimum spacing
                     let mut prev_right = f32::NEG_INFINITY;
-                    for node_id in &rank_nodes[rank_idx] {
+                    for node_id in rank {
                         if let Some(pos) = positions.get_mut(*node_id) {
                             pos.x = pos.x.max(prev_right + self.node_spacing_x);
                             prev_right = pos.x + pos.width;
@@ -1098,8 +1097,8 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
             // Phase 3: Coordinate refinement (horizontal)
             for _ in 0..4 {
                 // Forward pass
-                for rank_idx in 1..rank_nodes.len() {
-                    for node_id in &rank_nodes[rank_idx] {
+                for rank in rank_nodes.iter().skip(1) {
+                    for node_id in rank {
                         if let Some(neighbors) = incoming.get(node_id) {
                             let mut centers: Vec<f32> = neighbors
                                 .iter()
@@ -1118,7 +1117,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
                     }
                     // Enforce minimum spacing
                     let mut prev_bottom = f32::NEG_INFINITY;
-                    for node_id in &rank_nodes[rank_idx] {
+                    for node_id in rank {
                         if let Some(pos) = positions.get_mut(*node_id) {
                             pos.y = pos.y.max(prev_bottom + self.node_spacing_y);
                             prev_bottom = pos.y + pos.height;

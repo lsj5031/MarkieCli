@@ -14,7 +14,7 @@ A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents in
 - **Improved Mermaid Layout**: Sparser node spacing and collision-aware edge label placement
 - **Enhanced Math Rendering**: LaTeX-style math including nth roots, binomials, and matrices
 - **Customizable Themes**: Supports Alacritty theme files (`.yaml`/`.toml`)
-- **12 Built-in Themes**: Dracula, Nord, Tokyo Night, Catppuccin, Gruvbox, and more — or use any Alacritty theme file
+- **13 Built-in Themes**: Dracula, Nord, Tokyo Night, Everforest, Catppuccin, Gruvbox, and more — or use any Alacritty theme file
 - **Smart Defaults**: `markie input.md` → `input.png` at 2× retina scale, no flags needed
 - **Shell Completions**: `--completions bash/zsh/fish/powershell/elvish`
 - **Flexible Input**: Read from file or stdin
@@ -174,7 +174,7 @@ markie input.md -o output.png --width 1200
 
 ### Built-in themes
 
-12 built-in themes from [alacritty-theme](https://github.com/alacritty/alacritty-theme) are bundled:
+13 built-in themes from [alacritty-theme](https://github.com/alacritty/alacritty-theme) are bundled:
 
 ```bash
 markie input.md --theme dracula
@@ -183,7 +183,7 @@ markie input.md --theme tokyo_night
 markie --list-themes   # Show all available themes
 ```
 
-Available: `catppuccin_latte`, `catppuccin_mocha`, `dracula`, `github_dark`, `github_light`, `gruvbox_dark`, `gruvbox_light`, `monokai_pro`, `nord`, `solarized_dark`, `solarized_light` (default), `tokyo_night`
+Available: `catppuccin_latte`, `catppuccin_mocha`, `dracula`, `everforest`, `github_dark`, `github_light`, `gruvbox_dark`, `gruvbox_light`, `monokai_pro`, `nord`, `solarized_dark`, `solarized_light` (default), `tokyo_night`
 
 You can also pass a path to any Alacritty theme file (YAML or TOML):
 

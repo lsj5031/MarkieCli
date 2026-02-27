@@ -107,44 +107,42 @@ fn parse_flowchart(input: &str) -> Result<Flowchart, String> {
         }
 
         // Try to parse as edge or node definition
-        if let Some((from_info, to_info, label, style, arrow_head, arrow_tail)) =
-            parse_edge_line(line)
-        {
+        if let Some(parsed) = parse_edge_line(line) {
             // Register nodes if not already present (with full info including label and shape)
-            if !node_labels.contains_key(&from_info.0) {
+            if !node_labels.contains_key(&parsed.from.id) {
                 nodes.push(FlowchartNode {
-                    id: from_info.0.clone(),
-                    label: from_info.1.clone(),
-                    shape: from_info.2,
+                    id: parsed.from.id.clone(),
+                    label: parsed.from.label.clone(),
+                    shape: parsed.from.shape,
                 });
-                node_labels.insert(from_info.0.clone(), from_info.1.clone());
+                node_labels.insert(parsed.from.id.clone(), parsed.from.label.clone());
             }
-            if !node_labels.contains_key(&to_info.0) {
+            if !node_labels.contains_key(&parsed.to.id) {
                 nodes.push(FlowchartNode {
-                    id: to_info.0.clone(),
-                    label: to_info.1.clone(),
-                    shape: to_info.2,
+                    id: parsed.to.id.clone(),
+                    label: parsed.to.label.clone(),
+                    shape: parsed.to.shape,
                 });
-                node_labels.insert(to_info.0.clone(), to_info.1.clone());
+                node_labels.insert(parsed.to.id.clone(), parsed.to.label.clone());
             }
 
             // Add edge endpoint nodes to current subgraph if inside one
             if let Some(ref mut sg) = current_subgraph {
-                if !sg.nodes.contains(&from_info.0) {
-                    sg.nodes.push(from_info.0.clone());
+                if !sg.nodes.contains(&parsed.from.id) {
+                    sg.nodes.push(parsed.from.id.clone());
                 }
-                if !sg.nodes.contains(&to_info.0) {
-                    sg.nodes.push(to_info.0.clone());
+                if !sg.nodes.contains(&parsed.to.id) {
+                    sg.nodes.push(parsed.to.id.clone());
                 }
             }
 
             edges.push(FlowchartEdge {
-                from: from_info.0,
-                to: to_info.0,
-                label,
-                style,
-                arrow_head,
-                arrow_tail,
+                from: parsed.from.id,
+                to: parsed.to.id,
+                label: parsed.label,
+                style: parsed.style,
+                arrow_head: parsed.arrow_head,
+                arrow_tail: parsed.arrow_tail,
                 min_length: 1,
             });
         } else if let Some((id, label, shape)) = parse_node_definition(line) {
@@ -185,16 +183,24 @@ fn parse_flow_direction(line: &str) -> FlowDirection {
     }
 }
 
+struct ParsedNodeInfo {
+    id: String,
+    label: String,
+    shape: NodeShape,
+}
+
+struct ParsedEdgeLine {
+    from: ParsedNodeInfo,
+    to: ParsedNodeInfo,
+    label: Option<String>,
+    style: EdgeStyle,
+    arrow_head: ArrowType,
+    arrow_tail: ArrowType,
+}
+
 fn parse_edge_line(
     line: &str,
-) -> Option<(
-    (String, String, NodeShape),
-    (String, String, NodeShape),
-    Option<String>,
-    EdgeStyle,
-    ArrowType,
-    ArrowType,
-)> {
+) -> Option<ParsedEdgeLine> {
     // Edge patterns (order matters - longer patterns first)
     let patterns = [
         ("<==>", EdgeStyle::Thick, ArrowType::Arrow, ArrowType::Arrow),
@@ -286,11 +292,11 @@ fn parse_edge_line(
             let rest = &line[pos + pattern.len()..];
 
             // Parse optional label
-            let (to_part, label) = if rest.starts_with('|') {
+            let (to_part, label) = if let Some(stripped) = rest.strip_prefix('|') {
                 // Label before target: A -->|label| B
-                if let Some(end_label) = rest[1..].find('|') {
-                    let label_text = rest[1..end_label + 1].trim();
-                    let after_label = rest[end_label + 2..].trim();
+                if let Some(end_label) = stripped.find('|') {
+                    let label_text = stripped[..end_label].trim();
+                    let after_label = stripped[end_label + 1..].trim();
                     (after_label, Some(label_text.to_string()))
                 } else {
                     (rest.trim(), None)
@@ -304,14 +310,22 @@ fn parse_edge_line(
             let from_info = extract_node_info(from_part)?;
             let to_info = extract_node_info(to_part)?;
 
-            return Some((
-                from_info,
-                to_info,
+            return Some(ParsedEdgeLine {
+                from: ParsedNodeInfo {
+                    id: from_info.0,
+                    label: from_info.1,
+                    shape: from_info.2,
+                },
+                to: ParsedNodeInfo {
+                    id: to_info.0,
+                    label: to_info.1,
+                    shape: to_info.2,
+                },
                 label,
-                style.clone(),
-                head.clone(),
-                tail.clone(),
-            ));
+                style: style.clone(),
+                arrow_head: head.clone(),
+                arrow_tail: tail.clone(),
+            });
         }
     }
 
@@ -774,10 +788,8 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
                     if let Some(method) = parse_class_method(vis, member) {
                         cls.methods.push(method);
                     }
-                } else {
-                    if let Some(attr) = parse_class_attribute(vis, member) {
-                        cls.attributes.push(attr);
-                    }
+                } else if let Some(attr) = parse_class_attribute(vis, member) {
+                    cls.attributes.push(attr);
                 }
             }
             continue;
@@ -817,11 +829,7 @@ fn parse_class_method(vis: Visibility, member: &str) -> Option<ClassMethod> {
 
     let return_type = if close_paren + 1 < member.len() {
         let after = member[close_paren + 1..].trim();
-        if after.starts_with(':') {
-            Some(after[1..].trim().to_string())
-        } else {
-            None
-        }
+        after.strip_prefix(':').map(|stripped| stripped.trim().to_string())
     } else {
         None
     };
@@ -1056,13 +1064,11 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
     let mut patches: Vec<(usize, usize, usize)> = Vec::new();
     for (pi, parent) in states.iter().enumerate() {
         for (ci, child_elem) in parent.children.iter().enumerate() {
-            if let StateElement::State(child_state) = child_elem {
-                if let Some(&si) = state_index.get(&child_state.id) {
-                    if si != pi && states[si].is_composite && !child_state.is_composite {
+            if let StateElement::State(child_state) = child_elem
+                && let Some(&si) = state_index.get(&child_state.id)
+                    && si != pi && states[si].is_composite && !child_state.is_composite {
                         patches.push((pi, ci, si));
                     }
-                }
-            }
         }
     }
     for (pi, ci, si) in patches {
@@ -1506,9 +1512,9 @@ fn parse_er_relationship(line: &str) -> Option<ErRelationship> {
                     .to_string();
                 let label = if label.is_empty() { None } else { Some(label) };
                 (to, label)
-            } else if rest.starts_with('"') {
-                let end = rest[1..].find('"')? + 1;
-                (rest[..end].trim_matches('"').to_string(), None)
+            } else if let Some(stripped) = rest.strip_prefix('"') {
+                let end = stripped.find('"')?;
+                (stripped[..end].to_string(), None)
             } else {
                 (rest.trim().to_string(), None)
             };
@@ -1894,7 +1900,7 @@ classDiagram
                 animal.attributes.len()
             );
             assert!(
-                animal.methods.len() >= 1,
+                !animal.methods.is_empty(),
                 "Animal should have at least 1 method, got {}",
                 animal.methods.len()
             );

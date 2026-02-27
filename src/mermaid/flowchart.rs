@@ -44,17 +44,17 @@ pub fn render_flowchart(
                 .get(&(edge.from.clone(), edge.to.clone()))
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
-            svg.push_str(&render_edge(
+            svg.push_str(&render_edge(&mut RenderEdgeContext {
                 edge,
-                fn_,
+                from_node: fn_,
                 from,
-                tn,
+                to_node: tn,
                 to,
                 style,
-                &flowchart.direction,
+                direction: &flowchart.direction,
                 waypoints,
                 measure,
-            ));
+            }));
         }
     }
 
@@ -302,17 +302,31 @@ fn clip_to_shape(
     }
 }
 
-fn render_edge(
-    edge: &super::types::FlowchartEdge,
-    from_node: &super::types::FlowchartNode,
-    from: &LayoutPos,
-    to_node: &super::types::FlowchartNode,
-    to: &LayoutPos,
-    style: &DiagramStyle,
-    direction: &FlowDirection,
-    waypoints: &[(f32, f32)],
-    measure: &mut impl TextMeasure,
+struct RenderEdgeContext<'a, T: TextMeasure> {
+    edge: &'a super::types::FlowchartEdge,
+    from_node: &'a super::types::FlowchartNode,
+    from: &'a LayoutPos,
+    to_node: &'a super::types::FlowchartNode,
+    to: &'a LayoutPos,
+    style: &'a DiagramStyle,
+    direction: &'a FlowDirection,
+    waypoints: &'a [(f32, f32)],
+    measure: &'a mut T,
+}
+
+fn render_edge<T: TextMeasure>(
+    ctx: &mut RenderEdgeContext<'_, T>,
 ) -> String {
+    let edge = ctx.edge;
+    let from_node = ctx.from_node;
+    let from = ctx.from;
+    let to_node = ctx.to_node;
+    let to = ctx.to;
+    let style = ctx.style;
+    let direction = ctx.direction;
+    let waypoints = ctx.waypoints;
+    let measure = &mut *ctx.measure;
+
     let mut svg = String::new();
     let vertical = matches!(direction, FlowDirection::TopDown | FlowDirection::BottomUp);
 
@@ -480,98 +494,6 @@ fn render_edge(
     svg
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct MockMeasure;
-
-    impl TextMeasure for MockMeasure {
-        fn measure_text(
-            &mut self,
-            text: &str,
-            font_size: f32,
-            _is_code: bool,
-            _is_bold: bool,
-            _is_italic: bool,
-            _max_width: Option<f32>,
-        ) -> (f32, f32) {
-            (text.chars().count() as f32 * font_size * 0.6, font_size)
-        }
-    }
-
-    fn first_polygon_points(svg: &str) -> Vec<(f32, f32)> {
-        let marker = "<polygon points=\"";
-        let start = svg.find(marker).expect("expected polygon");
-        let rest = &svg[start + marker.len()..];
-        let end = rest.find('"').expect("expected polygon points close quote");
-        rest[..end]
-            .split_whitespace()
-            .map(|pair| {
-                let mut it = pair.split(',');
-                let x = it
-                    .next()
-                    .expect("x")
-                    .parse::<f32>()
-                    .expect("x should parse");
-                let y = it
-                    .next()
-                    .expect("y")
-                    .parse::<f32>()
-                    .expect("y should parse");
-                (x, y)
-            })
-            .collect()
-    }
-
-    #[test]
-    fn orthogonal_edge_arrow_points_in_correct_direction() {
-        let mut measure = MockMeasure;
-        let style = DiagramStyle::default();
-        let edge = super::super::types::FlowchartEdge {
-            from: "A".to_string(),
-            to: "B".to_string(),
-            label: None,
-            style: EdgeStyle::Solid,
-            arrow_head: ArrowType::Arrow,
-            arrow_tail: ArrowType::None,
-            min_length: 1,
-        };
-        let from_node = super::super::types::FlowchartNode {
-            id: "A".to_string(),
-            label: "A".to_string(),
-            shape: NodeShape::Rect,
-        };
-        let to_node = super::super::types::FlowchartNode {
-            id: "B".to_string(),
-            label: "B".to_string(),
-            shape: NodeShape::Rect,
-        };
-        let from = LayoutPos::new(0.0, 0.0, 100.0, 40.0);
-        let to = LayoutPos::new(200.0, 100.0, 100.0, 40.0);
-
-        let svg = render_edge(
-            &edge,
-            &from_node,
-            &from,
-            &to_node,
-            &to,
-            &style,
-            &FlowDirection::LeftRight,
-            &[],
-            &mut measure,
-        );
-
-        let pts = first_polygon_points(&svg);
-        assert_eq!(pts.len(), 3);
-
-        // Orthogonal routing: exit right of from=(100,20), enter left of to=(200,120)
-        // Arrow tip at entry point (200, 120), pointing right (angle=0)
-        assert!((pts[0].0 - 200.0).abs() < 1.0, "tip x={}", pts[0].0);
-        assert!((pts[0].1 - 120.0).abs() < 1.0, "tip y={}", pts[0].1);
-    }
-}
-
 fn render_arrow_head(
     x: f32,
     y: f32,
@@ -724,4 +646,96 @@ fn render_subgraph_title(
     ));
 
     svg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockMeasure;
+
+    impl TextMeasure for MockMeasure {
+        fn measure_text(
+            &mut self,
+            text: &str,
+            font_size: f32,
+            _is_code: bool,
+            _is_bold: bool,
+            _is_italic: bool,
+            _max_width: Option<f32>,
+        ) -> (f32, f32) {
+            (text.chars().count() as f32 * font_size * 0.6, font_size)
+        }
+    }
+
+    fn first_polygon_points(svg: &str) -> Vec<(f32, f32)> {
+        let marker = "<polygon points=\"";
+        let start = svg.find(marker).expect("expected polygon");
+        let rest = &svg[start + marker.len()..];
+        let end = rest.find('"').expect("expected polygon points close quote");
+        rest[..end]
+            .split_whitespace()
+            .map(|pair| {
+                let mut it = pair.split(',');
+                let x = it
+                    .next()
+                    .expect("x")
+                    .parse::<f32>()
+                    .expect("x should parse");
+                let y = it
+                    .next()
+                    .expect("y")
+                    .parse::<f32>()
+                    .expect("y should parse");
+                (x, y)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn orthogonal_edge_arrow_points_in_correct_direction() {
+        let mut measure = MockMeasure;
+        let style = DiagramStyle::default();
+        let edge = super::super::types::FlowchartEdge {
+            from: "A".to_string(),
+            to: "B".to_string(),
+            label: None,
+            style: EdgeStyle::Solid,
+            arrow_head: ArrowType::Arrow,
+            arrow_tail: ArrowType::None,
+            min_length: 1,
+        };
+        let from_node = super::super::types::FlowchartNode {
+            id: "A".to_string(),
+            label: "A".to_string(),
+            shape: NodeShape::Rect,
+        };
+        let to_node = super::super::types::FlowchartNode {
+            id: "B".to_string(),
+            label: "B".to_string(),
+            shape: NodeShape::Rect,
+        };
+        let from = LayoutPos::new(0.0, 0.0, 100.0, 40.0);
+        let to = LayoutPos::new(200.0, 100.0, 100.0, 40.0);
+
+        let svg = render_edge(&mut RenderEdgeContext {
+            edge: &edge,
+            from_node: &from_node,
+            from: &from,
+            to_node: &to_node,
+            to: &to,
+            style: &style,
+            direction: &FlowDirection::LeftRight,
+            waypoints: &[],
+            measure: &mut measure,
+        });
+
+        let pts = first_polygon_points(&svg);
+        assert_eq!(pts.len(), 3);
+
+        // Orthogonal routing: exit right of from=(100,20), enter left of to=(200,120)
+        // Arrow tip at entry point (200, 120), pointing right (angle=0)
+        assert!((pts[0].0 - 200.0).abs() < 1.0, "tip x={}", pts[0].0);
+        assert!((pts[0].1 - 120.0).abs() < 1.0, "tip y={}", pts[0].1);
+    }
 }

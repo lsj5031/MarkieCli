@@ -79,7 +79,7 @@ impl GlobalFontSystem {
         let measured = {
             let mut font_system = self.font_system.lock();
             measure_text_impl(
-                &mut *font_system,
+                &mut font_system,
                 text,
                 font_size,
                 is_code,

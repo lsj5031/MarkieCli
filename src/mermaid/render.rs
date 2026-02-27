@@ -230,17 +230,17 @@ fn render_sequence(
     let mut message_y = participant_bottom + 34.0;
 
     let mut activation_starts: HashMap<String, Vec<f32>> = HashMap::new();
-    let elements_svg = render_sequence_elements(
-        &diagram.elements,
-        &participant_centers,
+    let elements_svg = render_sequence_elements(&mut RenderSequenceContext {
+        elements: &diagram.elements,
+        participant_centers: &participant_centers,
         style,
         measure,
-        &mut message_y,
-        0,
+        message_y: &mut message_y,
+        block_depth: 0,
         left_edge,
         right_edge,
-        &mut activation_starts,
-    );
+        activation_starts: &mut activation_starts,
+    });
 
     let lifeline_end_y = (message_y + 6.0).max(lifeline_start_y + 24.0);
     for participant in &diagram.participants {
@@ -260,17 +260,31 @@ fn render_sequence(
     ))
 }
 
-fn render_sequence_elements(
-    elements: &[SequenceElement],
-    participant_centers: &HashMap<&str, f32>,
-    style: &DiagramStyle,
-    measure: &mut impl TextMeasure,
-    message_y: &mut f32,
+struct RenderSequenceContext<'a, T: TextMeasure> {
+    elements: &'a [SequenceElement],
+    participant_centers: &'a HashMap<&'a str, f32>,
+    style: &'a DiagramStyle,
+    measure: &'a mut T,
+    message_y: &'a mut f32,
     block_depth: usize,
     left_edge: f32,
     right_edge: f32,
-    activation_starts: &mut HashMap<String, Vec<f32>>,
+    activation_starts: &'a mut HashMap<String, Vec<f32>>,
+}
+
+fn render_sequence_elements<T: TextMeasure>(
+    ctx: &mut RenderSequenceContext<'_, T>,
 ) -> String {
+    let elements = ctx.elements;
+    let participant_centers = ctx.participant_centers;
+    let style = ctx.style;
+    let measure = &mut *ctx.measure;
+    let message_y = &mut *ctx.message_y;
+    let block_depth = ctx.block_depth;
+    let left_edge = ctx.left_edge;
+    let right_edge = ctx.right_edge;
+    let activation_starts = &mut *ctx.activation_starts;
+
     let mut svg = String::new();
     for element in elements {
         match element {
@@ -443,8 +457,8 @@ fn render_sequence_elements(
                 *message_y += 24.0;
             }
             SequenceElement::Deactivation(activation) => {
-                if let Some(cx) = participant_centers.get(activation.participant.as_str()) {
-                    if let Some(start) = activation_starts
+                if let Some(cx) = participant_centers.get(activation.participant.as_str())
+                    && let Some(start) = activation_starts
                         .entry(activation.participant.clone())
                         .or_default()
                         .pop()
@@ -458,7 +472,6 @@ fn render_sequence_elements(
                             style.node_stroke
                         ));
                     }
-                }
                 *message_y += 24.0;
             }
             SequenceElement::Note {
@@ -472,8 +485,7 @@ fn render_sequence_elements(
                         .measure_text(&cleaned, style.font_size * 0.8, false, false, false, None)
                         .0
                         + 20.0)
-                        .min(220.0)
-                        .max(80.0);
+                        .clamp(80.0, 220.0);
                     let x = match position.as_str() {
                         "left" => cx - note_width - 12.0,
                         "right" => cx + 12.0,
@@ -530,17 +542,17 @@ fn render_sequence_elements(
                 ));
                 *message_y += 22.0;
 
-                svg.push_str(&render_sequence_elements(
-                    &block.messages,
+                svg.push_str(&render_sequence_elements(&mut RenderSequenceContext {
+                    elements: &block.messages,
                     participant_centers,
                     style,
                     measure,
                     message_y,
-                    block_depth + 1,
+                    block_depth: block_depth + 1,
                     left_edge,
                     right_edge,
                     activation_starts,
-                ));
+                }));
 
                 for (label, branch_elements) in &block.else_branches {
                     let separator_y = *message_y + 2.0;
@@ -564,17 +576,17 @@ fn render_sequence_elements(
                         ));
                     }
                     *message_y = separator_y + 30.0;
-                    svg.push_str(&render_sequence_elements(
-                        branch_elements,
+                    svg.push_str(&render_sequence_elements(&mut RenderSequenceContext {
+                        elements: branch_elements,
                         participant_centers,
                         style,
                         measure,
                         message_y,
-                        block_depth + 1,
+                        block_depth: block_depth + 1,
                         left_edge,
                         right_edge,
                         activation_starts,
-                    ));
+                    }));
                 }
 
                 svg.push_str(&format!(
@@ -1116,7 +1128,7 @@ fn render_state(
         let to_pos = positions.get(&transition.to);
 
         if let (Some(from), Some(to)) = (from_pos, to_pos) {
-            let (t_svg, ext) = render_state_transition(
+            let (t_svg, ext) = render_state_transition(&mut StateTransitionContext {
                 transition,
                 from,
                 to,
@@ -1124,9 +1136,9 @@ fn render_state(
                 measure,
                 route_index,
                 route_total,
-                &mut occupied_labels,
-                &state_obstacles,
-            );
+                occupied_labels: &mut occupied_labels,
+                obstacles: &state_obstacles,
+            });
             svg.push_str(&t_svg);
             transition_min_x = transition_min_x.min(ext.x);
             transition_max_x = transition_max_x.max(ext.x + ext.w);
@@ -1157,9 +1169,9 @@ fn render_state(
 
     for state in &diagram.states {
         for child in &state.children {
-            if let StateElement::Note { state: note_state, text } = child {
-                if !text.is_empty() {
-                    if let Some(pos) = positions.get(note_state.as_str()) {
+            if let StateElement::Note { state: note_state, text } = child
+                && !text.is_empty()
+                    && let Some(pos) = positions.get(note_state.as_str()) {
                         let note_width = 180.0_f32;
                         let note_height = 26.0_f32;
                         let nx = pos.x + pos.width + 28.0;
@@ -1167,8 +1179,6 @@ fn render_state(
                         total_width = total_width.max(nx + note_width + padding);
                         total_height = total_height.max(ny + note_height + padding);
                     }
-                }
-            }
         }
     }
 
@@ -1254,11 +1264,9 @@ fn render_state_node(
                     state: note_state,
                     text,
                 } = child
-                {
-                    if note_state == &state.id && !text.is_empty() {
+                    && note_state == &state.id && !text.is_empty() {
                         svg.push_str(&render_state_note(note_state, text, pos, style, measure));
                     }
-                }
             }
         }
     }
@@ -1426,17 +1434,17 @@ fn render_composite_state_contents(
             .get(&transition.to)
             .or_else(|| positions.get(&transition.to));
         if let (Some(from_pos), Some(to_pos)) = (from, to) {
-            let (t_svg, _ext) = render_state_transition(
+            let (t_svg, _ext) = render_state_transition(&mut StateTransitionContext {
                 transition,
-                from_pos,
-                to_pos,
+                from: from_pos,
+                to: to_pos,
                 style,
                 measure,
                 route_index,
                 route_total,
-                &mut occupied_labels,
-                &child_obstacles,
-            );
+                occupied_labels: &mut occupied_labels,
+                obstacles: &child_obstacles,
+            });
             svg.push_str(&t_svg);
         }
     }
@@ -1496,17 +1504,31 @@ fn render_state_note(
     )
 }
 
-fn render_state_transition(
-    transition: &StateTransition,
-    from: &LayoutPos,
-    to: &LayoutPos,
-    style: &DiagramStyle,
-    measure: &mut impl TextMeasure,
+struct StateTransitionContext<'a, T: TextMeasure> {
+    transition: &'a StateTransition,
+    from: &'a LayoutPos,
+    to: &'a LayoutPos,
+    style: &'a DiagramStyle,
+    measure: &'a mut T,
     route_index: usize,
     route_total: usize,
-    occupied_labels: &mut Vec<RectF>,
-    obstacles: &[RectF],
+    occupied_labels: &'a mut Vec<RectF>,
+    obstacles: &'a [RectF],
+}
+
+fn render_state_transition<T: TextMeasure>(
+    ctx: &mut StateTransitionContext<'_, T>,
 ) -> (String, RectF) {
+    let transition = ctx.transition;
+    let from = ctx.from;
+    let to = ctx.to;
+    let style = ctx.style;
+    let measure = &mut *ctx.measure;
+    let route_index = ctx.route_index;
+    let route_total = ctx.route_total;
+    let occupied_labels = &mut *ctx.occupied_labels;
+    let obstacles = ctx.obstacles;
+
     let mut svg = String::new();
     let mut ext_min_x = f32::MAX;
     let mut ext_min_y = f32::MAX;

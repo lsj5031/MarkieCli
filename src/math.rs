@@ -153,11 +153,10 @@ fn parse_mathml(mathml: &str) -> Result<MathNode, String> {
             }
             Ok(XmlEvent::Text(ref e)) => {
                 let text = e.decode().unwrap_or_default().to_string();
-                if !text.is_empty() {
-                    if let Some((_, children, _)) = stack.last_mut() {
+                if !text.is_empty()
+                    && let Some((_, children, _)) = stack.last_mut() {
                         children.push(MathNode::Text(text));
                     }
-                }
             }
             Ok(XmlEvent::End(ref e)) => {
                 let _name = String::from_utf8_lossy(e.name().as_ref()).to_string();
@@ -212,11 +211,10 @@ fn parse_mathml(mathml: &str) -> Result<MathNode, String> {
                 if name == "mspace" {
                     let mut width_em = 0.0;
                     for (key, val) in &attrs {
-                        if key == "width" {
-                            if let Some(stripped) = val.strip_suffix("em") {
+                        if key == "width"
+                            && let Some(stripped) = val.strip_suffix("em") {
                                 width_em = stripped.parse().unwrap_or(0.0);
                             }
-                        }
                     }
                     let node = MathNode::Space(width_em);
                     if let Some((_, parent_children, _)) = stack.last_mut() {
@@ -415,7 +413,7 @@ fn layout_node<T: TextMeasure>(
     match node {
         MathNode::Ident(text) => {
             let italic =
-                text.len() == 1 && text.chars().next().map_or(false, |c| c.is_alphabetic());
+                text.len() == 1 && text.chars().next().is_some_and(|c| c.is_alphabetic());
             let (w, _h) = measure_token(text, font_size, italic, measure);
             let style = if italic { " font-style=\"italic\"" } else { "" };
             let svg = format!(
@@ -574,11 +572,13 @@ fn layout_node<T: TextMeasure>(
             base,
             under.as_deref(),
             over.as_deref(),
-            font_size,
-            color,
-            measure,
-            x,
-            baseline_y,
+            &mut UnderoverContext {
+                font_size,
+                color,
+                measure,
+                x,
+                baseline_y,
+            },
         ),
         MathNode::Frac {
             num,
@@ -782,16 +782,26 @@ fn layout_row<T: TextMeasure>(
     }
 }
 
+struct UnderoverContext<'a, T: TextMeasure> {
+    font_size: f32,
+    color: &'a str,
+    measure: &'a mut T,
+    x: f32,
+    baseline_y: f32,
+}
+
 fn layout_underover<T: TextMeasure>(
     base: &MathNode,
     under: Option<&MathNode>,
     over: Option<&MathNode>,
-    font_size: f32,
-    color: &str,
-    measure: &mut T,
-    x: f32,
-    baseline_y: f32,
+    ctx: &mut UnderoverContext<'_, T>,
 ) -> MathBox {
+    let font_size = ctx.font_size;
+    let color = ctx.color;
+    let measure = &mut *ctx.measure;
+    let x = ctx.x;
+    let baseline_y = ctx.baseline_y;
+
     let base_box = layout_node(base, font_size, color, measure, 0.0, 0.0);
     let script_size = font_size * 0.65;
     let gap = font_size * 0.15;
