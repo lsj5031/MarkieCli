@@ -1640,7 +1640,50 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         if let Some(base) = self.base_path.as_ref() {
-            return Some(base.join(src));
+            let joined = base.join(src);
+
+            // Path Traversal Mitigation:
+            // 1. Join base and src
+            // 2. Use components() to normalize the path without hitting the disk (no canonicalize() yet)
+            // 3. Ensure the normalized path still starts with the base path.
+            // Note: base_path is expected to be a directory, but join() with ".." can escape it.
+
+            let mut normalized = PathBuf::new();
+            for component in joined.components() {
+                match component {
+                    std::path::Component::Normal(c) => normalized.push(c),
+                    std::path::Component::CurDir => {}
+                    std::path::Component::ParentDir => {
+                        normalized.pop();
+                    }
+                    std::path::Component::RootDir => normalized.push(std::path::MAIN_SEPARATOR.to_string()),
+                    std::path::Component::Prefix(p) => normalized.push(p.as_os_str()),
+                }
+            }
+
+            // Also normalize base path for comparison
+            let mut normalized_base = PathBuf::new();
+            for component in base.components() {
+                match component {
+                    std::path::Component::Normal(c) => normalized_base.push(c),
+                    std::path::Component::CurDir => {}
+                    std::path::Component::ParentDir => {
+                        normalized_base.pop();
+                    }
+                    std::path::Component::RootDir => normalized_base.push(std::path::MAIN_SEPARATOR.to_string()),
+                    std::path::Component::Prefix(p) => normalized_base.push(p.as_os_str()),
+                }
+            }
+
+            if normalized.starts_with(&normalized_base) {
+                return Some(joined);
+            } else {
+                eprintln!(
+                    "Warning: blocked potential path traversal in image src: {}",
+                    src
+                );
+                return None;
+            }
         }
 
         Some(src_path.to_path_buf())
@@ -2218,5 +2261,27 @@ flowchart LR
             svg.contains("scale("),
             "Expected Mermaid block to be scaled when too wide"
         );
+    }
+
+    #[test]
+    fn test_resolve_image_path_traversal() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        // Using a real directory that should exist in the sandbox
+        let base_path = std::env::current_dir().unwrap().join("src");
+        let renderer = Renderer::new_with_base_path(theme, measure, 800.0, Some(base_path.clone())).unwrap();
+
+        // Try to traverse to Cargo.toml which is one level up from src/
+        let traversal_path = "../Cargo.toml";
+        let resolved = renderer.resolve_image_path(traversal_path);
+
+        // After fix, it should be blocked
+        assert!(resolved.is_none());
+
+        // Normal path should still work
+        let normal_path = "renderer.rs";
+        let resolved = renderer.resolve_image_path(normal_path);
+        assert!(resolved.is_some());
+        assert!(resolved.unwrap().ends_with("src/renderer.rs"));
     }
 }
