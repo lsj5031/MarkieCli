@@ -968,3 +968,77 @@ fn is_large_operator(text: &str) -> bool {
             | "⨀"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_text() {
+        // Scenario 1: Empty input
+        assert_eq!(extract_text(&[]), "");
+
+        // Scenario 2: Supported variants
+        let children = vec![
+            MathNode::Text("Hello ".to_string()),
+            MathNode::Ident("x".to_string()),
+            MathNode::Number("123".to_string()),
+            MathNode::Operator("+".to_string()),
+        ];
+        assert_eq!(extract_text(&children), "Hello x123+");
+
+        // Scenario 3: Ignored variants
+        let ignored = vec![
+            MathNode::Row(vec![]),
+            MathNode::Sup {
+                base: Box::new(MathNode::Text("b".to_string())),
+                sup: Box::new(MathNode::Text("s".to_string())),
+            },
+            MathNode::Sub {
+                base: Box::new(MathNode::Text("b".to_string())),
+                sub: Box::new(MathNode::Text("s".to_string())),
+            },
+            MathNode::SubSup {
+                base: Box::new(MathNode::Text("b".to_string())),
+                sub: Box::new(MathNode::Text("s".to_string())),
+                sup: Box::new(MathNode::Text("p".to_string())),
+            },
+            MathNode::Frac {
+                num: Box::new(MathNode::Text("n".to_string())),
+                den: Box::new(MathNode::Text("d".to_string())),
+                line_thickness: None,
+            },
+            MathNode::Sqrt {
+                radicand: Box::new(MathNode::Text("r".to_string())),
+            },
+            MathNode::Root {
+                radicand: Box::new(MathNode::Text("r".to_string())),
+                index: Box::new(MathNode::Text("i".to_string())),
+            },
+            MathNode::UnderOver {
+                base: Box::new(MathNode::Text("b".to_string())),
+                under: Some(Box::new(MathNode::Text("u".to_string()))),
+                over: Some(Box::new(MathNode::Text("o".to_string()))),
+            },
+            MathNode::Space(1.0),
+            MathNode::Table {
+                rows: vec![],
+                column_align: vec![],
+            },
+            MathNode::StretchyOp {
+                op: "(".to_string(),
+                form: "prefix".to_string(),
+            },
+        ];
+        assert_eq!(extract_text(&ignored), "");
+
+        // Scenario 4: Mixture
+        let mixture = vec![
+            MathNode::Text("val: ".to_string()),
+            MathNode::Space(2.0),
+            MathNode::Number("42".to_string()),
+            MathNode::Row(vec![MathNode::Text("inner".to_string())]),
+        ];
+        assert_eq!(extract_text(&mixture), "val: 42");
+    }
+}
