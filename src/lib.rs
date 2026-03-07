@@ -1,3 +1,4 @@
+pub mod export;
 pub mod fonts;
 pub mod math;
 pub mod mermaid;
