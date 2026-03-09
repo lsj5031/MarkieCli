@@ -446,6 +446,20 @@ Simplified codebase:
 - Cleaner separation between obstacles and labels
 - Unified scoring approach for label placement
 
+## Phase 5: Block and Diagram Layout Polish ✅ COMPLETE
+
+Commit: `88038b7`
+
+### 5.1 Markdown Block Margins and Indentation
+- Added dynamic top and bottom margins to `<blockquote>` and fenced code blocks to prevent vertical squishing with adjacent paragraphs.
+- Implemented proper structural indentation for `<ol>`, `<ul>`, and `<dl>` items to clearly separate item text from list markers and definition terms.
+
+### 5.2 Mermaid Edge Cases
+- **ER Diagram Vertical Routing:** Re-architected ER layout step to prevent massive vertical empty space between disjoint relationship layers.
+- **ER Diagram Duplication:** Fixed a deduplication issue that caused multiple incoming relationship nodes (e.g. `LINE_ITEM`) to be drawn over each other.
+- **Subgraph Boundaries:** Adjusted flowchart subgraph boundary calculations (`y` coordinate clamping) to prevent bounding box title clipping at the top edge of the render space.
+- **Sequence Diagram Nameplates:** Added an opaque background rectangle behind the titles of control blocks (like `alt`/`else`) to prevent sequence lines from striking through the text.
+
 ## Implementation Order
 
 1. ✅ Phase 1.1: Line height safety margins
@@ -454,6 +468,7 @@ Simplified codebase:
 4. ✅ Phase 2: Add property-based tests
 5. ✅ Phase 3: Extract layout contracts
 6. ✅ Phase 4: Mermaid label collision fix
+7. ✅ Phase 5: Block layout & Mermaid polish
 
 ## Verification
 
@@ -468,5 +483,6 @@ After each phase:
 - Phase 2 (Property Tests): 2-3 hours
 - Phase 3 (Layout Refactor): 4-6 hours
 - Phase 4 (Mermaid Labels): 2-3 hours
+- Phase 5 (Polish): 1 hour
 
-Total: 9-14 hours for complete refactoring
+Total: 10-15 hours for complete refactoring
