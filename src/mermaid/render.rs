@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::fonts::TextMeasure;
+use crate::layout::Rect;
 
 use super::layout::{LayoutEngine, LayoutPos};
 use super::types::*;
@@ -513,8 +514,8 @@ fn render_sequence_elements<T: TextMeasure>(
                 *message_y += 42.0;
             }
             SequenceElement::Block(block) => {
-                *message_y += 6.0;
-                let start_y = *message_y - 14.0;
+                *message_y += 12.0;
+                let start_y = *message_y - 20.0;
                 let inset = block_depth as f32 * 8.0;
                 let block_left = left_edge - 36.0 + inset;
                 let block_right = right_edge + 36.0 - inset;
@@ -531,12 +532,28 @@ fn render_sequence_elements<T: TextMeasure>(
                     format!("{} {}", block_kind, block.label)
                 };
 
+                let title_font = style.font_size * 0.8;
+                let cleaned_title = crate::xml::sanitize_xml_text(&title);
+                let title_w = measure
+                    .measure_text(&cleaned_title, title_font, false, true, false, None)
+                    .0;
+                let np_pad_x = 6.0;
+                let np_pad_y = 3.0;
+                let np_w = title_w + np_pad_x * 2.0;
+                let np_h = title_font + np_pad_y * 2.0;
+                let np_x = block_left + 10.0 - np_pad_x;
+                let np_y = *message_y - title_font - np_pad_y + 2.0;
+                svg.push_str(&format!(
+                    r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" stroke="{}" stroke-width="0.75" />"#,
+                    np_x, np_y, np_w, np_h,
+                    style.node_fill, style.node_stroke
+                ));
                 svg.push_str(&format!(
                     r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" font-weight="bold">{}</text>"#,
                     block_left + 10.0,
                     *message_y,
                     style.font_family,
-                    style.font_size * 0.8,
+                    title_font,
                     style.node_text,
                     escape_xml(&title)
                 ));
@@ -568,7 +585,7 @@ fn render_sequence_elements<T: TextMeasure>(
                         svg.push_str(&format!(
                             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
                             block_left + 10.0,
-                            separator_y - 6.0,
+                            separator_y - 12.0,
                             style.font_family,
                             style.font_size * 0.78,
                             style.node_text,
@@ -983,34 +1000,8 @@ fn draw_marker(marker_type: &str, x: f32, y: f32, angle: f32, style: &DiagramSty
 // STATE DIAGRAM RENDERING
 // ============================================
 
-#[derive(Clone, Copy, Debug)]
-struct RectF {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-}
-
-impl RectF {
-    fn overlaps(&self, other: &RectF) -> bool {
-        self.x < other.x + other.w
-            && self.x + self.w > other.x
-            && self.y < other.y + other.h
-            && self.y + self.h > other.y
-    }
-
-    fn expanded(&self, pad: f32) -> RectF {
-        RectF {
-            x: self.x - pad,
-            y: self.y - pad,
-            w: self.w + 2.0 * pad,
-            h: self.h + 2.0 * pad,
-        }
-    }
-}
-
-fn rect_from_pos(pos: &LayoutPos, pad: f32) -> RectF {
-    RectF {
+fn rect_from_pos(pos: &LayoutPos, pad: f32) -> Rect {
+    Rect {
         x: pos.x - pad,
         y: pos.y - pad,
         w: pos.width + 2.0 * pad,
@@ -1018,17 +1009,17 @@ fn rect_from_pos(pos: &LayoutPos, pad: f32) -> RectF {
     }
 }
 
-fn vseg_hits_rect(x: f32, y1: f32, y2: f32, r: &RectF) -> bool {
+fn vseg_hits_rect(x: f32, y1: f32, y2: f32, r: &Rect) -> bool {
     let (ya, yb) = if y1 <= y2 { (y1, y2) } else { (y2, y1) };
     x >= r.x && x <= r.x + r.w && yb >= r.y && ya <= r.y + r.h
 }
 
-fn hseg_hits_rect(y: f32, x1: f32, x2: f32, r: &RectF) -> bool {
+fn hseg_hits_rect(y: f32, x1: f32, x2: f32, r: &Rect) -> bool {
     let (xa, xb) = if x1 <= x2 { (x1, x2) } else { (x2, x1) };
     y >= r.y && y <= r.y + r.h && xb >= r.x && xa <= r.x + r.w
 }
 
-fn line_intersects_rect(x1: f32, y1: f32, x2: f32, y2: f32, r: &RectF) -> bool {
+fn line_intersects_rect(x1: f32, y1: f32, x2: f32, y2: f32, r: &Rect) -> bool {
     // Cohen–Sutherland: check if segment (x1,y1)→(x2,y2) intersects axis-aligned rect r
     let left = r.x;
     let right = r.x + r.w;
@@ -1107,7 +1098,7 @@ fn render_state(
             .or_insert(0) += 1;
     }
 
-    let state_obstacles: Vec<RectF> = positions
+    let state_obstacles: Vec<Rect> = positions
         .values()
         .map(|p| rect_from_pos(p, 8.0))
         .collect();
@@ -1117,7 +1108,7 @@ fn render_state(
     let mut transition_max_y = f32::MIN;
 
     let mut pair_seen: HashMap<(String, String), usize> = HashMap::new();
-    let mut occupied_labels: Vec<RectF> = Vec::new();
+    let mut occupied_labels: Vec<Rect> = Vec::new();
     for transition in visible_transitions {
         let key = state_pair_key(&transition.from, &transition.to);
         let route_index = pair_seen.get(&key).copied().unwrap_or(0);
@@ -1404,7 +1395,7 @@ fn render_composite_state_contents(
     }
 
     let parent_rect = rect_from_pos(parent_pos, 0.0);
-    let mut child_obstacles: Vec<RectF> = child_positions
+    let mut child_obstacles: Vec<Rect> = child_positions
         .values()
         .map(|p| rect_from_pos(p, 3.0))
         .collect();
@@ -1420,7 +1411,7 @@ fn render_composite_state_contents(
     );
 
     let mut pair_seen: HashMap<(String, String), usize> = HashMap::new();
-    let mut occupied_labels: Vec<RectF> = Vec::new();
+    let mut occupied_labels: Vec<Rect> = Vec::new();
     for transition in child_transitions {
         let key = state_pair_key(&transition.from, &transition.to);
         let route_index = pair_seen.get(&key).copied().unwrap_or(0);
@@ -1512,13 +1503,13 @@ struct StateTransitionContext<'a, T: TextMeasure> {
     measure: &'a mut T,
     route_index: usize,
     route_total: usize,
-    occupied_labels: &'a mut Vec<RectF>,
-    obstacles: &'a [RectF],
+    occupied_labels: &'a mut Vec<Rect>,
+    obstacles: &'a [Rect],
 }
 
 fn render_state_transition<T: TextMeasure>(
     ctx: &mut StateTransitionContext<'_, T>,
-) -> (String, RectF) {
+) -> (String, Rect) {
     let transition = ctx.transition;
     let from = ctx.from;
     let to = ctx.to;
@@ -1609,7 +1600,7 @@ fn render_state_transition<T: TextMeasure>(
             (to.bottom(), from.y)
         };
         let mid_x = (from_cx + to_cx) / 2.0;
-        let is_src_or_dst = |r: &RectF| -> bool {
+        let is_src_or_dst = |r: &Rect| -> bool {
             let rcx = r.x + r.w / 2.0;
             let rcy = r.y + r.h / 2.0;
             ((rcx - from_cx).abs() < 1.0 && (rcy - from_cy).abs() < 1.0)
@@ -1657,7 +1648,7 @@ fn render_state_transition<T: TextMeasure>(
             let max_half_width = (from.width / 2.0).max(to.width / 2.0);
             let exit_y = from_cy;
             let enter_y = to_cy;
-            let is_endpoint = |r: &RectF| -> bool {
+            let is_endpoint = |r: &Rect| -> bool {
                 let rcx = r.x + r.w / 2.0;
                 let rcy = r.y + r.h / 2.0;
                 ((rcx - from_cx).abs() < 1.0 && (rcy - from_cy).abs() < 1.0)
@@ -1735,7 +1726,7 @@ fn render_state_transition<T: TextMeasure>(
         }
     } else {
         // Check if a straight line would cross any obstacles
-        let is_from_or_to = |r: &RectF| -> bool {
+        let is_from_or_to = |r: &Rect| -> bool {
             let rcx = r.x + r.w / 2.0;
             let rcy = r.y + r.h / 2.0;
             ((rcx - from_cx).abs() < 1.0 && (rcy - from_cy).abs() < 1.0)
@@ -1754,7 +1745,7 @@ fn render_state_transition<T: TextMeasure>(
             //   1. Simple Z-route (exit side → horizontal mid → enter side)
             //   2. U-route via vertical center exit (exit top/bottom → horizontal lane → enter top/bottom)
             //   3. Side-exit L-route (exit side → vertical lane → enter side) - like verticalish routing
-            let is_endpoint = |r: &RectF| -> bool {
+            let is_endpoint = |r: &Rect| -> bool {
                 let rcx = r.x + r.w / 2.0;
                 let rcy = r.y + r.h / 2.0;
                 ((rcx - from_cx).abs() < 1.0 && (rcy - from_cy).abs() < 1.0)
@@ -1976,14 +1967,14 @@ fn render_state_transition<T: TextMeasure>(
         let perp_y = tx;
         let tangent_offset = lane_offset + global_offset;
 
-        let rect_for = |lx: f32, ly: f32| RectF {
+        let rect_for = |lx: f32, ly: f32| Rect {
             x: lx - label_width / 2.0,
             y: ly - label_height + 2.0,
             w: label_width,
             h: label_height,
         };
 
-        let score = |r: &RectF| -> f32 {
+        let score = |r: &Rect| -> f32 {
             let mut s = 0.0;
             if r.x < 0.0 || r.y < 0.0 {
                 s += 1000.0;
@@ -2003,12 +1994,12 @@ fn render_state_transition<T: TextMeasure>(
 
         // Candidate search: try different anchor t and perpendicular distances on both sides.
         let t_candidates: [f32; 5] = [0.38, 0.46, 0.5, 0.54, 0.62];
-        let dist_candidates: [f32; 6] = [18.0, 28.0, 38.0, 48.0, 60.0, 72.0];
+        let dist_candidates: [f32; 6] = [24.0, 34.0, 44.0, 54.0, 66.0, 78.0];
         let side_candidates: [f32; 2] = [route_side, -route_side];
 
         // Always include the previous heuristic as a candidate.
         let movement_weight = 2.0;
-        let base_dist = 22.0 + lane.abs() * 10.0 + global_lane.abs() * 4.0;
+        let base_dist = 28.0 + lane.abs() * 10.0 + global_lane.abs() * 4.0;
         let base_x = label_anchor_x
             + perp_x * base_dist * route_side
             + tx * tangent_offset;
@@ -2092,7 +2083,7 @@ fn render_state_transition<T: TextMeasure>(
         ));
     }
 
-    let extent = RectF {
+    let extent = Rect {
         x: ext_min_x.min(0.0),
         y: ext_min_y.min(0.0),
         w: (ext_max_x - ext_min_x.min(0.0)).max(0.0),
@@ -2127,7 +2118,7 @@ fn render_er(
 
     let mut svg = String::new();
     let padding = 20.0;
-    let mut occupied_labels: Vec<RectF> = Vec::new();
+    let mut occupied_labels: Vec<Rect> = Vec::new();
 
     // Draw relationships first
     for relation in &diagram.relationships {
@@ -2177,8 +2168,18 @@ fn render_er_entity(entity: &ErEntity, pos: &LayoutPos, style: &DiagramStyle) ->
         pos.x + pos.width / 2.0, y, style.font_family, style.font_size, style.node_text, escape_xml(&entity.name)
     ));
 
+    // Divider line between name and attributes
+    if !entity.attributes.is_empty() {
+        y += 4.0;
+        svg.push_str(&format!(
+            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75" />"#,
+            pos.x, y, pos.x + pos.width, y, style.node_stroke
+        ));
+        y += style.font_size * 0.5;
+    }
+
     // Attributes
-    y += style.font_size + 4.0;
+    y += style.font_size;
     for attr in &entity.attributes {
         let marker = if attr.is_key { "*" } else { "" };
         let attr_name = if attr.is_composite {
@@ -2197,7 +2198,7 @@ fn render_er_entity(entity: &ErEntity, pos: &LayoutPos, style: &DiagramStyle) ->
             style.node_text,
             escape_xml(&attr_text)
         ));
-        y += style.font_size;
+        y += style.font_size * 1.3;
     }
 
     svg
@@ -2209,7 +2210,7 @@ fn render_er_relationship(
     to: &LayoutPos,
     style: &DiagramStyle,
     measure: &mut impl TextMeasure,
-    occupied_labels: &mut Vec<RectF>,
+    occupied_labels: &mut Vec<Rect>,
 ) -> String {
     let mut svg = String::new();
 
@@ -2266,7 +2267,7 @@ fn render_er_relationship(
         let to_h = to.height + pad * 2.0;
 
         // Choose the normal direction that avoids overlapping endpoints.
-        let rect_for = |lx: f32, ly: f32| RectF {
+        let rect_for = |lx: f32, ly: f32| Rect {
             x: lx - label_w / 2.0,
             y: ly - label_h + 2.0,
             w: label_w,
@@ -2281,7 +2282,7 @@ fn render_er_relationship(
             let ly = my + cy * off;
             let r = rect_for(lx, ly);
             let mut penalty = 0;
-            if r.overlaps(&RectF {
+            if r.overlaps(&Rect {
                 x: from_x,
                 y: from_y,
                 w: from_w,
@@ -2289,7 +2290,7 @@ fn render_er_relationship(
             }) {
                 penalty += 1;
             }
-            if r.overlaps(&RectF {
+            if r.overlaps(&Rect {
                 x: to_x,
                 y: to_y,
                 w: to_w,
@@ -2306,13 +2307,13 @@ fn render_er_relationship(
             }
         }
 
-        let from_r = RectF {
+        let from_r = Rect {
             x: from_x,
             y: from_y,
             w: from_w,
             h: from_h,
         };
-        let to_r = RectF {
+        let to_r = Rect {
             x: to_x,
             y: to_y,
             w: to_w,

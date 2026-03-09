@@ -1359,11 +1359,11 @@ fn parse_er(input: &str) -> Result<ErDiagram, String> {
     }
 
     // Auto-create entities referenced in relationships but not explicitly declared
-    let existing: std::collections::HashSet<String> =
+    let mut existing: std::collections::HashSet<String> =
         entities.iter().map(|e| e.name.clone()).collect();
     for rel in &relationships {
         for name in [&rel.from, &rel.to] {
-            if !existing.contains(name) {
+            if existing.insert(name.clone()) {
                 entities.push(ErEntity {
                     name: name.clone(),
                     attributes: Vec::new(),

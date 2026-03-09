@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::fonts::TextMeasure;
 
+use crate::layout::Rect;
 use super::layout::{BBox, LayoutEngine, LayoutPos};
 use super::render::{DiagramStyle, escape_xml};
 use super::types::{ArrowType, EdgeStyle, FlowDirection, Flowchart, NodeShape};
@@ -66,7 +67,7 @@ pub fn render_flowchart(
     }
 
     // Draw subgraph titles last (on top of everything) with collision avoidance
-    let mut used_title_rects: Vec<(f32, f32, f32, f32)> = Vec::new();
+    let mut used_title_rects: Vec<Rect> = Vec::new();
     for subgraph in &flowchart.subgraphs {
         svg.push_str(&render_subgraph_title(
             subgraph,
@@ -466,8 +467,8 @@ fn render_edge<T: TextMeasure>(
         let text_w = measure
             .measure_text(&cleaned, label_font_size, false, false, false, None)
             .0;
-        let pill_pad = 6.0;
-        let pill_w = text_w + pill_pad * 2.0;
+        let pill_pad = 8.0;
+        let pill_w = (text_w + pill_pad * 2.0).max(label_font_size * 2.5);
         let pill_h = label_font_size + pill_pad * 2.0;
 
         svg.push_str(&format!(
@@ -575,11 +576,13 @@ fn subgraph_bbox(
 
     let content_bbox = BBox::new(min_x, min_y, max_right - min_x, max_bottom - min_y);
     let padded_bbox = content_bbox.with_padding(20.0);
+    let raw_y = padded_bbox.y - 20.0;
+    let clamped_y = raw_y.max(0.0);
     Some((
         padded_bbox.x,
-        padded_bbox.y - 20.0,
+        clamped_y,
         padded_bbox.width,
-        padded_bbox.height + 20.0,
+        padded_bbox.height + 20.0 + (raw_y - clamped_y).abs(),
     ))
 }
 
@@ -603,7 +606,7 @@ fn render_subgraph_title(
     subgraph: &super::types::Subgraph,
     positions: &HashMap<String, LayoutPos>,
     style: &DiagramStyle,
-    used_rects: &mut Vec<(f32, f32, f32, f32)>,
+    used_rects: &mut Vec<Rect>,
 ) -> String {
     if subgraph.title.is_empty() {
         return String::new();
@@ -622,18 +625,16 @@ fn render_subgraph_title(
     let mut title_y = min_y + title_font + 4.0;
 
     // Offset title if it would overlap a previously placed title
-    for &(ux, uy, uw, uh) in used_rects.iter() {
-        let rx = title_x - 4.0;
-        let ry = title_y - title_h / 2.0 - 1.0;
-        let overlaps = rx < ux + uw && rx + title_w > ux && ry < uy + uh && ry + title_h > uy;
-        if overlaps {
-            title_y = uy + uh + title_h / 2.0 + 3.0;
+    for used in used_rects.iter() {
+        let candidate = Rect::new(title_x - 4.0, title_y - title_h / 2.0 - 1.0, title_w, title_h);
+        if candidate.overlaps(used) {
+            title_y = used.y + used.h + title_h / 2.0 + 3.0;
         }
     }
 
     let pill_x = title_x - 4.0;
     let pill_y = title_y - title_h / 2.0 - 1.0;
-    used_rects.push((pill_x, pill_y, title_w, title_h));
+    used_rects.push(Rect::new(pill_x, pill_y, title_w, title_h));
 
     let mut svg = String::new();
     svg.push_str(&format!(

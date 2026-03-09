@@ -651,7 +651,13 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
             return (positions, HashMap::new(), BBox::default());
         }
 
-        let nodes: Vec<String> = diagram.entities.iter().map(|e| e.name.clone()).collect();
+        let mut seen = std::collections::HashSet::new();
+        let nodes: Vec<String> = diagram
+            .entities
+            .iter()
+            .filter(|e| seen.insert(e.name.clone()))
+            .map(|e| e.name.clone())
+            .collect();
         let edges: Vec<(String, String, usize)> = diagram
             .relationships
             .iter()
@@ -686,7 +692,8 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         }
 
         let width = (max_w + self.node_padding_h * 2.0).max(150.0);
-        let height = (34.0 + entity.attributes.len() as f32 * (attr_font * 1.25) + 10.0).max(56.0);
+        let divider_space = if entity.attributes.is_empty() { 0.0 } else { self.font_size * 0.5 + 4.0 };
+        let height = (34.0 + divider_space + entity.attributes.len() as f32 * (self.font_size * 1.3) + 10.0).max(56.0);
         (width, height)
     }
 

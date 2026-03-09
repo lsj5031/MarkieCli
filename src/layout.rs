@@ -16,15 +16,15 @@ pub struct Rect {
     /// Y position of the rect origin
     pub y: f32,
     /// Width of the rect
-    pub width: f32,
+    pub w: f32,
     /// Height of the rect
-    pub height: f32,
+    pub h: f32,
 }
 
 impl Rect {
     /// Create a new rect with given position and dimensions.
-    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+    pub fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Self { x, y, w, h }
     }
 
     /// Create a rect with padding applied.
@@ -32,17 +32,22 @@ impl Rect {
         Self {
             x: self.x - padding,
             y: self.y - padding,
-            width: self.width + padding * 2.0,
-            height: self.height + padding * 2.0,
+            w: self.w + padding * 2.0,
+            h: self.h + padding * 2.0,
         }
+    }
+
+    /// Alias for `with_padding` (matches `RectF::expanded`).
+    pub fn expanded(&self, pad: f32) -> Self {
+        self.with_padding(pad)
     }
 
     /// Check if this rect overlaps with another.
     pub fn overlaps(&self, other: &Rect) -> bool {
-        self.x < other.x + other.width
-            && self.x + self.width > other.x
-            && self.y < other.y + other.height
-            && self.y + self.height > other.y
+        self.x < other.x + other.w
+            && self.x + self.w > other.x
+            && self.y < other.y + other.h
+            && self.y + self.h > other.y
     }
 }
 
@@ -72,7 +77,7 @@ impl GlyphBox {
     ///
     /// Note: This uses estimated ascent/descent ratios. For production use,
     /// actual font metrics should be used.
-    pub fn new_estimated(x: f32, y: f32, width: f32, font_size: f32) -> Self {
+    pub fn new_estimated(x: f32, y: f32, w: f32, font_size: f32) -> Self {
         // Typical font metrics estimates
         let ascent = font_size * 0.8;
         let descent = font_size * 0.2;
@@ -80,8 +85,8 @@ impl GlyphBox {
         Self {
             x,
             y,
-            advance_width: width,
-            ink_bounds: Rect::new(x, y - ascent, width, ascent + descent),
+            advance_width: w,
+            ink_bounds: Rect::new(x, y - ascent, w, ascent + descent),
             ascent,
             descent,
         }
@@ -251,12 +256,6 @@ impl EdgeLabelPlacer {
     /// Reserve an obstacle region (e.g., a node).
     pub fn reserve_obstacle(&mut self, bbox: Rect) {
         self.obstacles.push(bbox.with_padding(self.padding));
-    }
-
-    /// Reserve a region as occupied (e.g., a node or existing label).
-    /// Deprecated: use reserve_obstacle or reserve_label instead.
-    pub fn reserve(&mut self, bbox: Rect) {
-        self.labels.push(bbox.with_padding(self.padding));
     }
 
     /// Reserve a label region.
@@ -449,8 +448,8 @@ mod tests {
         let padded = rect.with_padding(5.0);
         assert_eq!(padded.x, 5.0);
         assert_eq!(padded.y, 15.0);
-        assert_eq!(padded.width, 60.0);
-        assert_eq!(padded.height, 40.0);
+        assert_eq!(padded.w, 60.0);
+        assert_eq!(padded.h, 40.0);
     }
 
     #[test]
@@ -504,7 +503,7 @@ mod tests {
         let mut placer = EdgeLabelPlacer::new(5.0);
 
         // Reserve a region
-        placer.reserve(Rect::new(50.0, 50.0, 40.0, 20.0));
+        placer.reserve_label(Rect::new(50.0, 50.0, 40.0, 20.0));
 
         // Preferred position that overlaps should be adjusted
         let (x, y) = placer.find_position((55.0, 55.0), (30.0, 15.0));
@@ -517,7 +516,7 @@ mod tests {
         let mut placer = EdgeLabelPlacer::new(5.0);
 
         // Reserve a region
-        placer.reserve(Rect::new(50.0, 50.0, 40.0, 20.0));
+        placer.reserve_label(Rect::new(50.0, 50.0, 40.0, 20.0));
 
         // Preferred position far from reserved region should stay
         let (x, y) = placer.find_position((200.0, 200.0), (30.0, 15.0));
@@ -530,8 +529,8 @@ mod tests {
         let mut placer = EdgeLabelPlacer::new(5.0);
 
         // Reserve multiple regions
-        placer.reserve(Rect::new(50.0, 50.0, 40.0, 20.0));
-        placer.reserve(Rect::new(100.0, 100.0, 40.0, 20.0));
+        placer.reserve_label(Rect::new(50.0, 50.0, 40.0, 20.0));
+        placer.reserve_label(Rect::new(100.0, 100.0, 40.0, 20.0));
 
         // Clear all
         placer.clear();
@@ -662,8 +661,8 @@ mod tests {
             prop_assert!(glyph.advance_width > 0.0);
             prop_assert!(glyph.ascent > 0.0);
             prop_assert!(glyph.descent > 0.0);
-            prop_assert!(glyph.ink_bounds.width > 0.0);
-            prop_assert!(glyph.ink_bounds.height > 0.0);
+            prop_assert!(glyph.ink_bounds.w > 0.0);
+            prop_assert!(glyph.ink_bounds.h > 0.0);
         });
     }
 

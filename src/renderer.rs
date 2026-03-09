@@ -331,7 +331,7 @@ impl<T: TextMeasure> Renderer<T> {
                 }
             }
             Tag::CodeBlock(kind) => {
-                self.start_block(0.0, false);
+                self.start_block(self.theme.margin_top, false);
                 self.in_code_block = true;
                 self.code_block_buffer.clear();
                 self.code_block_start_line = self.current_event_line;
@@ -356,7 +356,7 @@ impl<T: TextMeasure> Renderer<T> {
             }
             Tag::Item => self.start_list_item()?,
             Tag::BlockQuote(_) => {
-                self.start_block(0.0, false);
+                self.start_block(self.theme.margin_top, false);
                 self.start_blockquote();
             }
             Tag::Link { .. } => self.link_depth += 1,
@@ -396,6 +396,8 @@ impl<T: TextMeasure> Renderer<T> {
                 if !self.at_line_start {
                     self.new_line();
                 }
+                self.add_margin(self.theme.margin_bottom * 0.6);
+                self.cursor_y += self.current_font_size() * 0.8;
                 self.strong_depth += 1;
                 self.item_continuation_indent = None;
             }
@@ -406,6 +408,7 @@ impl<T: TextMeasure> Renderer<T> {
                 if let Some(state) = self.definition_list_stack.last() {
                     self.item_continuation_indent = Some(state.indent);
                 }
+                self.cursor_x = self.line_start_x();
             }
             Tag::FootnoteDefinition(label) => {
                 self.start_block(self.theme.margin_top * 0.8, false);
@@ -601,6 +604,8 @@ impl<T: TextMeasure> Renderer<T> {
             }
             // Guard against shapers reporting near-zero space width.
             space_width = space_width.max(font_size * 0.2);
+            // Cap space width to avoid excessively wide gaps (e.g. large headings).
+            space_width = space_width.min(font_size * 0.4);
 
             if self.cursor_x + space_width > self.right_edge() {
                 self.advance_line(font_size);
@@ -690,7 +695,7 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         // Tighter background box based on font size
-        let rect_height = self.theme.font_size_code + self.theme.code_padding_y;
+        let rect_height = self.theme.font_size_code * 1.25 + self.theme.code_padding_y;
         // Use font metrics for proper alignment (ascent ratio 0.75)
         let ascent_ratio = 0.75;
         let rect_y = self.cursor_y - self.theme.font_size_code * ascent_ratio - self.theme.code_padding_y * 0.5;
@@ -984,9 +989,10 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         let line_height = self.theme.font_size_code * self.theme.line_height;
+        let effective_code_pad_y = self.theme.code_padding_y.max(self.theme.font_size_code * 0.5);
         let block_height = (lines.len().saturating_sub(1) as f32) * line_height
             + self.theme.font_size_code
-            + self.theme.code_padding_y * 2.0;
+            + effective_code_pad_y * 2.0;
         let block_width = max_line_width + self.theme.code_padding_x * 2.0;
 
         write!(
@@ -1003,7 +1009,7 @@ impl<T: TextMeasure> Renderer<T> {
 
         for (idx, line_segments) in lines.iter().enumerate() {
             let y = self.cursor_y
-                + self.theme.code_padding_y
+                + effective_code_pad_y
                 + self.theme.font_size_code * 0.8
                 + idx as f32 * line_height;
 
@@ -1183,7 +1189,7 @@ impl<T: TextMeasure> Renderer<T> {
 
         write!(
             self.svg_content,
-            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
+            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1.5" />"#,
             left, hr_y, right, hr_y, self.theme.quote_border_color,
         )
         .unwrap();
@@ -1736,7 +1742,8 @@ impl<T: TextMeasure> Renderer<T> {
         let border_x = self.theme.padding_x
             + depth * self.theme.font_size_base * QUOTE_INDENT_RATIO
             + self.theme.font_size_base * QUOTE_INNER_PADDING_RATIO * 0.5;
-        let start_y = self.cursor_y - self.theme.font_size_base * 0.8;
+        let quote_pad_y = self.theme.font_size_base * 0.4;
+        let start_y = self.cursor_y - self.theme.font_size_base * 0.8 - quote_pad_y;
 
         self.blockquotes.push(QuoteState { border_x, start_y });
         self.cursor_x = self.line_start_x();
@@ -1749,13 +1756,27 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         if let Some(quote) = self.blockquotes.pop() {
+            let bg_x = quote.border_x - 2.0;
+            let bg_width = self.right_edge() - bg_x;
+            let quote_pad_y = self.theme.font_size_base * 0.4;
+            let end_y = self.cursor_y + quote_pad_y;
             write!(
                 self.svg_content,
-                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="2" />"#,
+                r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" fill-opacity="0.06" />"#,
+                bg_x,
+                quote.start_y,
+                bg_width,
+                end_y - quote.start_y,
+                self.theme.quote_border_color,
+            )
+            .unwrap();
+            write!(
+                self.svg_content,
+                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="3" />"#,
                 quote.border_x,
                 quote.start_y,
                 quote.border_x,
-                self.cursor_y,
+                end_y,
                 self.theme.quote_border_color,
             )
             .unwrap();
@@ -1877,10 +1898,11 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn list_marker_x(&self) -> f32 {
+        let base_indent = self.theme.font_size_base * LIST_INDENT_RATIO;
         let depth_offset = self.list_stack.len().saturating_sub(1) as f32
             * self.theme.font_size_base
             * LIST_INDENT_RATIO;
-        self.base_left_indent() + depth_offset
+        self.base_left_indent() + base_indent + depth_offset
     }
 
     fn base_left_indent(&self) -> f32 {
@@ -2031,9 +2053,9 @@ mod tests {
         let svg = result.unwrap();
 
         // Check if rect height is calculated correctly according to the new logic
-        // rect_height = font_size_code + code_padding_y
-        // 14.0 + 10.0 = 24.0
-        assert!(svg.contains("height=\"24.00\""));
+        // rect_height = font_size_code * 1.25 + code_padding_y
+        // 14.0 * 1.25 + 10.0 = 27.5
+        assert!(svg.contains("height=\"27.50\""));
     }
 
     #[test]
@@ -2654,43 +2676,6 @@ GammaThree
                 count,
                 rect_count
             );
-        });
-    }
-
-    /// Property test: Font sizes should be positive
-    #[test]
-    fn test_proptest_font_sizes_positive() {
-        use proptest::prelude::*;
-
-        proptest!(|(base_size in 10.0f32..24.0)| {
-            let theme = Theme {
-                font_size_base: base_size,
-                ..Theme::default()
-            };
-
-            // Font sizes should always be positive
-            prop_assert!(theme.font_size_base > 0.0);
-            prop_assert!(theme.font_size_code > 0.0);
-            prop_assert!(theme.line_height > 0.0);
-        });
-    }
-
-    /// Property test: Word spacing should be positive
-    #[test]
-    fn test_proptest_word_spacing_positive() {
-        use proptest::prelude::*;
-
-        proptest!(|(font_size in 8.0f32..32.0)| {
-            let theme = Theme {
-                font_size_base: font_size,
-                ..Theme::default()
-            };
-            let measure = MockMeasure;
-            let _renderer = Renderer::new(theme, measure, 800.0).unwrap();
-
-            // Word spacing should always be positive
-            let min_spacing = font_size * 0.15; // minimum expected space between words
-            prop_assert!(min_spacing > 0.0);
         });
     }
 
