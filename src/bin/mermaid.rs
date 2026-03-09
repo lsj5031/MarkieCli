@@ -2,9 +2,7 @@ use clap::Parser;
 use markie::fonts::CosmicTextMeasure;
 use markie::mermaid::{render_diagram, DiagramStyle};
 use markie::theme::Theme;
-use resvg::usvg;
-use std::path::{Path, PathBuf};
-use tiny_skia::{Pixmap, Transform};
+use std::path::PathBuf;
 
 /// Standalone Mermaid diagram renderer (SVG/PNG/PDF)
 #[derive(Parser, Debug)]

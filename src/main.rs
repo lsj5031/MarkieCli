@@ -1,8 +1,6 @@
 use clap::{CommandFactory, Parser};
 use markie::{fonts, renderer, theme};
-use resvg::usvg;
 use std::path::{Path, PathBuf};
-use tiny_skia::{Pixmap, Transform};
 
 /// A pure Rust Markdown to SVG/PNG/PDF renderer
 #[derive(Parser, Debug)]
