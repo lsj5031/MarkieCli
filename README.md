@@ -143,7 +143,7 @@ curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/in
 Optional environment overrides:
 
 ```bash
-MARKIE_VERSION=0.3.0 INSTALL_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/install.sh | sh
+MARKIE_VERSION=0.4.0 INSTALL_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/install.sh | sh
 ```
 
 ## Usage
