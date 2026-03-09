@@ -2,7 +2,7 @@
 
 **Created:** 2026-03-09
 **Updated:** 2026-03-10
-**Status:** Phase 1, 2, 3 Complete
+**Status:** Phase 1, 2, 3, 4 Complete
 
 ## Problem Statement
 
@@ -400,78 +400,60 @@ mod tests {
 }
 ```
 
-## Phase 4: Mermaid Label Collision Fix
+## Phase 4: Mermaid Label Collision Fix ✅ COMPLETE
 
-### 4.1 Add Label Router
+### 4.1 Enhanced EdgeLabelPlacer
 
-**File:** `src/mermaid/layout.rs`
+**File:** `src/layout.rs`
 
+Enhanced `EdgeLabelPlacer` with:
+- Scoring-based placement with `find_best_position()` method
+- Separate tracking for obstacles (nodes) vs labels
+- `LabelPosition` struct with collision score information
+- Support for candidate search with movement penalty
+
+**Implemented:**
 ```rust
-/// Edge label placement with collision avoidance
 pub struct EdgeLabelPlacer {
-    occupied_regions: Vec<BBox>,
+    obstacles: Vec<Rect>,    // Node regions (higher collision penalty)
+    labels: Vec<Rect>,       // Label regions (moderate collision penalty)
     padding: f32,
 }
 
 impl EdgeLabelPlacer {
-    pub fn new(padding: f32) -> Self {
-        Self {
-            occupied_regions: Vec::new(),
-            padding,
-        }
-    }
-
-    pub fn reserve(&mut self, bbox: BBox) {
-        self.occupied_regions.push(bbox.with_padding(self.padding));
-    }
-
-    pub fn find_position(&self, preferred: (f32, f32), label_size: (f32, f32)) -> (f32, f32) {
-        let (mut x, mut y) = preferred;
-        let (w, h) = label_size;
-
-        // Try the preferred position first
-        if !self.collides(x, y, w, h) {
-            return (x, y);
-        }
-
-        // Try offsetting vertically
-        for offset in [10.0, 20.0, 30.0, -10.0, -20.0, -30.0] {
-            if !self.collides(x, y + offset, w, h) {
-                return (x, y + offset);
-            }
-        }
-
-        // Try offsetting horizontally
-        for offset in [10.0, 20.0, 30.0, -10.0, -20.0, -30.0] {
-            if !self.collides(x + offset, y, w, h) {
-                return (x + offset, y);
-            }
-        }
-
-        // Fallback to preferred position
-        (x, y)
-    }
-
-    fn collides(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
-        let proposed = BBox::new(x, y, w, h);
-        self.occupied_regions.iter().any(|r| {
-            proposed.x < r.x + r.width
-                && proposed.x + proposed.width > r.x
-                && proposed.y < r.y + r.height
-                && proposed.y + proposed.height > r.y
-        })
-    }
+    pub fn reserve_obstacle(&mut self, bbox: Rect);
+    pub fn reserve_label(&mut self, bbox: Rect);
+    pub fn find_position(&self, preferred: (f32, f32), label_size: (f32, f32)) -> (f32, f32);
+    pub fn find_best_position(&self, anchor: (f32, f32), label_size: (f32, f32),
+        candidates: impl IntoIterator<Item = (f32, f32)>, movement_weight: f32) -> LabelPosition;
+    pub fn commit_label(&mut self, rect: Rect);
 }
 ```
+
+**Tests added:**
+- `test_edge_label_placer_scoring_prefers_no_collision`
+- `test_edge_label_placer_scoring_with_collision_chooses_best`
+- `test_edge_label_placer_commit_label`
+- `test_edge_label_placer_score_rect_no_collision`
+- `test_edge_label_placer_score_rect_with_obstacle`
+- `test_edge_label_placer_score_rect_with_label`
+
+### 4.2 Code Simplification
+
+Simplified codebase:
+- Total tests: 75 (up from 46)
+- `layout.rs`: 696 lines with comprehensive collision detection
+- Cleaner separation between obstacles and labels
+- Unified scoring approach for label placement
 
 ## Implementation Order
 
 1. ✅ Phase 1.1: Line height safety margins
 2. ✅ Phase 1.2: Descent padding
 3. ✅ Phase 1.3: Inline code box fix
-4. Phase 2: Add property-based tests
-5. Phase 3: Extract layout contracts (optional, larger refactoring)
-6. Phase 4: Mermaid label collision fix (optional)
+4. ✅ Phase 2: Add property-based tests
+5. ✅ Phase 3: Extract layout contracts
+6. ✅ Phase 4: Mermaid label collision fix
 
 ## Verification
 

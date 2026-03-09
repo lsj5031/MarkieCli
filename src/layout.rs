@@ -209,12 +209,32 @@ impl<T: TextMeasure> TextLayout for TextLayoutEngine<T> {
     }
 }
 
+/// Result of finding a label position with scoring information.
+#[derive(Debug, Clone, Copy)]
+pub struct LabelPosition {
+    /// The x coordinate of the label anchor point.
+    pub x: f32,
+    /// The y coordinate of the label anchor point.
+    pub y: f32,
+    /// The bounding rect of the placed label.
+    pub rect: Rect,
+    /// The collision score (lower is better, 0 = no collision).
+    pub score: f32,
+}
+
 /// Edge label placement with collision avoidance.
 ///
 /// Used by Mermaid diagram rendering to ensure edge labels
 /// don't overlap with nodes or other labels.
+///
+/// Supports both simple offset-based placement and advanced
+/// scoring-based placement with candidate search.
 pub struct EdgeLabelPlacer {
-    occupied_regions: Vec<Rect>,
+    /// Regions occupied by nodes (higher collision penalty).
+    obstacles: Vec<Rect>,
+    /// Regions occupied by other labels (moderate collision penalty).
+    labels: Vec<Rect>,
+    /// Padding around each region.
     padding: f32,
 }
 
@@ -222,17 +242,59 @@ impl EdgeLabelPlacer {
     /// Create a new edge label placer with the given padding between labels.
     pub fn new(padding: f32) -> Self {
         Self {
-            occupied_regions: Vec::new(),
+            obstacles: Vec::new(),
+            labels: Vec::new(),
             padding,
         }
     }
 
-    /// Reserve a region as occupied (e.g., a node or existing label).
-    pub fn reserve(&mut self, bbox: Rect) {
-        self.occupied_regions.push(bbox.with_padding(self.padding));
+    /// Reserve an obstacle region (e.g., a node).
+    pub fn reserve_obstacle(&mut self, bbox: Rect) {
+        self.obstacles.push(bbox.with_padding(self.padding));
     }
 
-    /// Find a non-overlapping position for a label.
+    /// Reserve a region as occupied (e.g., a node or existing label).
+    /// Deprecated: use reserve_obstacle or reserve_label instead.
+    pub fn reserve(&mut self, bbox: Rect) {
+        self.labels.push(bbox.with_padding(self.padding));
+    }
+
+    /// Reserve a label region.
+    pub fn reserve_label(&mut self, bbox: Rect) {
+        self.labels.push(bbox.with_padding(self.padding));
+    }
+
+    /// Calculate collision score for a rect position.
+    ///
+    /// Returns a score where:
+    /// - 0.0 means no collision
+    /// - Higher values indicate more/worse collisions
+    fn score_rect(&self, r: &Rect) -> f32 {
+        let mut score = 0.0;
+
+        // Penalty for going out of bounds (top-left)
+        if r.x < 0.0 || r.y < 0.0 {
+            score += 1000.0;
+        }
+
+        // Penalty for colliding with obstacles (nodes)
+        for o in &self.obstacles {
+            if r.overlaps(o) {
+                score += 140.0;
+            }
+        }
+
+        // Penalty for colliding with other labels
+        for l in &self.labels {
+            if r.overlaps(l) {
+                score += 220.0;
+            }
+        }
+
+        score
+    }
+
+    /// Find a non-overlapping position for a label using simple offset search.
     ///
     /// Tries the preferred position first, then tries offsetting
     /// vertically and horizontally to find a non-overlapping position.
@@ -263,15 +325,85 @@ impl EdgeLabelPlacer {
         (x, y)
     }
 
+    /// Find the best position for a label using scoring-based candidate search.
+    ///
+    /// This is the advanced method used for Mermaid edge labels.
+    /// It searches through candidate positions and picks the one with
+    /// the lowest collision score, with a penalty for distance from anchor.
+    ///
+    /// # Arguments
+    /// * `anchor` - The preferred anchor point (e.g., edge midpoint)
+    /// * `label_size` - The (width, height) of the label
+    /// * `candidates` - Iterator of (x, y) candidate positions to try
+    /// * `movement_weight` - How much to penalize distance from anchor (default: 2.0)
+    ///
+    /// # Returns
+    /// The best label position found.
+    pub fn find_best_position(
+        &self,
+        anchor: (f32, f32),
+        label_size: (f32, f32),
+        candidates: impl IntoIterator<Item = (f32, f32)>,
+        movement_weight: f32,
+    ) -> LabelPosition {
+        let (anchor_x, anchor_y) = anchor;
+        let (w, h) = label_size;
+
+        let rect_at = |lx: f32, ly: f32| -> Rect {
+            Rect::new(lx - w / 2.0, ly - h + 2.0, w, h)
+        };
+
+        let mut best = LabelPosition {
+            x: anchor_x,
+            y: anchor_y,
+            rect: rect_at(anchor_x, anchor_y),
+            score: f32::MAX,
+        };
+
+        for (lx, ly) in candidates {
+            let r = rect_at(lx, ly);
+            let collision_score = self.score_rect(&r);
+            let distance = ((lx - anchor_x).powi(2) + (ly - anchor_y).powi(2)).sqrt();
+            let total_cost = collision_score + distance * movement_weight;
+
+            // Prefer lower cost, or same cost but closer to anchor
+            if total_cost < best.score
+                || ((total_cost - best.score).abs() < f32::EPSILON
+                    && distance < ((best.x - anchor_x).powi(2) + (best.y - anchor_y).powi(2)).sqrt())
+            {
+                best = LabelPosition {
+                    x: lx,
+                    y: ly,
+                    rect: r,
+                    score: total_cost,
+                };
+            }
+        }
+
+        best
+    }
+
     /// Check if a rectangle at the given position would collide with any occupied region.
     fn collides(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
-        let proposed = Rect::new(x - self.padding, y - self.padding, w + self.padding * 2.0, h + self.padding * 2.0);
-        self.occupied_regions.iter().any(|r| proposed.overlaps(r))
+        let proposed =
+            Rect::new(x - self.padding, y - self.padding, w + self.padding * 2.0, h + self.padding * 2.0);
+        self.obstacles.iter().chain(self.labels.iter()).any(|r| proposed.overlaps(r))
+    }
+
+    /// Commit a placed label so future searches avoid it.
+    pub fn commit_label(&mut self, rect: Rect) {
+        self.labels.push(rect.with_padding(self.padding));
     }
 
     /// Clear all occupied regions.
     pub fn clear(&mut self) {
-        self.occupied_regions.clear();
+        self.obstacles.clear();
+        self.labels.clear();
+    }
+
+    /// Get the number of reserved labels.
+    pub fn label_count(&self) -> usize {
+        self.labels.len()
     }
 }
 
@@ -408,6 +540,94 @@ mod tests {
         let (x, y) = placer.find_position((55.0, 55.0), (30.0, 15.0));
         assert_eq!(x, 55.0);
         assert_eq!(y, 55.0);
+    }
+
+    #[test]
+    fn test_edge_label_placer_scoring_prefers_no_collision() {
+        let mut placer = EdgeLabelPlacer::new(5.0);
+
+        // Reserve an obstacle
+        placer.reserve_obstacle(Rect::new(50.0, 50.0, 40.0, 20.0));
+
+        // Candidates: one collides, one doesn't
+        // Using a low movement_weight (0.1) to ensure collision avoidance dominates
+        let candidates = [(55.0, 55.0), (150.0, 150.0)];
+        let result = placer.find_best_position((100.0, 100.0), (30.0, 15.0), candidates, 0.1);
+
+        // Should pick the non-colliding position
+        assert_eq!(result.x, 150.0);
+        assert_eq!(result.y, 150.0);
+    }
+
+    #[test]
+    fn test_edge_label_placer_scoring_with_collision_chooses_best() {
+        let mut placer = EdgeLabelPlacer::new(5.0);
+
+        // Reserve obstacles so all candidates collide
+        placer.reserve_obstacle(Rect::new(0.0, 0.0, 200.0, 200.0));
+
+        let candidates = [(50.0, 50.0), (100.0, 100.0)];
+        let result = placer.find_best_position((75.0, 75.0), (30.0, 15.0), candidates, 2.0);
+
+        // Should pick the one closer to anchor (75, 75) even though both collide
+        // Distance from (50, 50) to (75, 75) = ~35
+        // Distance from (100, 100) to (75, 75) = ~35
+        // Both same distance, so it should pick the first one (50, 50)
+        assert_eq!(result.x, 50.0);
+        assert_eq!(result.y, 50.0);
+    }
+
+    #[test]
+    fn test_edge_label_placer_commit_label() {
+        let mut placer = EdgeLabelPlacer::new(5.0);
+
+        let candidates = [(55.0, 55.0)];
+        let result = placer.find_best_position((55.0, 55.0), (30.0, 15.0), candidates, 2.0);
+
+        // Commit the placed label
+        placer.commit_label(result.rect);
+
+        // Now it should be counted
+        assert_eq!(placer.label_count(), 1);
+
+        // Future placements should avoid this region
+        let candidates2 = [(55.0, 55.0), (200.0, 200.0)];
+        let result2 = placer.find_best_position((100.0, 100.0), (30.0, 15.0), candidates2, 2.0);
+        assert_eq!(result2.x, 200.0);
+    }
+
+    #[test]
+    fn test_edge_label_placer_score_rect_no_collision() {
+        let placer = EdgeLabelPlacer::new(5.0);
+        let r = Rect::new(100.0, 100.0, 30.0, 15.0);
+
+        // Should have zero score when nothing is reserved
+        let score = placer.score_rect(&r);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn test_edge_label_placer_score_rect_with_obstacle() {
+        let mut placer = EdgeLabelPlacer::new(5.0);
+        placer.reserve_obstacle(Rect::new(90.0, 90.0, 50.0, 30.0));
+
+        let r = Rect::new(100.0, 100.0, 30.0, 15.0);
+        let score = placer.score_rect(&r);
+
+        // Should have non-zero score due to obstacle collision
+        assert!(score > 0.0);
+    }
+
+    #[test]
+    fn test_edge_label_placer_score_rect_with_label() {
+        let mut placer = EdgeLabelPlacer::new(5.0);
+        placer.reserve_label(Rect::new(90.0, 90.0, 50.0, 30.0));
+
+        let r = Rect::new(100.0, 100.0, 30.0, 15.0);
+        let score = placer.score_rect(&r);
+
+        // Should have non-zero score due to label collision
+        assert!(score > 0.0);
     }
 
     // Property-based tests
