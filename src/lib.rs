@@ -1,5 +1,6 @@
 pub mod export;
 pub mod fonts;
+pub mod layout;
 pub mod math;
 pub mod mermaid;
 pub mod renderer;

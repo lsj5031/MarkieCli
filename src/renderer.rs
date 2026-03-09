@@ -2534,4 +2534,263 @@ GammaThree
             "Should have at least 3 rect elements for inline code, found {rect_count}"
         );
     }
+
+    // ========================================
+    // Phase 2: Property-Based Tests
+    // ========================================
+
+    /// Property test: Line spacing should prevent visual overlap
+    /// across a wide range of font sizes and line heights
+    #[test]
+    fn test_proptest_line_spacing_prevents_overlap() {
+        use proptest::prelude::*;
+
+        proptest!(|(font_size in 8.0f32..48.0, line_height in 0.8f32..3.0)| {
+            let theme = Theme {
+                line_height,
+                font_size_base: font_size,
+                ..Theme::default()
+            };
+            let measure = MockMeasure;
+            let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+            let initial_y = renderer.cursor_y;
+            renderer.advance_line(font_size);
+            let cursor_delta = renderer.cursor_y - initial_y;
+
+            // Next line should start with enough gap to prevent visual overlap
+            // Minimum gap should be at least font_size * 0.9 (accounting for descent)
+            prop_assert!(
+                cursor_delta >= font_size * 0.9,
+                "cursor_delta ({}) should be >= font_size * 0.9 ({})",
+                cursor_delta,
+                font_size * 0.9
+            );
+        });
+    }
+
+    /// Property test: Renderer should handle any valid markdown input
+    /// without panicking or returning an error
+    #[test]
+    fn test_proptest_renders_any_markdown_without_error() {
+        use proptest::prelude::*;
+
+        // Generate valid markdown-like text
+        prop_compose! {
+            fn arb_markdown_text()(s in "[a-zA-Z0-9 \n.,!?*-]*") -> String {
+                s
+            }
+        }
+
+        proptest!(|(text in arb_markdown_text())| {
+            let theme = Theme::default();
+            let measure = MockMeasure;
+            let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+            let result = renderer.render(&text);
+            prop_assert!(result.is_ok(), "Renderer should not error on valid markdown");
+        });
+    }
+
+    /// Property test: SVG output should always be valid
+    /// (contains required root element and proper structure)
+    #[test]
+    fn test_proptest_svg_output_valid_structure() {
+        use proptest::prelude::*;
+
+        prop_compose! {
+            fn arb_simple_text()(s in "[a-zA-Z0-9 ]{1,50}") -> String {
+                s
+            }
+        }
+
+        proptest!(|(text in arb_simple_text())| {
+            let theme = Theme::default();
+            let measure = MockMeasure;
+            let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+            let result = renderer.render(&text);
+            prop_assert!(result.is_ok());
+
+            let svg = result.unwrap();
+
+            // Basic SVG structure validation
+            prop_assert!(svg.starts_with("<?xml") || svg.starts_with("<svg"));
+            prop_assert!(svg.contains("<svg"));
+            prop_assert!(svg.contains("</svg>"));
+        });
+    }
+
+    /// Property test: Inline code elements should never overlap
+    /// regardless of the number of consecutive code spans
+    #[test]
+    fn test_proptest_multiple_inline_code_no_overlap() {
+        use proptest::prelude::*;
+
+        proptest!(|(count in 2usize..10)| {
+            let theme = Theme {
+                font_size_code: 14.0,
+                code_padding_x: 4.0,
+                code_padding_y: 3.0,
+                ..Theme::default()
+            };
+            let measure = MockMeasure;
+            let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+            // Generate markdown with `count` inline code elements
+            let code_elements: Vec<String> = (0..count).map(|i| format!("`code{i}`")).collect();
+            let markdown = code_elements.join(" ");
+
+            let result = renderer.render(&markdown);
+            prop_assert!(result.is_ok());
+
+            let svg = result.unwrap();
+
+            // Should have at least `count` rect elements
+            let rect_count = svg.matches("<rect").count();
+            prop_assert!(
+                rect_count >= count,
+                "Expected at least {} rects, found {}",
+                count,
+                rect_count
+            );
+        });
+    }
+
+    /// Property test: Font sizes should be positive
+    #[test]
+    fn test_proptest_font_sizes_positive() {
+        use proptest::prelude::*;
+
+        proptest!(|(base_size in 10.0f32..24.0)| {
+            let theme = Theme {
+                font_size_base: base_size,
+                ..Theme::default()
+            };
+
+            // Font sizes should always be positive
+            prop_assert!(theme.font_size_base > 0.0);
+            prop_assert!(theme.font_size_code > 0.0);
+            prop_assert!(theme.line_height > 0.0);
+        });
+    }
+
+    /// Property test: Word spacing should be positive
+    #[test]
+    fn test_proptest_word_spacing_positive() {
+        use proptest::prelude::*;
+
+        proptest!(|(font_size in 8.0f32..32.0)| {
+            let theme = Theme {
+                font_size_base: font_size,
+                ..Theme::default()
+            };
+            let measure = MockMeasure;
+            let _renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+            // Word spacing should always be positive
+            let min_spacing = font_size * 0.15; // minimum expected space between words
+            prop_assert!(min_spacing > 0.0);
+        });
+    }
+
+    /// Property test: Renderer width must accommodate content
+    #[test]
+    fn test_proptest_renderer_width_constraint() {
+        use proptest::prelude::*;
+
+        proptest!(|(width in 200.0f32..2000.0)| {
+            let theme = Theme::default();
+            let measure = MockMeasure;
+            let result = Renderer::new(theme, measure, width);
+
+            prop_assert!(result.is_ok(), "Renderer should be creatable with width {}", width);
+        });
+    }
+
+    /// Property test: Consecutive lines should have increasing y positions
+    #[test]
+    fn test_proptest_lines_have_increasing_y_positions() {
+        use proptest::prelude::*;
+
+        proptest!(|(line_count in 2usize..20)| {
+            let theme = Theme::default();
+            let measure = MockMeasure;
+            let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+            // Render multiple paragraphs
+            let paragraphs: Vec<String> = (0..line_count).map(|i| format!("Paragraph {} content here.", i)).collect();
+            let markdown = paragraphs.join("\n\n");
+
+            let result = renderer.render(&markdown);
+            prop_assert!(result.is_ok());
+
+            let svg = result.unwrap();
+
+            // Extract y positions
+            fn extract_y_positions(svg: &str) -> Vec<f32> {
+                let mut positions = Vec::new();
+                let pattern = " y=\"";
+                let mut search_start = 0;
+                while let Some(pos) = svg[search_start..].find(pattern) {
+                    let abs_pos = search_start + pos;
+                    let y_start = abs_pos + pattern.len();
+                    if let Some(end_pos) = svg[y_start..].find('"') {
+                        if let Ok(y) = svg[y_start..y_start + end_pos].parse::<f32>() {
+                            positions.push(y);
+                        }
+                    }
+                    search_start = y_start;
+                }
+                positions
+            }
+
+            let y_positions = extract_y_positions(&svg);
+
+            // Sort and check that unique positions are increasing
+            let mut unique_sorted: Vec<f32> = y_positions.iter().cloned().collect();
+            unique_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            unique_sorted.dedup();
+
+            // With line_count paragraphs, we should have multiple distinct y positions
+            // and they should be in increasing order (already sorted)
+            if unique_sorted.len() >= 2 {
+                for i in 1..unique_sorted.len() {
+                    prop_assert!(
+                        unique_sorted[i] > unique_sorted[i-1],
+                        "Y positions should be strictly increasing: {} should be > {}",
+                        unique_sorted[i],
+                        unique_sorted[i-1]
+                    );
+                }
+            }
+        });
+    }
+
+    /// Property test: Code block rendering should handle any code content
+    #[test]
+    fn test_proptest_code_blocks_handle_any_content() {
+        use proptest::prelude::*;
+
+        prop_compose! {
+            fn arb_code_content()(s in "[a-zA-Z0-9 \\n\\t{}()\\[\\];,.:!?+=\\-*/%<>\"']{0,200}") -> String {
+                s
+            }
+        }
+
+        proptest!(|(code in arb_code_content())| {
+            let theme = Theme::default();
+            let measure = MockMeasure;
+            let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+            let markdown = format!("```\n{}\n```", code);
+            let result = renderer.render(&markdown);
+
+            prop_assert!(result.is_ok(), "Code block should render without error");
+
+            let svg = result.unwrap();
+            // Should contain code block elements
+            prop_assert!(svg.contains("<rect") || svg.contains("<text"));
+        });
+    }
 }

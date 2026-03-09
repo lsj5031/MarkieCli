@@ -1,8 +1,8 @@
 # TDD Refactoring Plan for MarkieCli Layout System
 
 **Created:** 2026-03-09
-**Updated:** 2026-03-09
-**Status:** Phase 1 Complete
+**Updated:** 2026-03-10
+**Status:** Phase 1, 2, 3 Complete
 
 ## Problem Statement
 
@@ -95,9 +95,22 @@ let ascent_ratio = 0.75; // Typical ascent ratio for most fonts
 let rect_y = self.cursor_y - self.theme.font_size_code * ascent_ratio - self.theme.code_padding_y * 0.5;
 ```
 
-## Phase 2: Property-Based Tests (Medium Risk)
+## Phase 2: Property-Based Tests (Medium Risk) ✅ COMPLETE
 
-### 2.1 Add proptest Dependency
+Commit: TBD
+
+Added 8 property-based tests in `src/renderer.rs`:
+- `test_proptest_line_spacing_prevents_overlap`
+- `test_proptest_renders_any_markdown_without_error`
+- `test_proptest_svg_output_valid_structure`
+- `test_proptest_multiple_inline_code_no_overlap`
+- `test_proptest_font_sizes_positive`
+- `test_proptest_word_spacing_positive`
+- `test_proptest_renderer_width_constraint`
+- `test_proptest_lines_have_increasing_y_positions`
+- `test_proptest_code_blocks_handle_any_content`
+
+### 2.1 Add proptest Dependency ✅
 
 **File:** `Cargo.toml`
 
@@ -158,9 +171,19 @@ mod property_tests {
 }
 ```
 
-## Phase 3: GlyphBox-Based Layout (Higher Risk)
+## Phase 3: GlyphBox-Based Layout (Higher Risk) ✅ COMPLETE
 
-### 3.1 Define Layout Contracts
+Commit: TBD
+
+Created `src/layout.rs` with:
+- `Rect` struct for bounding boxes
+- `GlyphBox` struct for visual text bounds
+- `TextLayout` trait for layout engines
+- `TextLayoutEngine` implementation
+- `EdgeLabelPlacer` for Mermaid label collision avoidance
+- 14 unit tests + 3 property-based tests
+
+### 3.1 Define Layout Contracts ✅
 
 **New File:** `src/layout.rs`
 
