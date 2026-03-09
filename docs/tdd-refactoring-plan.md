@@ -1,7 +1,8 @@
 # TDD Refactoring Plan for MarkieCli Layout System
 
 **Created:** 2026-03-09
-**Status:** In Progress
+**Updated:** 2026-03-09
+**Status:** Phase 1 Complete
 
 ## Problem Statement
 
@@ -11,25 +12,16 @@ The current layout implementation has text overlap issues caused by:
 3. Fixed offsets for inline code boxes that may not match font metrics
 4. Mermaid edge label collision detection at placement time only
 
-## Phase 1: Quick Wins (Low Risk)
+## Phase 1: Quick Wins (Low Risk) ✅ COMPLETE
 
-### 1.1 Line Height Safety Margins
+Commit: `65b69d0`
+
+### 1.1 Line Height Safety Margins ✅
 
 **File:** `src/renderer.rs`
-**Location:** `current_line_height()` method (~line 1867)
+**Location:** `current_line_height()` method
 
-**Current Code:**
-```rust
-fn current_line_height(&self) -> f32 {
-    if self.heading_level.is_some() {
-        1.25
-    } else {
-        self.theme.line_height
-    }
-}
-```
-
-**New Code:**
+**Implemented:**
 ```rust
 fn current_line_height(&self) -> f32 {
     if self.heading_level.is_some() {
@@ -40,24 +32,37 @@ fn current_line_height(&self) -> f32 {
 }
 ```
 
-**Tests to add:**
-- Test that headings never use line height below 1.35
-- Test that body text never uses line height below 1.4
-- Test with various theme configurations
+**Tests added:** `test_line_height_has_safety_margin_for_body_text`
 
-### 1.2 Descent Padding in advance_line
+### 1.2 Descent Padding in advance_line ✅
 
 **File:** `src/renderer.rs`
-**Location:** `advance_line()` method (~line 1856)
+**Location:** `advance_line()` method
 
-**Current Code:**
+**Implemented:**
 ```rust
 fn advance_line(&mut self, font_size: f32) {
-    self.cursor_y += font_size * self.current_line_height();
+    let descent_padding = font_size * 0.15;
+    self.cursor_y += font_size * self.current_line_height() + descent_padding;
     self.cursor_x = self.line_start_x();
     self.at_line_start = true;
 }
 ```
+
+**Tests added:** `test_line_advance_includes_descent_padding`
+
+### 1.3 Inline Code Box Alignment Fix ✅
+
+**File:** `src/renderer.rs`
+**Location:** `render_inline_code()` method
+
+**Implemented:**
+```rust
+let ascent_ratio = 0.75;
+let rect_y = self.cursor_y - self.theme.font_size_code * ascent_ratio - self.theme.code_padding_y * 0.5;
+```
+
+**Tests added:** `test_inline_code_box_alignment_uses_ascent_ratio`, `test_consecutive_inline_code_no_overlap`
 
 **New Code:**
 ```rust
