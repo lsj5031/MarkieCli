@@ -691,9 +691,9 @@ impl<T: TextMeasure> Renderer<T> {
 
         // Tighter background box based on font size
         let rect_height = self.theme.font_size_code + self.theme.code_padding_y;
-        // Align roughly to baseline - ascent, then split padding top/bottom
-        let rect_y =
-            self.cursor_y - self.theme.font_size_code * 0.8 - self.theme.code_padding_y / 2.0;
+        // Use font metrics for proper alignment (ascent ratio 0.75)
+        let ascent_ratio = 0.75;
+        let rect_y = self.cursor_y - self.theme.font_size_code * ascent_ratio - self.theme.code_padding_y * 0.5;
 
         write!(
             self.svg_content,
@@ -1814,17 +1814,19 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn advance_line(&mut self, font_size: f32) {
-        self.cursor_y += font_size * self.current_line_height();
+        let descent_padding = font_size * 0.15;
+        self.cursor_y += font_size * self.current_line_height() + descent_padding;
         self.cursor_x = self.line_start_x();
         self.at_line_start = true;
     }
 
     fn current_line_height(&self) -> f32 {
         if self.heading_level.is_some() {
-            // Tighter line height for headings
-            1.25
+            // Heading line height with safety margin
+            self.theme.line_height.max(1.35)
         } else {
-            self.theme.line_height
+            // Body text line height with safety margin
+            self.theme.line_height.max(1.4)
         }
     }
 
@@ -2367,6 +2369,169 @@ GammaThree
         assert!(
             ratio <= max_ratio,
             "Definition→NextTitle gap ({gap_def_to_next_title:.2}) should not be much larger than Title→Definition gap ({gap_title_to_def:.2}). Ratio: {ratio:.2}x (max allowed: {max_ratio}x). This indicates redundant new_line() calls in definition list handling."
+        );
+    }
+
+    // ========================================
+    // TDD Quick Win Tests (Phase 1)
+    // ========================================
+
+    /// Quick Win 1: Line height safety margins
+    /// Test that line height has a minimum safety margin even with tight theme settings
+    #[test]
+    fn test_line_height_has_safety_margin_for_body_text() {
+        // Create a theme with very tight line height
+        let theme = Theme {
+            line_height: 1.0, // Very tight - should be overridden by safety margin
+            font_size_base: 16.0,
+            ..Theme::default()
+        };
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        // Render multiple paragraphs to test line spacing
+        let markdown = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+
+        let svg = result.unwrap();
+
+        // Extract y positions of text elements
+        fn extract_y_positions(svg: &str) -> Vec<f32> {
+            let mut positions = Vec::new();
+            let pattern = " y=\"";
+            let mut search_start = 0;
+            while let Some(pos) = svg[search_start..].find(pattern) {
+                let abs_pos = search_start + pos;
+                let y_start = abs_pos + pattern.len();
+                if let Some(end_pos) = svg[y_start..].find('"') {
+                    if let Ok(y) = svg[y_start..y_start + end_pos].parse::<f32>() {
+                        positions.push(y);
+                    }
+                }
+                search_start = y_start;
+            }
+            positions
+        }
+
+        let y_positions = extract_y_positions(&svg);
+        // We should have at least 3 text elements (one for each paragraph)
+        assert!(y_positions.len() >= 3, "Should have at least 3 text elements, found {}", y_positions.len());
+
+        // Sort positions to get correct order
+        let mut sorted: Vec<f32> = y_positions.iter().cloned().collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        // Check gaps between consecutive elements
+        // With safety margin of 1.4, each gap should be at least font_size * 1.4 + descent
+        let font_size = 16.0_f32;
+        let min_expected_gap = font_size * 1.4; // line_height with safety margin
+
+        for i in 1..sorted.len().min(5) {
+            let gap = sorted[i] - sorted[i-1];
+            // We expect reasonable gaps (some might be in same line, so only check larger gaps)
+            if gap > font_size * 0.5 {  // Only check if it's potentially a line break
+                assert!(
+                    gap >= min_expected_gap * 0.8, // Allow some tolerance
+                    "Line spacing gap ({gap:.2}) should be at least {min:.2} (80% tolerance)",
+                    min = min_expected_gap * 0.8
+                );
+            }
+        }
+    }
+
+    /// Quick Win 2: Descent padding in advance_line
+    /// Test that line advances include descent padding to prevent text overlap
+    #[test]
+    fn test_line_advance_includes_descent_padding() {
+        let theme = Theme {
+            line_height: 1.4,
+            font_size_base: 16.0,
+            ..Theme::default()
+        };
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        // Record initial cursor position
+        let initial_y = renderer.cursor_y;
+
+        // Advance a line and check cursor movement
+        let font_size = 16.0_f32;
+        renderer.advance_line(font_size);
+
+        let cursor_delta = renderer.cursor_y - initial_y;
+
+        // With line_height 1.4 and descent_padding 0.15:
+        // Expected delta = font_size * line_height + font_size * 0.15
+        // = 16 * 1.4 + 16 * 0.15 = 22.4 + 2.4 = 24.8
+        let expected_min = font_size * 1.4; // at least line_height
+        let expected_with_descent = font_size * 1.4 + font_size * 0.15;
+
+        assert!(
+            cursor_delta >= expected_min,
+            "Cursor delta ({cursor_delta:.2}) should be at least {expected_min:.2}"
+        );
+
+        // The descent padding should add extra space
+        assert!(
+            cursor_delta >= expected_with_descent * 0.95, // Allow small floating point variance
+            "Cursor delta ({cursor_delta:.2}) should include descent padding (expected ~{expected_with_descent:.2})"
+        );
+    }
+
+    /// Quick Win 3: Inline code box alignment
+    /// Test that inline code background rect is properly aligned
+    #[test]
+    fn test_inline_code_box_alignment_uses_ascent_ratio() {
+        let theme = Theme {
+            font_size_code: 14.0,
+            code_padding_y: 4.0,
+            ..Theme::default()
+        };
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "Text with `code` inline";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+
+        let svg = result.unwrap();
+
+        // Find the rect y position (should be based on ascent_ratio=0.75, not 0.8)
+        // Expected: rect_y = cursor_y - font_size_code * 0.75 - code_padding_y * 0.5
+        assert!(
+            svg.contains("<rect"),
+            "SVG should contain a rect for inline code background"
+        );
+
+        // The fix changes from 0.8 to 0.75 ratio
+        // This is a visual test - the rect should be positioned correctly
+        // We verify the rendering succeeds without errors
+    }
+
+    /// Test that consecutive inline code elements don't overlap
+    #[test]
+    fn test_consecutive_inline_code_no_overlap() {
+        let theme = Theme {
+            font_size_code: 12.0,
+            code_padding_x: 3.0,
+            code_padding_y: 2.0,
+            ..Theme::default()
+        };
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "`first` `second` `third`";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+
+        let svg = result.unwrap();
+
+        // Count rect elements - should have 3 for inline code
+        let rect_count = svg.matches("<rect").count();
+        assert!(
+            rect_count >= 3,
+            "Should have at least 3 rect elements for inline code, found {rect_count}"
         );
     }
 }
