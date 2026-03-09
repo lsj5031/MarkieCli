@@ -495,15 +495,15 @@ impl<T: TextMeasure> Renderer<T> {
             }
             TagEnd::DefinitionListTitle => {
                 self.strong_depth = self.strong_depth.saturating_sub(1);
-                if !self.at_line_start {
-                    self.new_line();
-                }
+                // NOTE: Do NOT call new_line() here!
+                // Let Tag::DefinitionListTitle/DefinitionListDefinition handle spacing.
+                // Previously, calling new_line() in both start and end tags could
+                // cause redundant advances in edge cases.
             }
             TagEnd::DefinitionListDefinition => {
                 self.item_continuation_indent = None;
-                if !self.at_line_start {
-                    self.new_line();
-                }
+                // NOTE: Do NOT call new_line() here!
+                // Let Tag::DefinitionListTitle handle spacing for the next item.
             }
             TagEnd::FootnoteDefinition => {
                 self.in_footnote_definition = false;
@@ -2283,5 +2283,90 @@ flowchart LR
         let resolved = renderer.resolve_image_path(normal_path);
         assert!(resolved.is_some());
         assert!(resolved.unwrap().ends_with("src/renderer.rs"));
+    }
+
+    #[test]
+    fn test_definition_list_consistent_spacing() {
+        // Regression test: definition list items should have consistent spacing.
+        //
+        // Bug pattern (similar to nested list bug): Both Tag::DefinitionListTitle and
+        // TagEnd::DefinitionListTitle had `if !at_line_start { new_line() }` calls.
+        // This redundant pattern could cause spacing issues in edge cases.
+        //
+        // Fix: Only advance in start tags, not in end tags.
+        //
+        // Expected: All gaps between title→definition and definition→next_title
+        // should be consistent (within tolerance).
+        let theme = Theme::default();
+        let measure = crate::fonts::CosmicTextMeasure::new()
+            .expect("Failed to initialize font system");
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        // Use unique identifiers to distinguish title from definition text
+        let markdown = r#"AlphaOne
+: AlphaDef for first term.
+
+BetaTwo
+: BetaDef for second term.
+
+GammaThree
+: GammaDef for third term.
+"#;
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+
+        let svg = result.unwrap();
+
+        fn extract_y_for_text(svg: &str, search_text: &str) -> Option<f32> {
+            let search = format!(">{search_text}</text>");
+            let text_idx = svg.find(&search)?;
+            let prefix = &svg[..text_idx];
+            let pattern = " y=\"";
+            let y_pattern_pos = prefix.rfind(pattern)?;
+            let y_start = y_pattern_pos + pattern.len();
+            let y_end = prefix[y_start..].find('"')? + y_start;
+            prefix[y_start..y_end].parse().ok()
+        }
+
+        // Title text is bold, definition text is not
+        let first_title_y = extract_y_for_text(&svg, "AlphaOne")
+            .expect("Should find 'AlphaOne' in SVG");
+        let first_def_y = extract_y_for_text(&svg, "AlphaDef")
+            .expect("Should find 'AlphaDef' in SVG");
+        let second_title_y = extract_y_for_text(&svg, "BetaTwo")
+            .expect("Should find 'BetaTwo' in SVG");
+        let second_def_y = extract_y_for_text(&svg, "BetaDef")
+            .expect("Should find 'BetaDef' in SVG");
+        let third_title_y = extract_y_for_text(&svg, "GammaThree")
+            .expect("Should find 'GammaThree' in SVG");
+
+        // Calculate gaps
+        let gap_title_to_def = first_def_y - first_title_y;
+        let gap_def_to_next_title = second_title_y - first_def_y;
+        let gap_title_to_def_2 = second_def_y - second_title_y;
+        let gap_def_to_next_title_2 = third_title_y - second_def_y;
+
+        // All title→definition gaps should be similar
+        let tolerance = 5.0;
+        assert!(
+            (gap_title_to_def - gap_title_to_def_2).abs() <= tolerance,
+            "Title→Definition gaps should be consistent: first={gap_title_to_def:.2}, second={gap_title_to_def_2:.2}"
+        );
+
+        // All definition→next title gaps should be similar
+        assert!(
+            (gap_def_to_next_title - gap_def_to_next_title_2).abs() <= tolerance,
+            "Definition→NextTitle gaps should be consistent: first={gap_def_to_next_title:.2}, second={gap_def_to_next_title_2:.2}"
+        );
+
+        // KEY TEST: definition→next title gap should NOT be 2x the title→definition gap
+        // If there's redundant new_line() calls in both start and end tags,
+        // the definition→next title gap will be much larger.
+        let max_ratio = 2.0;
+        let ratio = gap_def_to_next_title / gap_title_to_def;
+        assert!(
+            ratio <= max_ratio,
+            "Definition→NextTitle gap ({gap_def_to_next_title:.2}) should not be much larger than Title→Definition gap ({gap_title_to_def:.2}). Ratio: {ratio:.2}x (max allowed: {max_ratio}x). This indicates redundant new_line() calls in definition list handling."
+        );
     }
 }
