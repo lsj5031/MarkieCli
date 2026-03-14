@@ -1642,8 +1642,12 @@ impl<T: TextMeasure> Renderer<T> {
 
     fn resolve_image_path(&self, src: &str) -> Option<PathBuf> {
         let src_path = Path::new(src);
+
+        // Security: Disallow absolute paths for local images.
+        // All local images must be resolved relative to the base_path.
         if src_path.is_absolute() {
-            return Some(src_path.to_path_buf());
+            eprintln!("Warning: absolute image paths are disallowed for security: {}", src);
+            return None;
         }
 
         if let Some(base) = self.base_path.as_ref() {
@@ -1693,7 +1697,8 @@ impl<T: TextMeasure> Renderer<T> {
             }
         }
 
-        Some(src_path.to_path_buf())
+        // Security: If no base_path is provided, we don't allow resolving local images.
+        None
     }
 
     fn start_list_item(&mut self) -> Result<(), String> {
@@ -2308,6 +2313,33 @@ flowchart LR
         let resolved = renderer.resolve_image_path(normal_path);
         assert!(resolved.is_some());
         assert!(resolved.unwrap().ends_with("src/renderer.rs"));
+    }
+
+    #[test]
+    fn test_resolve_image_path_absolute() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let base_path = std::env::current_dir().unwrap().join("src");
+        let renderer = Renderer::new_with_base_path(theme, measure, 800.0, Some(base_path)).unwrap();
+
+        let abs_path = if cfg!(windows) { "C:\\Windows\\System32\\drivers\\etc\\hosts" } else { "/etc/passwd" };
+        let resolved = renderer.resolve_image_path(abs_path);
+
+        // Absolute paths should be blocked
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn test_resolve_image_path_no_base() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let renderer = Renderer::new_with_base_path(theme, measure, 800.0, None).unwrap();
+
+        let rel_path = "some_image.png";
+        let resolved = renderer.resolve_image_path(rel_path);
+
+        // Without base_path, local images should not be resolved
+        assert!(resolved.is_none());
     }
 
     #[test]
