@@ -91,38 +91,8 @@ fn main() -> Result<(), String> {
         inner = inner_svg,
     );
 
-    let output_ext = args
-        .output
-        .extension()
-        .and_then(|e| e.to_str())
-        .ok_or("Output file has no extension")?
-        .to_ascii_lowercase();
-
-    match output_ext.as_str() {
-        "svg" => {
-            std::fs::write(&args.output, &svg)
-                .map_err(|e| format!("Failed to write SVG: {}", e))?;
-            eprintln!("SVG saved to: {}", args.output.display());
-        }
-        "png" => {
-            let png_data = markie::export::svg_to_png(&svg, args.png_scale)?;
-            std::fs::write(&args.output, png_data)
-                .map_err(|e| format!("Failed to write PNG: {}", e))?;
-            eprintln!("PNG saved to: {}", args.output.display());
-        }
-        "pdf" => {
-            let pdf_data = markie::export::svg_to_pdf(&svg)?;
-            std::fs::write(&args.output, pdf_data)
-                .map_err(|e| format!("Failed to write PDF: {}", e))?;
-            eprintln!("PDF saved to: {}", args.output.display());
-        }
-        _ => {
-            return Err(format!(
-                "Unsupported output format: .{} (use .svg, .png or .pdf)",
-                output_ext
-            ));
-        }
-    }
+    // Save output in the requested format
+    markie::export::save_output(&svg, &args.output, args.png_scale)?;
 
     Ok(())
 }

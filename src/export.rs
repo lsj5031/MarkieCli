@@ -72,6 +72,41 @@ pub fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Failed to convert SVG to PDF: {}", e))
 }
 
+pub fn save_output(svg: &str, output: &Path, png_scale: f32) -> Result<(), String> {
+    let output_ext = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .ok_or("Output file has no extension")?
+        .to_ascii_lowercase();
+
+    match output_ext.as_str() {
+        "svg" => {
+            std::fs::write(output, svg).map_err(|e| format!("Failed to write SVG: {}", e))?;
+            eprintln!("SVG saved to: {}", output.display());
+        }
+        "png" => {
+            let png_data = svg_to_png(svg, png_scale)?;
+            std::fs::write(output, png_data)
+                .map_err(|e| format!("Failed to write PNG: {}", e))?;
+            eprintln!("PNG saved to: {}", output.display());
+        }
+        "pdf" => {
+            let pdf_data = svg_to_pdf(svg)?;
+            std::fs::write(output, pdf_data)
+                .map_err(|e| format!("Failed to write PDF: {}", e))?;
+            eprintln!("PDF saved to: {}", output.display());
+        }
+        _ => {
+            return Err(format!(
+                "Unsupported output format: .{} (use .svg, .png or .pdf)",
+                output_ext
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn configure_font_fallbacks(fontdb: &mut usvg::fontdb::Database) {
     let mut sans_family: Option<String> = None;
     let mut serif_family: Option<String> = None;
