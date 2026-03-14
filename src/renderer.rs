@@ -1118,11 +1118,12 @@ impl<T: TextMeasure> Renderer<T> {
             }
 
             let mut current_text = String::new();
+            let mut ch_buf = [0u8; 4];
 
             for ch in text.chars() {
-                let candidate_str = String::from(ch);
+                let candidate_str = ch.encode_utf8(&mut ch_buf);
                 let (ch_width, _) = self.measure.measure_text(
-                    &candidate_str,
+                    candidate_str,
                     self.theme.font_size_code,
                     true,
                     false,
