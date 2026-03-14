@@ -123,37 +123,8 @@ fn run() -> Result<(), String> {
         renderer::Renderer::new_with_base_path(theme, measure, args.width, base_path)?;
     let svg = renderer.render(&markdown)?;
 
-    // Determine output format and save
-    let output_ext = output
-        .extension()
-        .and_then(|e| e.to_str())
-        .ok_or("Output file has no extension")?
-        .to_ascii_lowercase();
-
-    match output_ext.as_str() {
-        "svg" => {
-            std::fs::write(&output, svg).map_err(|e| format!("Failed to write SVG: {}", e))?;
-            eprintln!("SVG saved to: {}", output.display());
-        }
-        "png" => {
-            let png_data = markie::export::svg_to_png(&svg, args.png_scale)?;
-            std::fs::write(&output, png_data)
-                .map_err(|e| format!("Failed to write PNG: {}", e))?;
-            eprintln!("PNG saved to: {}", output.display());
-        }
-        "pdf" => {
-            let pdf_data = markie::export::svg_to_pdf(&svg)?;
-            std::fs::write(&output, pdf_data)
-                .map_err(|e| format!("Failed to write PDF: {}", e))?;
-            eprintln!("PDF saved to: {}", output.display());
-        }
-        _ => {
-            return Err(format!(
-                "Unsupported output format: .{} (use .svg, .png or .pdf)",
-                output_ext
-            ));
-        }
-    }
+    // Save output in the requested format
+    markie::export::save_output(&svg, &output, args.png_scale)?;
 
     Ok(())
 }
