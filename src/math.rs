@@ -973,6 +973,22 @@ fn is_large_operator(text: &str) -> bool {
 mod tests {
     use super::*;
 
+    struct MockMeasure;
+
+    impl TextMeasure for MockMeasure {
+        fn measure_text(
+            &mut self,
+            text: &str,
+            font_size: f32,
+            _is_code: bool,
+            _is_bold: bool,
+            _is_italic: bool,
+            _max_width: Option<f32>,
+        ) -> (f32, f32) {
+            (text.len() as f32 * font_size * 0.6, font_size)
+        }
+    }
+
     #[test]
     fn test_extract_text() {
         // Scenario 1: Empty input
@@ -1040,5 +1056,70 @@ mod tests {
             MathNode::Row(vec![MathNode::Text("inner".to_string())]),
         ];
         assert_eq!(extract_text(&mixture), "val: 42");
+    }
+
+    #[test]
+    fn test_render_math_basic() {
+        let mut measure = MockMeasure;
+        let result = render_math("x + 1", 16.0, "#000000", &mut measure, false);
+
+        assert!(result.is_ok());
+        let math_res = result.unwrap();
+        assert!(math_res.width > 0.0);
+        assert!(math_res.ascent > 0.0);
+        assert!(math_res.descent > 0.0);
+        assert!(math_res.svg_fragment.contains("<text"));
+        assert!(math_res.svg_fragment.contains("x"));
+        assert!(math_res.svg_fragment.contains("+"));
+        assert!(math_res.svg_fragment.contains("1"));
+    }
+
+    #[test]
+    fn test_render_math_error() {
+        let mut measure = MockMeasure;
+        // Invalid LaTeX (missing closing brace)
+        let result = render_math("\\frac{a}{", 16.0, "#000000", &mut measure, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("LaTeX parse error"));
+    }
+
+    #[test]
+    fn test_render_math_display_mode() {
+        let mut measure = MockMeasure;
+        let inline_res = render_math("x^2", 16.0, "#000000", &mut measure, false).unwrap();
+        let display_res = render_math("x^2", 16.0, "#000000", &mut measure, true).unwrap();
+
+        // They might have different metrics or structures, but both should be valid SVGs
+        assert!(inline_res.svg_fragment.contains("<text"));
+        assert!(display_res.svg_fragment.contains("<text"));
+    }
+
+    #[test]
+    fn test_render_math_complex() {
+        let mut measure = MockMeasure;
+        let expressions = vec![
+            "\\frac{a}{b}",
+            "\\sqrt{x}",
+            "\\sqrt[3]{x}",
+            "\\sum_{i=0}^n i",
+            "x_{i}",
+            "x^{2}",
+            "x_{i}^{2}",
+            "\\text{plain text}",
+            "\\begin{matrix} a & b \\\\ c & d \\end{matrix}",
+            "\\binom{n}{k}",
+        ];
+
+        for expr in expressions {
+            let result = render_math(expr, 16.0, "#000000", &mut measure, true);
+            assert!(
+                result.is_ok(),
+                "Failed to render complex expression: {}",
+                expr
+            );
+            let res = result.unwrap();
+            assert!(res.width > 0.0);
+            assert!(!res.svg_fragment.is_empty());
+        }
     }
 }
