@@ -565,79 +565,50 @@ impl<T: TextMeasure> Renderer<T> {
         Ok(())
     }
 
-    fn render_token(&mut self, token: &str, is_whitespace: bool) -> Result<(), String> {
-        if token.is_empty() {
-            return Ok(());
-        }
+    fn draw_line_decoration(&mut self, y: f32, width: f32, fill: &str) -> Result<(), String> {
+        write!(
+            self.svg_content,
+            r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
+            self.cursor_x,
+            y,
+            self.cursor_x + width,
+            y,
+            fill,
+        )
+        .map_err(|e| e.to_string())
+    }
 
-        let font_size = self.current_font_size();
-        let is_bold = self.is_bold();
-        let is_italic = self.is_italic();
-
-        if is_whitespace {
-            if self.at_line_start {
-                return Ok(());
-            }
-
-            let (raw_space_width, _) = self
-                .measure
-                .measure_text(" ", font_size, false, is_bold, is_italic, None);
-
-            // Some shapers trim trailing whitespace and report a zero/tiny width for " ".
-            // Infer space advance from "m m" - "mm" and prefer the larger valid value.
-            let (with_space, _) =
-                self.measure
-                    .measure_text("m m", font_size, false, is_bold, is_italic, None);
-            let (without_space, _) =
-                self.measure
-                    .measure_text("mm", font_size, false, is_bold, is_italic, None);
-            let inferred = with_space - without_space;
-
-            let mut space_width = if inferred.is_finite() && inferred > 0.0 {
-                raw_space_width.max(inferred)
-            } else {
-                raw_space_width
-            };
-
-            if !(space_width.is_finite() && space_width > 0.0) {
-                space_width = font_size * 0.33;
-            }
-            // Guard against shapers reporting near-zero space width.
-            space_width = space_width.max(font_size * 0.2);
-            // Cap space width to avoid excessively wide gaps (e.g. large headings).
-            space_width = space_width.min(font_size * 0.4);
-
-            if self.cursor_x + space_width > self.right_edge() {
-                self.advance_line(font_size);
-            } else {
-                self.cursor_x += space_width;
-            }
-
-            return Ok(());
-        }
-
-        let (token_width, _) = self
-            .measure
-            .measure_text(token, font_size, false, is_bold, is_italic, None);
+    fn render_text_content_token(
+        &mut self,
+        token: &str,
+        font_size: f32,
+        is_bold: bool,
+        is_italic: bool,
+    ) -> Result<(), String> {
+        let (token_width, _) =
+            self.measure
+                .measure_text(token, font_size, false, is_bold, is_italic, None);
 
         if !self.at_line_start && self.cursor_x + token_width > self.right_edge() {
             self.advance_line(font_size);
         }
 
         let fill = self.current_fill().to_string();
-        if self.pending_list_marker.is_some() && !self.at_line_start
-            && let Some(pending) = self.pending_list_marker.take() {
-                self.draw_text_at(
-                    pending.marker_x,
-                    self.cursor_y,
-                    &pending.marker,
-                    "sans-serif",
-                    self.theme.font_size_base,
-                    &fill,
-                    false,
-                    false,
-                );
-            }
+        if self.pending_list_marker.is_some()
+            && !self.at_line_start
+            && let Some(pending) = self.pending_list_marker.take()
+        {
+            self.draw_text_at(
+                pending.marker_x,
+                self.cursor_y,
+                &pending.marker,
+                "sans-serif",
+                self.theme.font_size_base,
+                &fill,
+                false,
+                false,
+            );
+        }
 
         self.draw_text_at(
             self.cursor_x,
@@ -652,36 +623,81 @@ impl<T: TextMeasure> Renderer<T> {
 
         if self.in_strikethrough {
             let line_y = self.cursor_y - font_size * 0.32;
-            write!(
-                self.svg_content,
-                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
-                self.cursor_x,
-                line_y,
-                self.cursor_x + token_width,
-                line_y,
-                fill,
-            )
-            .unwrap();
+            self.draw_line_decoration(line_y, token_width, &fill)?;
         }
 
         if self.link_depth > 0 {
             let underline_y = self.cursor_y + font_size * 0.12;
-            write!(
-                self.svg_content,
-                r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="1" />"#,
-                self.cursor_x,
-                underline_y,
-                self.cursor_x + token_width,
-                underline_y,
-                fill,
-            )
-            .unwrap();
+            self.draw_line_decoration(underline_y, token_width, &fill)?;
         }
 
         self.cursor_x += token_width;
         self.at_line_start = false;
 
         Ok(())
+    }
+
+    fn render_whitespace_token(
+        &mut self,
+        font_size: f32,
+        is_bold: bool,
+        is_italic: bool,
+    ) -> Result<(), String> {
+        if self.at_line_start {
+            return Ok(());
+        }
+
+        let (raw_space_width, _) =
+            self.measure
+                .measure_text(" ", font_size, false, is_bold, is_italic, None);
+
+        // Some shapers trim trailing whitespace and report a zero/tiny width for " ".
+        // Infer space advance from "m m" - "mm" and prefer the larger valid value.
+        let (with_space, _) =
+            self.measure
+                .measure_text("m m", font_size, false, is_bold, is_italic, None);
+        let (without_space, _) =
+            self.measure
+                .measure_text("mm", font_size, false, is_bold, is_italic, None);
+        let inferred = with_space - without_space;
+
+        let mut space_width = if inferred.is_finite() && inferred > 0.0 {
+            raw_space_width.max(inferred)
+        } else {
+            raw_space_width
+        };
+
+        if !(space_width.is_finite() && space_width > 0.0) {
+            space_width = font_size * 0.33;
+        }
+        // Guard against shapers reporting near-zero space width.
+        space_width = space_width.max(font_size * 0.2);
+        // Cap space width to avoid excessively wide gaps (e.g. large headings).
+        space_width = space_width.min(font_size * 0.4);
+
+        if self.cursor_x + space_width > self.right_edge() {
+            self.advance_line(font_size);
+        } else {
+            self.cursor_x += space_width;
+        }
+
+        Ok(())
+    }
+
+    fn render_token(&mut self, token: &str, is_whitespace: bool) -> Result<(), String> {
+        if token.is_empty() {
+            return Ok(());
+        }
+
+        let font_size = self.current_font_size();
+        let is_bold = self.is_bold();
+        let is_italic = self.is_italic();
+
+        if is_whitespace {
+            self.render_whitespace_token(font_size, is_bold, is_italic)
+        } else {
+            self.render_text_content_token(token, font_size, is_bold, is_italic)
+        }
     }
 
     fn render_inline_code(&mut self, code: &str) -> Result<(), String> {
