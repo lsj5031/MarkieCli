@@ -2258,8 +2258,16 @@ mod error_tests {
     }
 
     #[test]
+    fn test_parse_state_missing_alias() {
+        let input = "stateDiagram\nstate \"Label\" as ";
+        let result = parse_mermaid(input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing state alias identifier"));
+    }
+
+    #[test]
     fn test_parse_state_missing_closing_quote() {
-        let input = "stateDiagram\nstate \"Label as S1";
+        let input = "stateDiagram\nstate \"Label";
         let result = parse_mermaid(input);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing closing quote in state label"));
