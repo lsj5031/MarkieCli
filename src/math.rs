@@ -53,6 +53,7 @@ enum MathNode {
     },
 }
 
+#[derive(Debug)]
 pub struct MathResult {
     pub width: f32,
     pub ascent: f32,
