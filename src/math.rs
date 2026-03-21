@@ -53,6 +53,12 @@ enum MathNode {
     },
 }
 
+impl Default for MathNode {
+    fn default() -> Self {
+        MathNode::Row(Vec::new())
+    }
+}
+
 #[derive(Debug)]
 pub struct MathResult {
     pub width: f32,
@@ -165,7 +171,7 @@ fn parse_mathml(mathml: &str) -> Result<MathNode, String> {
                     // Handle table elements specially
                     if tag == "mtd" && in_table == 1 && in_row == 1 {
                         let cell = if children.len() == 1 {
-                            children.into_iter().next().unwrap()
+                            children.into_iter().next().unwrap_or_default()
                         } else {
                             MathNode::Row(children)
                         };
@@ -269,25 +275,25 @@ fn build_node(tag: &str, mut children: Vec<MathNode>, attrs: &Attrs) -> MathNode
             MathNode::Text(text)
         }
         "msup" if children.len() >= 2 => {
-            let sup = children.pop().unwrap();
-            let base = children.pop().unwrap();
+            let sup = children.pop().unwrap_or_default();
+            let base = children.pop().unwrap_or_default();
             MathNode::Sup {
                 base: Box::new(base),
                 sup: Box::new(sup),
             }
         }
         "msub" if children.len() >= 2 => {
-            let sub = children.pop().unwrap();
-            let base = children.pop().unwrap();
+            let sub = children.pop().unwrap_or_default();
+            let base = children.pop().unwrap_or_default();
             MathNode::Sub {
                 base: Box::new(base),
                 sub: Box::new(sub),
             }
         }
         "msubsup" if children.len() >= 3 => {
-            let sup = children.pop().unwrap();
-            let sub = children.pop().unwrap();
-            let base = children.pop().unwrap();
+            let sup = children.pop().unwrap_or_default();
+            let sub = children.pop().unwrap_or_default();
+            let base = children.pop().unwrap_or_default();
             MathNode::SubSup {
                 base: Box::new(base),
                 sub: Box::new(sub),
@@ -295,8 +301,8 @@ fn build_node(tag: &str, mut children: Vec<MathNode>, attrs: &Attrs) -> MathNode
             }
         }
         "mfrac" if children.len() >= 2 => {
-            let den = children.pop().unwrap();
-            let num = children.pop().unwrap();
+            let den = children.pop().unwrap_or_default();
+            let num = children.pop().unwrap_or_default();
             // Check for linethickness attribute (used by binomial)
             let line_thickness = get_attr(attrs, "linethickness").and_then(|v| {
                 if v == "0" {
@@ -313,7 +319,7 @@ fn build_node(tag: &str, mut children: Vec<MathNode>, attrs: &Attrs) -> MathNode
         }
         "msqrt" => {
             let radicand = if children.len() == 1 {
-                children.pop().unwrap()
+                children.pop().unwrap_or_default()
             } else {
                 MathNode::Row(children)
             };
@@ -323,16 +329,16 @@ fn build_node(tag: &str, mut children: Vec<MathNode>, attrs: &Attrs) -> MathNode
         }
         "mroot" if children.len() >= 2 => {
             // Note: in MathML mroot, the index comes AFTER the radicand
-            let index = children.pop().unwrap();
-            let radicand = children.pop().unwrap();
+            let index = children.pop().unwrap_or_default();
+            let radicand = children.pop().unwrap_or_default();
             MathNode::Root {
                 radicand: Box::new(radicand),
                 index: Box::new(index),
             }
         }
         "mover" if children.len() >= 2 => {
-            let over = children.pop().unwrap();
-            let base = children.pop().unwrap();
+            let over = children.pop().unwrap_or_default();
+            let base = children.pop().unwrap_or_default();
             MathNode::UnderOver {
                 base: Box::new(base),
                 under: None,
@@ -340,8 +346,8 @@ fn build_node(tag: &str, mut children: Vec<MathNode>, attrs: &Attrs) -> MathNode
             }
         }
         "munder" if children.len() >= 2 => {
-            let under = children.pop().unwrap();
-            let base = children.pop().unwrap();
+            let under = children.pop().unwrap_or_default();
+            let base = children.pop().unwrap_or_default();
             MathNode::UnderOver {
                 base: Box::new(base),
                 under: Some(Box::new(under)),
@@ -349,9 +355,9 @@ fn build_node(tag: &str, mut children: Vec<MathNode>, attrs: &Attrs) -> MathNode
             }
         }
         "munderover" if children.len() >= 3 => {
-            let over = children.pop().unwrap();
-            let under = children.pop().unwrap();
-            let base = children.pop().unwrap();
+            let over = children.pop().unwrap_or_default();
+            let under = children.pop().unwrap_or_default();
+            let base = children.pop().unwrap_or_default();
             MathNode::UnderOver {
                 base: Box::new(base),
                 under: Some(Box::new(under)),
@@ -360,14 +366,14 @@ fn build_node(tag: &str, mut children: Vec<MathNode>, attrs: &Attrs) -> MathNode
         }
         "math" | "mrow" | "mstyle" | "mpadded" => {
             if children.len() == 1 {
-                children.pop().unwrap()
+                children.pop().unwrap_or_default()
             } else {
                 MathNode::Row(children)
             }
         }
         _ => {
             if children.len() == 1 {
-                children.pop().unwrap()
+                children.pop().unwrap_or_default()
             } else {
                 MathNode::Row(children)
             }
