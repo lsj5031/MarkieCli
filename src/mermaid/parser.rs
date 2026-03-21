@@ -2236,3 +2236,40 @@ flowchart TD
         }
     }
 }
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_class_missing_stereotype_end() {
+        let input = "classDiagram\nclass <<abstract Animal";
+        let result = parse_mermaid(input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing '>>' in stereotype"));
+    }
+
+    #[test]
+    fn test_parse_state_missing_definition() {
+        let input = "stateDiagram\nstate {";
+        let result = parse_mermaid(input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing state definition"));
+    }
+
+    #[test]
+    fn test_parse_state_missing_closing_quote() {
+        let input = "stateDiagram\nstate \"Label";
+        let result = parse_mermaid(input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing closing quote in state label"));
+    }
+
+    #[test]
+    fn test_parse_state_missing_identifier() {
+        let input = "stateDiagram\nstate \"Label\"";
+        let result = parse_mermaid(input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing state identifier"));
+    }
+}
