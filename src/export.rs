@@ -186,3 +186,21 @@ fn configure_font_fallbacks_svg2pdf(fontdb: &mut svg2pdf::usvg::fontdb::Database
         fontdb.set_monospace_family(family);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_save_output_missing_extension() {
+        let result = save_output("<svg></svg>", Path::new("output"), 1.0);
+        assert_eq!(result.unwrap_err(), "Output file has no extension");
+    }
+
+    #[test]
+    fn test_save_output_unsupported_extension() {
+        let result = save_output("<svg></svg>", Path::new("output.txt"), 1.0);
+        assert!(result.unwrap_err().contains("Unsupported output format: .txt"));
+    }
+}
