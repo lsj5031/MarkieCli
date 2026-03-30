@@ -98,11 +98,6 @@ impl GlobalFontSystem {
         measured
     }
 
-    #[allow(dead_code)]
-    #[inline]
-    fn cache_len(&self) -> usize {
-        self.cache.lock().len()
-    }
 }
 
 fn measure_text_impl(
@@ -166,11 +161,6 @@ impl CosmicTextMeasure {
         Ok(Self)
     }
 
-    /// Returns the number of entries currently in the global cache.
-    #[allow(dead_code)]
-    pub fn cache_size() -> usize {
-        GLOBAL_FONT_SYSTEM.cache_len()
-    }
 }
 
 impl TextMeasure for CosmicTextMeasure {
