@@ -1359,18 +1359,21 @@ fn parse_er(input: &str) -> Result<ErDiagram, String> {
     }
 
     // Auto-create entities referenced in relationships but not explicitly declared
-    let mut existing: std::collections::HashSet<String> =
-        entities.iter().map(|e| e.name.clone()).collect();
+    let mut existing: std::collections::HashSet<&str> =
+        entities.iter().map(|e| e.name.as_str()).collect();
+    let mut new_entities = Vec::new();
     for rel in &relationships {
         for name in [&rel.from, &rel.to] {
-            if existing.insert(name.clone()) {
-                entities.push(ErEntity {
+            if !existing.contains(name.as_str()) {
+                existing.insert(name.as_str());
+                new_entities.push(ErEntity {
                     name: name.clone(),
                     attributes: Vec::new(),
                 });
             }
         }
     }
+    entities.extend(new_entities);
 
     Ok(ErDiagram {
         entities,
