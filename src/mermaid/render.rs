@@ -122,28 +122,33 @@ pub fn render_diagram<T: TextMeasure>(
 ) -> Result<(String, f32, f32), String> {
     let diagram = parse_mermaid(source)?;
 
-    match diagram {
+    let result = match diagram {
         MermaidDiagram::Flowchart(fc) => {
-            let svg = super::flowchart::render_flowchart(&fc, style, measure)?;
-            Ok(svg)
+            super::flowchart::render_flowchart(&fc, style, measure)?
         }
-        MermaidDiagram::Sequence(seq) => {
-            let svg = render_sequence(&seq, style, measure)?;
-            Ok(svg)
-        }
-        MermaidDiagram::ClassDiagram(cls) => {
-            let svg = render_class(&cls, style, measure)?;
-            Ok(svg)
-        }
-        MermaidDiagram::StateDiagram(st) => {
-            let svg = render_state(&st, style, measure)?;
-            Ok(svg)
-        }
-        MermaidDiagram::ErDiagram(er) => {
-            let svg = render_er(&er, style, measure)?;
-            Ok(svg)
+        MermaidDiagram::Sequence(seq) => render_sequence(&seq, style, measure)?,
+        MermaidDiagram::ClassDiagram(cls) => render_class(&cls, style, measure)?,
+        MermaidDiagram::StateDiagram(st) => render_state(&st, style, measure)?,
+        MermaidDiagram::ErDiagram(er) => render_er(&er, style, measure)?,
+    };
+
+    let source_lines = source.lines().filter(|l| !l.trim().is_empty()).count();
+    if source_lines > 1 {
+        let svg = &result.0;
+        let has_content = svg.contains("<text")
+            || svg.contains("<rect")
+            || svg.contains("<circle")
+            || svg.contains("<ellipse")
+            || svg.contains("<path")
+            || svg.contains("<polygon")
+            || svg.contains("<line")
+            || svg.contains("<polyline");
+        if !has_content {
+            eprintln!("Warning: Mermaid diagram produced no visual content; check syntax");
         }
     }
+
+    Ok(result)
 }
 
 /// Escape XML special characters
@@ -2564,5 +2569,22 @@ mod tests {
         let points = &rest[..end];
         let pair_count = points.split_whitespace().count();
         assert_eq!(pair_count, 3, "inheritance triangle should have exactly 3 points");
+    }
+
+    #[test]
+    fn test_unknown_diagram_type_renders_without_panic() {
+        let style = DiagramStyle::default();
+        let mut measure = MockMeasure;
+        let result = render_diagram("pie title Pets\n  \"Dogs\" : 50", &style, &mut measure);
+        assert!(result.is_ok(), "Unknown diagram type should render without error");
+    }
+
+    #[test]
+    fn test_syntax_error_renders_without_panic() {
+        let style = DiagramStyle::default();
+        let mut measure = MockMeasure;
+        let result =
+            render_diagram("flowchart LR\n  ??? invalid syntax ???", &style, &mut measure);
+        assert!(result.is_ok(), "Syntax errors should not cause panic");
     }
 }

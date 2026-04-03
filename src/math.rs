@@ -77,6 +77,56 @@ pub fn render_math<T: TextMeasure>(
     render_math_at(latex, font_size, text_color, measure, display, 0.0, 0.0)
 }
 
+/// Map unsupported LaTeX environments to supported equivalents for latex2mathml.
+///
+/// These replacements are safe from false substring matches because `\begin{` and
+/// `\end{` are LaTeX command sequences that won't appear as arbitrary substrings
+/// in well-formed LaTeX input.
+fn preprocess_latex(latex: &str) -> String {
+    let mut result = String::with_capacity(latex.len());
+
+    // aligned → align (supported by latex2mathml)
+    // cases → \left\{ + matrix + \right. (preserves the semantic left curly brace)
+    let latex = latex.replace("\\begin{aligned}", "\\begin{align}");
+    let latex = latex.replace("\\end{aligned}", "\\end{align}");
+    let latex = latex.replace("\\begin{cases}", "\\left\\{\\begin{matrix}");
+    let latex = latex.replace("\\end{cases}", "\\end{matrix}\\right.");
+
+    // Single-pass scan for \begin{array}{...} → \begin{matrix}
+    let bytes = latex.as_bytes();
+    let len = bytes.len();
+    let begin_array = b"\\begin{array}";
+    let pat_len = begin_array.len();
+    let mut i = 0;
+
+    while i < len {
+        if i + pat_len <= len && &bytes[i..i + pat_len] == begin_array {
+            result.push_str("\\begin{matrix}");
+            i += pat_len;
+            // Skip the optional column-alignment spec: {cc}, {l|r}, etc.
+            if i < len && bytes[i] == b'{' {
+                let mut depth = 1;
+                i += 1;
+                while i < len && depth > 0 {
+                    if bytes[i] == b'{' {
+                        depth += 1;
+                    } else if bytes[i] == b'}' {
+                        depth -= 1;
+                    }
+                    i += 1;
+                }
+            }
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+
+    result = result.replace("\\end{array}", "\\end{matrix}");
+
+    result
+}
+
 pub fn render_math_at<T: TextMeasure>(
     latex: &str,
     font_size: f32,
@@ -86,6 +136,7 @@ pub fn render_math_at<T: TextMeasure>(
     x: f32,
     baseline_y: f32,
 ) -> Result<MathResult, String> {
+    let latex = preprocess_latex(latex);
     let style = if display {
         DisplayStyle::Block
     } else {
@@ -93,7 +144,7 @@ pub fn render_math_at<T: TextMeasure>(
     };
 
     let mathml =
-        latex_to_mathml(latex, style).map_err(|e| format!("LaTeX parse error: {:?}", e))?;
+        latex_to_mathml(&latex, style).map_err(|e| format!("LaTeX parse error: {:?}", e))?;
 
     let root = parse_mathml(&mathml)?;
     let mbox = layout_node(&root, font_size, text_color, measure, x, baseline_y);
@@ -1128,5 +1179,55 @@ mod tests {
             assert!(res.width > 0.0);
             assert!(!res.svg_fragment.is_empty());
         }
+    }
+
+    #[test]
+    fn test_render_aligned_environment() {
+        let mut measure = MockMeasure;
+        let latex = r"\begin{aligned} a &= b + c \\ d &= e + f \end{aligned}";
+        let result = render_math(latex, 16.0, "#000000", &mut measure, true);
+        assert!(
+            result.is_ok(),
+            "aligned environment should render successfully, got: {:?}",
+            result.err()
+        );
+        let res = result.unwrap();
+        assert!(res.width > 0.0);
+    }
+
+    #[test]
+    fn test_render_cases_environment() {
+        let mut measure = MockMeasure;
+        let latex = r"\begin{cases} x + y = 1 \\ x - y = 0 \end{cases}";
+        let result = render_math(latex, 16.0, "#000000", &mut measure, true);
+        assert!(
+            result.is_ok(),
+            "cases environment should render successfully, got: {:?}",
+            result.err()
+        );
+        let res = result.unwrap();
+        assert!(res.width > 0.0);
+    }
+
+    #[test]
+    fn test_render_array_environment() {
+        let mut measure = MockMeasure;
+        let latex = r"\begin{array}{cc} 1 & 2 \\ 3 & 4 \end{array}";
+        let result = render_math(latex, 16.0, "#000000", &mut measure, true);
+        assert!(
+            result.is_ok(),
+            "array environment should render successfully, got: {:?}",
+            result.err()
+        );
+        let res = result.unwrap();
+        assert!(res.width > 0.0);
+    }
+
+    #[test]
+    fn test_preprocess_preserves_supported_environments() {
+        let mut measure = MockMeasure;
+        let latex = r"\begin{bmatrix} a & b \\ c & d \end{bmatrix}";
+        let result = render_math(latex, 16.0, "#000000", &mut measure, true);
+        assert!(result.is_ok(), "bmatrix should still work after preprocessing");
     }
 }

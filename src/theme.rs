@@ -75,6 +75,10 @@ pub struct Theme {
     pub code_padding_y: f32,
     #[serde(default = "default_code_radius")]
     pub code_radius: f32,
+
+    /// Background fill opacity for table header rows (0.0–1.0).
+    #[serde(default = "default_table_header_opacity")]
+    pub table_header_opacity: f32,
 }
 
 fn default_background() -> String {
@@ -124,6 +128,9 @@ fn default_code_padding_y() -> f32 {
 }
 fn default_code_radius() -> f32 {
     CODE_RADIUS
+}
+fn default_table_header_opacity() -> f32 {
+    0.08
 }
 
 impl Default for Theme {
@@ -185,6 +192,7 @@ impl Theme {
             code_padding_x: CODE_PADDING_X,
             code_padding_y: CODE_PADDING_Y,
             code_radius: CODE_RADIUS,
+            table_header_opacity: 0.08,
         }
     }
 
@@ -245,6 +253,7 @@ impl Theme {
             code_padding_x: CODE_PADDING_X,
             code_padding_y: CODE_PADDING_Y,
             code_radius: CODE_RADIUS,
+            table_header_opacity: 0.08,
         })
     }
 }
