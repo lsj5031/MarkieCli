@@ -40,7 +40,11 @@ pub fn parse_mermaid(input: &str) -> Result<MermaidDiagram, String> {
         let diagram = parse_er(input).map_err(|e| format!("ER parse error: {}", e))?;
         Ok(MermaidDiagram::ErDiagram(diagram))
     } else {
-        // Default to flowchart for backward compatibility
+        let diagram_type = first_line.split_whitespace().next().unwrap_or(first_line);
+        eprintln!(
+            "Warning: unrecognized Mermaid diagram type '{}', attempting flowchart parse",
+            diagram_type
+        );
         let diagram =
             parse_flowchart(input).map_err(|e| format!("Flowchart parse error: {}", e))?;
         Ok(MermaidDiagram::Flowchart(diagram))
@@ -2274,5 +2278,11 @@ mod error_tests {
         let result = parse_mermaid(input);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing state identifier"));
+    }
+
+    #[test]
+    fn test_unknown_diagram_type_produces_result() {
+        let result = parse_mermaid("unknownDiagram\n  A --> B");
+        assert!(result.is_ok(), "Unknown diagram type should not error");
     }
 }

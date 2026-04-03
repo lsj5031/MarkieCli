@@ -342,6 +342,90 @@ fn render_edge<T: TextMeasure>(
     let to_cx = to.x + to.width / 2.0;
     let to_cy = to.y + to.height / 2.0;
 
+    // Self-loop: render a curved loopback path.
+    // Adjust loop direction based on the graph flow direction so the loop
+    // doesn't overlap content in the primary flow axis.
+    if edge.from == edge.to {
+        let loop_radius = 20.0;
+
+        let (exit_x, exit_y, enter_x, enter_y, cp1_x, cp1_y, cp2_x, cp2_y) = match direction {
+            FlowDirection::LeftRight | FlowDirection::RightLeft => {
+                // Horizontal graph: loop upward
+                let exit_x = from_cx;
+                let exit_y = from.y;
+                let enter_x = from_cx;
+                let enter_y = from.y;
+                let cp1_x = exit_x + loop_radius;
+                let cp1_y = exit_y - loop_radius * 1.5;
+                let cp2_x = enter_x - loop_radius;
+                let cp2_y = enter_y - loop_radius * 1.5;
+                (exit_x, exit_y, enter_x, enter_y, cp1_x, cp1_y, cp2_x, cp2_y)
+            }
+            // TopDown, BottomUp: loop to the right
+            _ => {
+                let exit_x = from.x + from.width;
+                let exit_y = from_cy;
+                let enter_x = from_cx;
+                let enter_y = from.y;
+                let cp1_x = exit_x + loop_radius;
+                let cp1_y = exit_y - loop_radius;
+                let cp2_x = enter_x + loop_radius;
+                let cp2_y = enter_y - loop_radius;
+                (exit_x, exit_y, enter_x, enter_y, cp1_x, cp1_y, cp2_x, cp2_y)
+            }
+        };
+
+        svg.push_str(&format!(
+            r#"<path d="M {:.2},{:.2} C {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="{:.2}"{} />"#,
+            exit_x, exit_y,
+            cp1_x, cp1_y,
+            cp2_x, cp2_y,
+            enter_x, enter_y,
+            style.edge_stroke, stroke_width, dash_attr
+        ));
+
+        // Arrowhead pointing down into the top of the node
+        if edge.arrow_head != ArrowType::None {
+            svg.push_str(&render_arrow_head(
+                enter_x,
+                enter_y,
+                -std::f32::consts::FRAC_PI_2,
+                &edge.arrow_head,
+                style,
+            ));
+        }
+
+        // Edge label
+        if let Some(ref label) = edge.label {
+            let escaped = escape_xml(label);
+            let (label_w, _) = measure.measure_text(
+                label,
+                style.font_size * 0.82,
+                false,
+                false,
+                false,
+                None,
+            );
+            let label_x = exit_x + loop_radius - label_w / 2.0;
+            let label_y = from.y - loop_radius;
+            svg.push_str(&format!(
+                r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="4" fill="{}" stroke="{}" stroke-width="0.5" />"#,
+                label_x - 2.0,
+                label_y - style.font_size * 0.7,
+                label_w + 4.0,
+                style.font_size * 1.1,
+                style.background,
+                style.node_stroke
+            ));
+            svg.push_str(&format!(
+                r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="start">{}</text>"#,
+                label_x, label_y, style.font_family, style.font_size * 0.82, style.edge_text, escaped
+            ));
+        }
+
+        return svg;
+    }
+
     // Determine exit and entry ports based on flow direction and relative position
     let (exit_x, exit_y, enter_x, enter_y) = if vertical {
         let going_down = from_cy <= to_cy;
@@ -738,5 +822,40 @@ mod tests {
         // Arrow tip at entry point (200, 120), pointing right (angle=0)
         assert!((pts[0].0 - 200.0).abs() < 1.0, "tip x={}", pts[0].0);
         assert!((pts[0].1 - 120.0).abs() < 1.0, "tip y={}", pts[0].1);
+    }
+
+    #[test]
+    fn test_self_loop_renders_visible_curve() {
+        let source = "flowchart LR\n    A[Node A] --> A";
+        let diagram = match crate::mermaid::parse_mermaid(source).unwrap() {
+            crate::mermaid::MermaidDiagram::Flowchart(fc) => fc,
+            _ => panic!("Expected flowchart"),
+        };
+        let style = DiagramStyle::default();
+        let mut measure = MockMeasure;
+        let (svg, _w, _h) = render_flowchart(&diagram, &style, &mut measure).unwrap();
+
+        assert!(
+            svg.contains("<path"),
+            "Self-loop should render as a curve (path element), got:\n{}",
+            svg
+        );
+    }
+
+    #[test]
+    fn test_self_loop_has_arrowhead() {
+        let source = "flowchart TD\n    A --> A";
+        let diagram = match crate::mermaid::parse_mermaid(source).unwrap() {
+            crate::mermaid::MermaidDiagram::Flowchart(fc) => fc,
+            _ => panic!("Expected flowchart"),
+        };
+        let style = DiagramStyle::default();
+        let mut measure = MockMeasure;
+        let (svg, _w, _h) = render_flowchart(&diagram, &style, &mut measure).unwrap();
+
+        assert!(
+            svg.contains("<polygon"),
+            "Self-loop should have an arrowhead"
+        );
     }
 }

@@ -191,6 +191,7 @@ impl<T: TextMeasure> Renderer<T> {
         options.insert(Options::ENABLE_DEFINITION_LIST);
         options.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
         options.insert(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS);
+        options.insert(Options::ENABLE_GFM);
 
         let parser = Parser::new_ext(&markdown, options);
 
@@ -1238,11 +1239,25 @@ impl<T: TextMeasure> Renderer<T> {
     fn start_table_head(&mut self) {
         if let Some(state) = self.table_state.as_mut() {
             state.in_head = true;
+            // GFM mode: TableHead may not contain a TableRow wrapper,
+            // so initialize the row here as well.
+            if state.current_row.is_none() {
+                state.current_row = Some(TableRowData {
+                    cells: Vec::new(),
+                    is_header: true,
+                });
+            }
         }
     }
 
     fn finish_table_head(&mut self) {
         if let Some(state) = self.table_state.as_mut() {
+            // Flush the header row if it was implicitly created (no TableRow wrapper)
+            if let Some(row) = state.current_row.take() {
+                if !row.cells.is_empty() {
+                    state.rows.push(row);
+                }
+            }
             state.in_head = false;
         }
     }
@@ -1256,6 +1271,12 @@ impl<T: TextMeasure> Renderer<T> {
         }
     }
 
+    /// Complete the current table row: move it from `current_row` into the
+    /// `rows` buffer.  The first row is marked `is_header = true` because
+    /// the pulldown-cmark parser emits the header row (text between `|…|`
+    /// and the `|---|` separator) as a normal `TableRow` before any data
+    /// rows.  This convention is relied upon by `finish_table` to apply
+    /// bold styling and a background tint to header cells.
     fn finish_table_row(&mut self) {
         if let Some(state) = self.table_state.as_mut()
             && let Some(row) = state.current_row.take() {
@@ -1348,6 +1369,20 @@ impl<T: TextMeasure> Renderer<T> {
         .unwrap();
 
         for row in &state.rows {
+            if row.is_header {
+                write!(
+                    self.svg_content,
+                    r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" fill-opacity="{:.2}" />"#,
+                    table_x,
+                    current_y,
+                    table_width,
+                    row_height,
+                    self.theme.text_color,
+                    self.theme.table_header_opacity,
+                )
+                .unwrap();
+            }
+
             let mut cell_x = table_x;
             for (idx, cell) in row.cells.iter().enumerate() {
                 let cell_width = column_widths[idx] + cell_padding_x * 2.0;
@@ -1477,8 +1512,19 @@ impl<T: TextMeasure> Renderer<T> {
             return Ok(());
         }
 
-        let Some(payload) = self.load_image_payload(src)? else {
-            return Ok(());
+        let payload = match self.load_image_payload(src) {
+            Ok(Some(p)) => p,
+            Ok(None) => return Ok(()),
+            Err(e) => {
+                eprintln!("Warning: {}", e);
+                let alt = if image.alt_text.is_empty() {
+                    src.to_string()
+                } else {
+                    image.alt_text.clone()
+                };
+                self.render_inline_code(&alt)?;
+                return Ok(());
+            }
         };
 
         if !self.at_line_start {
@@ -2826,5 +2872,331 @@ GammaThree
             // Should contain code block elements
             prop_assert!(svg.contains("<rect") || svg.contains("<text"));
         });
+    }
+
+    // ========================================
+    // Bug Fix Tests
+    // ========================================
+
+    #[test]
+    fn test_missing_image_renders_alt_text_fallback() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let base_path = std::env::temp_dir();
+        let mut renderer =
+            Renderer::new_with_base_path(theme, measure, 800.0, Some(base_path)).unwrap();
+
+        let markdown = "# Title\n\n![Alt description](nonexistent-image-12345.png)\n\nMore text";
+        let result = renderer.render(markdown);
+
+        assert!(result.is_ok(), "Missing image should not cause render failure");
+        let svg = result.unwrap();
+        assert!(svg.contains("Alt"), "SVG should contain alt text as fallback");
+        assert!(svg.contains("Title"), "SVG should still contain other content");
+        assert!(svg.contains("More"), "SVG should contain content after the image");
+    }
+
+    #[test]
+    fn test_table_header_row_has_bold_text() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "| Header1 | Header2 |\n|---------|----------|\n| data1   | data2    |";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        assert!(
+            svg.contains("font-weight=\"700\""),
+            "Table header should have bold text styling. SVG:\n{}",
+            svg
+        );
+    }
+
+    #[test]
+    fn test_table_header_row_has_background() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "| H1 | H2 |\n|----|----|\n| d1 | d2 |";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        assert!(
+            svg.contains("fill-opacity"),
+            "Table header row should have a background fill"
+        );
+    }
+
+    // ========================================
+    // GFM Feature Tests
+    // ========================================
+
+    #[test]
+    fn test_gfm_task_list_unchecked() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "- [ ] Unchecked task";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Should contain checkbox rect
+        assert!(
+            svg.contains("<rect"),
+            "Unchecked task should have a checkbox rect"
+        );
+        // Should NOT contain polyline (checkmark)
+        assert!(
+            !svg.contains("<polyline"),
+            "Unchecked task should not have a checkmark"
+        );
+    }
+
+    #[test]
+    fn test_gfm_task_list_checked() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "- [x] Checked task";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Should contain checkbox rect
+        assert!(
+            svg.contains("<rect"),
+            "Checked task should have a checkbox rect"
+        );
+        // Should contain polyline (checkmark)
+        assert!(
+            svg.contains("<polyline"),
+            "Checked task should have a checkmark"
+        );
+    }
+
+    #[test]
+    fn test_gfm_task_list_multiple_items() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "- [x] Done
+- [ ] Pending
+- [ ] Later";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Should have 3 checkboxes (rects) - 1 checked + 2 unchecked
+        let rect_count = svg.matches("<rect").count();
+        assert!(rect_count >= 3, "Should have at least 3 checkbox rects, found {}", rect_count);
+
+        // Should have exactly 1 polyline (checkmark for checked item)
+        let polyline_count = svg.matches("<polyline").count();
+        assert!(polyline_count == 1, "Should have exactly 1 checkmark, found {}", polyline_count);
+    }
+
+    #[test]
+    fn test_gfm_strikethrough() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "~~deleted text~~ remaining";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Should contain both texts
+        assert!(svg.contains("deleted"), "SVG should contain strikethrough text");
+        assert!(svg.contains("remaining"), "SVG should contain remaining text");
+        // Should have a line element for strikethrough decoration
+        assert!(
+            svg.contains("<line"),
+            "Strikethrough should have a line decoration"
+        );
+    }
+
+    #[test]
+    fn test_gfm_strikethrough_middle_of_text() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "The ~~quick~~ brown fox.";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        assert!(svg.contains("quick"), "Strikethrough text should be rendered");
+        assert!(svg.contains("brown"), "Text after strikethrough should be rendered");
+    }
+
+    #[test]
+    fn test_gfm_footnote_reference() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "Here is a footnote[^1] in text.";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Should contain the footnote marker
+        assert!(svg.contains("footnote"), "Footnote reference should be rendered");
+    }
+
+    #[test]
+    fn test_gfm_footnote_definition() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "Text here.[^1]
+
+[^1]: This is the footnote definition.";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Should contain footnote content
+        assert!(svg.contains("footnote"), "Footnote should be rendered");
+        assert!(svg.contains("[1]"), "Footnote marker should be rendered");
+    }
+
+    #[test]
+    fn test_gfm_definition_list() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "Term1
+: Definition for term 1
+
+Term2
+: Definition for term 2";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Should contain terms (bold)
+        assert!(svg.contains("Term1"), "Definition term should be rendered");
+        assert!(svg.contains("Term2"), "Second term should be rendered");
+        // Should contain definitions
+        assert!(svg.contains("Definition"), "Definitions should be rendered");
+    }
+
+    #[test]
+    fn test_gfm_definition_list_multiple_items() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "Apple
+: A fruit
+
+Banana
+: Another fruit
+
+Cherry
+: Yet another fruit";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Should have all three terms
+        assert!(svg.contains("Apple"), "First term should be rendered");
+        assert!(svg.contains("Banana"), "Second term should be rendered");
+        assert!(svg.contains("Cherry"), "Third term should be rendered");
+    }
+
+    #[test]
+    fn test_gfm_table_alignment_left() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "| Left | Center | Right |
+|:-----|:------:|-------:|
+| a    |   b    |      c |";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Table should render
+        assert!(svg.contains("Left"), "Table header should be rendered");
+        assert!(svg.contains("a"), "Table cell should be rendered");
+    }
+
+    #[test]
+    fn test_gfm_table_alignment_center() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "| A | B |
+|:--:--:|
+| 1 | 2 |";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Center-aligned table should render
+        assert!(svg.contains("A"), "Center-aligned header should render");
+    }
+
+    #[test]
+    fn test_gfm_combined_features() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        // Test markdown with multiple GFM features combined
+        let markdown = r#"# Heading
+
+## Task List
+- [x] Done item
+- [ ] Pending item
+
+## Autolinks
+Visit https://example.com or http://test.org
+
+## Strikethrough
+~~deleted~~ and ~~more deleted~~
+
+## Footnote
+Here is a note[^1].
+
+[^1]: Note definition here.
+
+## Definition List
+Term
+: Definition
+
+| Col1 | Col2 |
+|------|------|
+| A    | B    |
+"#;
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // Verify all features are present - use simpler strings to find
+        assert!(svg.contains("Heading"), "Heading should render");
+        assert!(svg.contains("Done"), "Task list checked item should render");
+        assert!(svg.contains("Pending"), "Task list unchecked item should render");
+        assert!(svg.contains("example.com"), "Autolink should render");
+        assert!(svg.contains("deleted"), "Strikethrough should render");
+        assert!(svg.contains("note"), "Footnote reference should render");
+        assert!(svg.contains("Term"), "Definition term should render");
+        assert!(svg.contains("Col1"), "Table header should render");
     }
 }

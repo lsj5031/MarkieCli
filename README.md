@@ -148,6 +148,32 @@ MARKIE_VERSION=0.4.0 INSTALL_DIR="$HOME/.local/bin" curl -fsSL https://raw.githu
 
 ## Usage
 
+### Quick Examples
+
+```bash
+# Render markdown to image (auto-detects format from output extension)
+markie readme.md                    # → readme.png (2× scale)
+markie readme.md -o doc.svg         # → SVG vector
+markie readme.md -o doc.pdf         # → PDF document
+
+# Change theme
+markie readme.md -t dracula         # Use Dracula dark theme
+markie readme.md -t nord            # Use Nord cool theme
+
+# Adjust output
+markie readme.md -w 800             # Narrower width
+markie readme.md --png-scale 3      # Higher resolution PNG
+
+# Use custom theme file
+markie readme.md -t ~/themes/my-theme.toml
+
+# Read from stdin (great for pipelines)
+cat readme.md | markie - -o out.svg
+
+# List all available themes
+markie --list-themes
+```
+
 ### Basic usage
 
 ```bash
