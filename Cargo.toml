@@ -1,6 +1,6 @@
 [package]
 name = "markie"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "A pure Rust Markdown to SVG/PNG/PDF renderer with native Mermaid diagrams and LaTeX math"
 license = "MIT"
