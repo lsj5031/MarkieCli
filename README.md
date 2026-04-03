@@ -1,6 +1,6 @@
 # Markie
 
-![Example Output](README.svg)
+![Example Output](demo-all-features.svg)
 
 A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents into beautiful, shareable images.
 
@@ -59,7 +59,7 @@ Supported today:
 - Inline HTML and HTML blocks (rendered as code)
 - **Improved typography and spacing** for better visual consistency
 
-See [examples.md](examples.md) for comprehensive examples of all supported features.
+See [demo-all-features.md](demo-all-features.md) for comprehensive examples of all supported features.
 
 Not yet supported:
 
@@ -210,6 +210,14 @@ markie --list-themes   # Show all available themes
 ```
 
 Available: `catppuccin_latte`, `catppuccin_mocha`, `dracula`, `everforest`, `github_dark`, `github_light`, `gruvbox_dark`, `gruvbox_light`, `monokai_pro`, `nord`, `solarized_dark`, `solarized_light` (default), `tokyo_night`
+
+<p align="center">
+  <img src="demo-dracula.svg" alt="Dracula" width="48%">
+  <img src="demo-nord.svg" alt="Nord" width="48%">
+  <br>
+  <img src="demo-catppuccin.svg" alt="Catppuccin" width="48%">
+  <img src="demo-solarized-dark.svg" alt="Solarized Dark" width="48%">
+</p>
 
 You can also pass a path to any Alacritty theme file (YAML or TOML):
 
