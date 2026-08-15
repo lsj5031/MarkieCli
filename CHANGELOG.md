@@ -30,6 +30,7 @@ All notable changes to MarkieCli will be documented in this file.
 - Add an inline-HTML showcase section to `demo-all-features.md` and regenerate all demo assets (`demo-all-features.svg/png/pdf`, plus the Dracula, Nord, Catppuccin, and Solarized Dark SVGs), which also fixes the previously stale checked-in demos.
 - Point the README screenshots at the regenerated demo files — the hero now uses the PNG (inline SVGs render blank in several markdown viewers) with links to the SVG/PDF, and the themed-variant gallery moved into a dedicated Screenshots section that links every committed format.
 - Commit 2× PNG rasterizations of the four dark-themed demos (`demo-dracula.png`, `demo-nord.png`, `demo-catppuccin.png`, `demo-solarized-dark.png`) alongside their SVGs so the README gallery renders in viewers without SVG support; `make-demo.sh` now emits both formats for each theme.
+- Add [`docs/gallery.html`](docs/gallery.html) — a dependency-free, lightbox-style gallery embedding every committed demo asset (all themes, SVG/PNG/PDF) with format filters, keyboard navigation, and per-item links to the original files.
 - Add `scripts/make-demo.sh` to regenerate every committed demo from `demo-all-features.md`, so the demos can't go stale again.
 
 ### Refactoring

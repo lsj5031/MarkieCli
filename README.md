@@ -126,7 +126,7 @@ The same document under the built-in dark themes (click a preview for the vector
   <a href="demo-solarized-dark.svg"><img src="demo-solarized-dark.png" alt="Solarized Dark" width="48%"></a>
 </p>
 
-All assets are generated from [`demo-all-features.md`](demo-all-features.md) by [`scripts/make-demo.sh`](scripts/make-demo.sh) — see [Regenerating demo assets](#regenerating-demo-assets).
+All assets are generated from [`demo-all-features.md`](demo-all-features.md) by [`scripts/make-demo.sh`](scripts/make-demo.sh) — see [Regenerating demo assets](#regenerating-demo-assets). For an interactive, filterable view of every asset, open [`docs/gallery.html`](docs/gallery.html).
 
 ## Installation
 
