@@ -266,6 +266,12 @@ Optional overrides:
 BIN=./target/release/markie PNG_SCALE=2 WIDTH=1200 ./scripts/make-demo.sh
 ```
 
+CI verifies the committed assets are in sync after every push/PR — it regenerates the demos in a pinned font environment and compares them against the committed files (tolerating platform font-metric differences in geometry):
+
+```bash
+bash scripts/check-demos.sh /tmp/out
+```
+
 ## Theme Format
 
 Themes can be passed as a path to an Alacritty theme file (YAML or TOML).

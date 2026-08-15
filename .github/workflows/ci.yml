@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    name: Test + Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run tests
+        run: cargo test
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+  demo-sync:
+    name: Demo assets in sync
+    runs-on: ubuntu-latest
+    needs: test
+    # Run in a pinned font environment: the runner image ships many fonts, and
+    # generic families (sans-serif/monospace/serif) resolve differently per
+    # platform, which shifts text metrics. DejaVu-only matches the baseline the
+    # committed demos are checked against (see scripts/check-demos.sh).
+    container: ubuntu:24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies and Rust
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates git build-essential pkg-config \
+            libfontconfig1-dev fonts-dejavu-core python3
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Regenerate demos
+        run: bash scripts/make-demo.sh /tmp/ci-demos
+      - name: Check committed demos match the renderer
+        run: bash scripts/check-demos.sh /tmp/ci-demos
