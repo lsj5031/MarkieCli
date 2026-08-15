@@ -2,6 +2,41 @@
 
 All notable changes to MarkieCli will be documented in this file.
 
+## [Unreleased]
+
+### Features
+
+- **Basic inline HTML styling** — inline `<span style="color/background/font-size/text-decoration">`, `<font color>`, `<sup>`, `<sub>`, `<u>`, and `<mark>` tags now style their content instead of being dropped. Colors accept hex, `rgb()/rgba()/hsl()`, and CSS named values; values are sanitized so they can never inject markup into the SVG.
+- **Theme-aware `<mark>` highlight** — the default mark highlight is classic yellow on light themes and a dark olive-amber on dark themes, where pure yellow left light text at ~1:1 contrast. Verified contrast is ≥3:1 against text on all demo themes (Dracula 9.1:1, Nord 7.2:1, Catppuccin 6.7:1, Solarized Dark 3.1:1).
+- **Continuous highlights and underlines across spaces** — `<mark>a b</mark>` and `<u>a b</u>` no longer leave a gap where the space is; background rects and underline segments now span whitespace inside their scope (also applies to link underlines).
+
+### Bug Fixes
+
+- **Render HTML blocks as code instead of dropping them** — HTML blocks were silently discarded during rendering, contradicting the documented behavior. They now render as syntax-highlighted code blocks so no content is lost.
+- **Tables never overflow the output width** — long cell content now word-wraps (with hard-splitting of unbreakable words), and oversized tables shrink proportionally to fit the page instead of extending past the right edge. Row heights grow per-row to fit wrapped text.
+- **Bound remote image fetches** — remote images now use a 10-second timeout and a 10 MiB size limit, preventing hung renders and memory exhaustion from slow or oversized image servers.
+
+### Performance
+
+- **Fix O(n²) source-line tracking** — the renderer no longer re-counts newlines from the start of the document for every parse event; line numbers are resolved via a precomputed line index in O(log n) per event.
+- **Memoize space-width inference** — the three-measurement `"m m"`/`"mm"` space-advance inference now runs once per (font size, weight, style) instead of once per space character; subsequent spaces are a single hash lookup.
+
+### Bug Fixes
+
+- **Unknown Mermaid diagram types now error clearly** — `pie`, `gantt`, and other unsupported diagram types previously fell back to a flowchart parse (with only a warning), producing a confusing empty diagram. They now fail with `Unsupported Mermaid diagram type '...'` listing the supported types. Type detection also skips leading `%%` comments/init configs, and empty diagram fences still render without error.
+
+### Documentation
+
+- Add an inline-HTML showcase section to `demo-all-features.md` and regenerate all demo assets (`demo-all-features.svg/png/pdf`, plus the Dracula, Nord, Catppuccin, and Solarized Dark SVGs), which also fixes the previously stale checked-in demos.
+- Point the README screenshots at the regenerated demo files — the hero now uses the PNG (inline SVGs render blank in several markdown viewers) with links to the SVG/PDF, and the themed-variant gallery moved into a dedicated Screenshots section that links every committed format.
+- Commit 2× PNG rasterizations of the four dark-themed demos (`demo-dracula.png`, `demo-nord.png`, `demo-catppuccin.png`, `demo-solarized-dark.png`) alongside their SVGs so the README gallery renders in viewers without SVG support; `make-demo.sh` now emits both formats for each theme.
+- Add `scripts/make-demo.sh` to regenerate every committed demo from `demo-all-features.md`, so the demos can't go stale again.
+
+### Refactoring
+
+- Deduplicate the duplicated font-fallback selection logic in `export.rs` into a shared helper.
+- Remove a dead text-measurement call in inline-code rendering and an unnecessary `#[allow(dead_code)]` attribute.
+
 ## [0.5.0] - 2026-04-04
 
 ### Security

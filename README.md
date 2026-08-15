@@ -1,6 +1,8 @@
 # Markie
 
-![Example Output](demo-all-features.svg)
+![Example Output](demo-all-features.png)
+
+Rendered from [`demo-all-features.md`](demo-all-features.md) — also available as [SVG](demo-all-features.svg) and [PDF](demo-all-features.pdf).
 
 A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents into beautiful, shareable images.
 
@@ -56,7 +58,7 @@ Supported today:
 - Footnotes
 - Definition lists
 - **Mermaid diagrams** (flowchart, sequence, class, state, ER)
-- Inline HTML and HTML blocks (rendered as code)
+- Inline HTML with basic styling (`<span style="color: ...">`, `<sup>`, `<sub>`, `<u>`, `<mark>`, `<font color="...">`); HTML blocks rendered as code
 - **Improved typography and spacing** for better visual consistency
 
 See [demo-all-features.md](demo-all-features.md) for comprehensive examples of all supported features.
@@ -64,7 +66,7 @@ See [demo-all-features.md](demo-all-features.md) for comprehensive examples of a
 Not yet supported:
 
 - Metadata blocks are parsed but ignored
-- Rich HTML rendering (HTML is rendered as inline code or code blocks)
+- Rich HTML layouts (tables, grids, CSS classes) — basic inline tags are styled, but HTML blocks render as code
 
 ### Mermaid Diagram Support
 
@@ -109,6 +111,22 @@ c & d
 \end{bmatrix}
 $$
 ```
+
+## Screenshots
+
+The demo document [`demo-all-features.md`](demo-all-features.md) is committed in every output format — [SVG](demo-all-features.svg), [PNG](demo-all-features.png) (2× retina), and [PDF](demo-all-features.pdf) — rendered with the default `solarized_light` theme.
+
+The same document under the built-in dark themes (click a preview for the vector SVG):
+
+<p align="center">
+  <a href="demo-dracula.svg"><img src="demo-dracula.png" alt="Dracula" width="48%"></a>
+  <a href="demo-nord.svg"><img src="demo-nord.png" alt="Nord" width="48%"></a>
+  <br>
+  <a href="demo-catppuccin.svg"><img src="demo-catppuccin.png" alt="Catppuccin" width="48%"></a>
+  <a href="demo-solarized-dark.svg"><img src="demo-solarized-dark.png" alt="Solarized Dark" width="48%"></a>
+</p>
+
+All assets are generated from [`demo-all-features.md`](demo-all-features.md) by [`scripts/make-demo.sh`](scripts/make-demo.sh) — see [Regenerating demo assets](#regenerating-demo-assets).
 
 ## Installation
 
@@ -211,13 +229,7 @@ markie --list-themes   # Show all available themes
 
 Available: `catppuccin_latte`, `catppuccin_mocha`, `dracula`, `everforest`, `github_dark`, `github_light`, `gruvbox_dark`, `gruvbox_light`, `monokai_pro`, `nord`, `solarized_dark`, `solarized_light` (default), `tokyo_night`
 
-<p align="center">
-  <img src="demo-dracula.svg" alt="Dracula" width="48%">
-  <img src="demo-nord.svg" alt="Nord" width="48%">
-  <br>
-  <img src="demo-catppuccin.svg" alt="Catppuccin" width="48%">
-  <img src="demo-solarized-dark.svg" alt="Solarized Dark" width="48%">
-</p>
+See [Screenshots](#screenshots) for rendered examples of the built-in themes.
 
 You can also pass a path to any Alacritty theme file (YAML or TOML):
 
@@ -237,6 +249,21 @@ Optional overrides:
 
 ```bash
 THEME_FILE=tests/fixtures/solarized_light.toml PNG_SCALE=2 ./scripts/smoke-test.sh ./smoke-test-output
+```
+
+### Regenerating demo assets
+
+The committed demo files (`demo-all-features.svg/png/pdf` and the themed SVG+PNG pairs) are generated from [`demo-all-features.md`](demo-all-features.md). Regenerate them whenever that file or the renderer changes:
+
+```bash
+./scripts/make-demo.sh          # writes to the repo root
+./scripts/make-demo.sh /tmp/out # or write somewhere else
+```
+
+Optional overrides:
+
+```bash
+BIN=./target/release/markie PNG_SCALE=2 WIDTH=1200 ./scripts/make-demo.sh
 ```
 
 ## Theme Format

@@ -75,6 +75,22 @@ Cherry
 | Cell A1    |   Cell B1    |       Cell C1 |
 | Cell A2    |   Cell B2    |       Cell C2 |
 
+### Inline HTML
+
+Inline HTML gets basic styling — colors, superscripts, subscripts, highlights, and underlines:
+
+- Superscript: E = mc<sup>2</sup>
+- Subscript: H<sub>2</sub>O
+- Colored text: <span style="color: #dc322f">red</span>, <font color="#859900">green</font>, and <span style="color: rgb(38, 139, 210)">rgb blue</span>
+- Highlight and underline: <mark>marked text</mark> and <u>underlined text</u>
+- Nested styling: <sup style="color: #6c71c4">styled superscript</sup>
+
+HTML blocks are shown as highlighted code rather than rendered:
+
+<div class="note">
+  This raw HTML is displayed as a code block so no content is lost.
+</div>
+
 ---
 
 ## 3. Code Blocks
@@ -322,4 +338,4 @@ Run `--list-themes` to see all available themes:
 
 ---
 
-*Generated with Markie CLI v0.4.0*
+*Generated with Markie CLI v0.5.0*
