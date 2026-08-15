@@ -4,6 +4,7 @@ use base64::Engine;
 use imagesize;
 use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use resvg::usvg;
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use syntect::easy::HighlightLines;
@@ -63,6 +64,51 @@ struct DefinitionListState {
     indent: f32,
 }
 
+/// Inline style applied by HTML tags such as `<span style="...">`, `<sup>`, `<sub>`.
+#[derive(Debug, Clone)]
+struct InlineHtmlStyle {
+    /// Foreground color (hex, named, or rgb()/rgba() — passed through to SVG).
+    color: Option<String>,
+    /// Background highlight color (for `<mark>` / `background-color`).
+    background: Option<String>,
+    /// Font-size multiplier (e.g. 0.7 for superscripts).
+    scale: f32,
+    /// Baseline shift as a fraction of the current font size (negative = up).
+    rise_ratio: f32,
+    /// Underline decoration (`<u>` / `text-decoration: underline`).
+    underline: bool,
+}
+
+impl Default for InlineHtmlStyle {
+    fn default() -> Self {
+        Self {
+            color: None,
+            background: None,
+            scale: 1.0,
+            rise_ratio: 0.0,
+            underline: false,
+        }
+    }
+}
+
+impl InlineHtmlStyle {
+    fn is_empty(&self) -> bool {
+        self.color.is_none()
+            && self.background.is_none()
+            && self.scale == 1.0
+            && self.rise_ratio == 0.0
+            && !self.underline
+    }
+}
+
+/// A parsed opening/closing inline HTML tag.
+struct ParsedHtmlTag {
+    name: String,
+    closing: bool,
+    self_closing: bool,
+    style: InlineHtmlStyle,
+}
+
 pub struct Renderer<T: TextMeasure = crate::fonts::CosmicTextMeasure> {
     theme: Theme,
     measure: T,
@@ -112,14 +158,221 @@ pub struct Renderer<T: TextMeasure = crate::fonts::CosmicTextMeasure> {
 
     last_margin_added: f32,
 
+    /// Stack of open inline HTML style scopes (`<span>`, `<sup>`, `<u>`, ...).
+    html_style_stack: Vec<InlineHtmlStyle>,
+
+    /// Memoized space-advance width per (font_size, bold, italic). Inferring the
+    /// width costs three measurements; without this cache every whitespace token
+    /// would repeat all three (even with the global LRU, that's 3 lookups per space).
+    space_width_cache: HashMap<(u32, bool, bool), f32>,
+
     ps: SyntaxSet,
     ts: ThemeSet,
 
     base_path: Option<PathBuf>,
 }
 
+/// Scan a tag's attribute list (e.g. `style="color: red" class="x"`) into a style.
+fn parse_inline_html_attrs(rest: &str) -> InlineHtmlStyle {
+    let mut style = InlineHtmlStyle::default();
+    let bytes = rest.as_bytes();
+    let is_ws = |b: u8| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0c);
+
+    let mut i = 0;
+    while i < rest.len() {
+        while i < rest.len() && is_ws(bytes[i]) {
+            i += 1;
+        }
+        if i >= rest.len() {
+            break;
+        }
+
+        let name_start = i;
+        while i < rest.len() && !is_ws(bytes[i]) && bytes[i] != b'=' {
+            i += 1;
+        }
+        let name = rest[name_start..i].trim().to_ascii_lowercase();
+        if name.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        while i < rest.len() && is_ws(bytes[i]) {
+            i += 1;
+        }
+
+        let mut value = String::new();
+        if i < rest.len() && bytes[i] == b'=' {
+            i += 1;
+            while i < rest.len() && is_ws(bytes[i]) {
+                i += 1;
+            }
+            if i < rest.len() && (bytes[i] == b'"' || bytes[i] == b'\'') {
+                let quote = bytes[i];
+                i += 1;
+                let start = i;
+                while i < rest.len() && bytes[i] != quote {
+                    i += 1;
+                }
+                value = rest[start..i].to_string();
+                if i < rest.len() {
+                    i += 1;
+                }
+            } else {
+                let start = i;
+                while i < rest.len() && !is_ws(bytes[i]) {
+                    i += 1;
+                }
+                value = rest[start..i].to_string();
+            }
+        }
+
+        apply_inline_html_attr(&mut style, &name, &value);
+    }
+
+    style
+}
+
+fn apply_inline_html_attr(style: &mut InlineHtmlStyle, name: &str, value: &str) {
+    let value = value.trim();
+    match name {
+        "style" => {
+            for decl in value.split(';') {
+                let Some((prop, val)) = decl.split_once(':') else {
+                    continue;
+                };
+                let prop = prop.trim().to_ascii_lowercase();
+                let val = val.trim();
+                if val.is_empty() {
+                    continue;
+                }
+                match prop.as_str() {
+                    "color" => style.color = sanitize_color(val),
+                    "background" | "background-color" => {
+                        style.background = sanitize_color(val);
+                    }
+                    "text-decoration"
+                        if val.to_ascii_lowercase().contains("underline") =>
+                    {
+                        style.underline = true;
+                    }
+                    "font-size" => {
+                        if let Some(scale) = parse_font_size_scale(val) {
+                            style.scale *= scale;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        "color" => style.color = sanitize_color(value),
+        "bgcolor" | "background" => style.background = sanitize_color(value),
+        _ => {}
+    }
+}
+
+/// Parse `font-size` values (`16px`, `1.5em`, `150%`) into a scale relative to the
+/// renderer's 16px base.
+fn parse_font_size_scale(value: &str) -> Option<f32> {
+    let v = value.trim().to_ascii_lowercase();
+    let (num, unit) = if let Some(px) = v.strip_suffix("px") {
+        (px, 16.0)
+    } else if let Some(em) = v.strip_suffix("em") {
+        (em, 1.0)
+    } else if let Some(pct) = v.strip_suffix('%') {
+        (pct, 0.01)
+    } else {
+        (v.as_str(), 1.0)
+    };
+    let n: f32 = num.trim().parse().ok()?;
+    if !n.is_finite() || n <= 0.0 {
+        return None;
+    }
+    Some((n * unit).clamp(0.4, 3.0))
+}
+
+/// Accept only values that are safe to embed as an SVG fill attribute and look
+/// like colors: hex, `rgb()/rgba()/hsl()`, or CSS named colors (passed through
+/// for resvg to resolve). Rejects anything containing quotes or markup.
+fn sanitize_color(value: &str) -> Option<String> {
+    let v = value.trim();
+    if v.is_empty() || v.len() > 64 {
+        return None;
+    }
+    if !v.chars().all(|c| {
+        c.is_ascii_alphanumeric() || matches!(c, '#' | ',' | '(' | ')' | '%' | '.' | ' ')
+    }) {
+        return None;
+    }
+    if let Some(hex) = v.strip_prefix('#') {
+        if [3usize, 6, 8].contains(&hex.len()) {
+            Some(v.to_string())
+        } else {
+            None
+        }
+    } else if v.starts_with("rgb")
+        || v.starts_with("hsl")
+        || v.starts_with("var")
+        || v.chars().all(|c| c.is_ascii_alphabetic())
+    {
+        // rgb()/rgba()/hsl()/var()/named colors: passed through for resvg to resolve.
+        Some(v.to_string())
+    } else {
+        None
+    }
+}
+
+/// `<mark>` highlight on light backgrounds: classic yellow.
+const MARK_HIGHLIGHT_LIGHT: &str = "#ffff00";
+/// `<mark>` highlight on dark backgrounds: dark olive-amber. Pure yellow on a
+/// dark theme leaves light text at ~1:1 contrast (unreadable); this keeps the
+/// highlight visibly warm while preserving text contrast (see contrast tests).
+const MARK_HIGHLIGHT_DARK: &str = "#4a4600";
+
+/// Parse a `#rrggbb` hex color into normalized (r, g, b) components.
+fn parse_hex_rgb(value: &str) -> Option<(f32, f32, f32)> {
+    let hex = value.trim().trim_start_matches('#');
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()? as f32 / 255.0;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()? as f32 / 255.0;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()? as f32 / 255.0;
+    Some((r, g, b))
+}
+
+/// WCAG relative luminance of an (r, g, b) triple with components in 0..=1.
+fn relative_luminance(color: (f32, f32, f32)) -> f32 {
+    let linear = |v: f32| {
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let (r, g, b) = color;
+    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+}
+
+/// Whether a theme background counts as "dark" (relative luminance < 0.5).
+/// Unparseable colors default to light, which is the safer fallback.
+fn theme_is_dark(background_hex: &str) -> bool {
+    match parse_hex_rgb(background_hex) {
+        Some(c) => relative_luminance(c) < 0.5,
+        None => false,
+    }
+}
+
+/// WCAG contrast ratio between two `#rrggbb` colors (test utility).
+#[cfg(test)]
+fn contrast_ratio(a: &str, b: &str) -> Option<f32> {
+    let l1 = relative_luminance(parse_hex_rgb(a)?);
+    let l2 = relative_luminance(parse_hex_rgb(b)?);
+    let (hi, lo) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+    Some((hi + 0.05) / (lo + 0.05))
+}
+
 impl<T: TextMeasure> Renderer<T> {
-    #[allow(dead_code)]
     pub fn new(theme: Theme, measure: T, width: f32) -> Result<Self, String> {
         Self::new_with_base_path(theme, measure, width, None)
     }
@@ -170,6 +423,8 @@ impl<T: TextMeasure> Renderer<T> {
             in_footnote_definition: false,
             pending_text: String::new(),
             last_margin_added: 0.0,
+            html_style_stack: Vec::new(),
+            space_width_cache: HashMap::new(),
             ps,
             ts,
             base_path,
@@ -195,8 +450,22 @@ impl<T: TextMeasure> Renderer<T> {
 
         let parser = Parser::new_ext(&markdown, options);
 
+        // Precompute line-start offsets once, then binary-search per event. This
+        // avoids re-counting newlines from the document start for every event
+        // (O(n) per event → O(n²) total) and is robust to pulldown-cmark emitting
+        // events with non-monotonic source offsets.
+        let mut line_starts: Vec<usize> = Vec::with_capacity(markdown.len() / 32 + 1);
+        line_starts.push(0);
+        for (i, b) in markdown.bytes().enumerate() {
+            if b == b'\n' {
+                line_starts.push(i + 1);
+            }
+        }
+
         for (event, range) in parser.into_offset_iter() {
-            self.current_event_line = markdown[..range.start].bytes().filter(|&b| b == b'\n').count() + 1;
+            self.current_event_line = line_starts
+                .partition_point(|&start| start <= range.start)
+                .max(1);
             if self.in_metadata_block {
                 if matches!(event, Event::End(TagEnd::MetadataBlock(_))) {
                     self.in_metadata_block = false;
@@ -226,8 +495,16 @@ impl<T: TextMeasure> Renderer<T> {
             if self.in_html_block {
                 match event {
                     Event::End(TagEnd::HtmlBlock) => {
-                        self.html_block_buffer.clear();
+                        // HTML blocks are intentionally not rendered as HTML; show the
+                        // source as a highlighted code block so content is never lost.
+                        let buffer = std::mem::take(&mut self.html_block_buffer);
                         self.in_html_block = false;
+                        if !buffer.trim().is_empty() {
+                            self.render_code_block_with_language(&buffer, Some("html"))?;
+                            self.add_margin(self.theme.margin_bottom);
+                            self.cursor_x = self.line_start_x();
+                            self.at_line_start = true;
+                        }
                     }
                     Event::Html(html) => self.html_block_buffer.push_str(&html),
                     Event::SoftBreak | Event::HardBreak => self.html_block_buffer.push('\n'),
@@ -586,6 +863,7 @@ impl<T: TextMeasure> Renderer<T> {
         is_bold: bool,
         is_italic: bool,
     ) -> Result<(), String> {
+        let eff = self.effective_inline_style();
         let (token_width, _) =
             self.measure
                 .measure_text(token, font_size, false, is_bold, is_italic, None);
@@ -594,7 +872,24 @@ impl<T: TextMeasure> Renderer<T> {
             self.advance_line(font_size);
         }
 
-        let fill = self.current_fill().to_string();
+        // Baseline shift for <sup>/<sub>, relative to the base font size.
+        let baseline_y = self.cursor_y + eff.rise_ratio * self.current_font_size();
+
+        // Background highlight (<mark> or style="background-color: ...").
+        if let Some(bg) = &eff.background {
+            write!(
+                self.svg_content,
+                r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="2" fill="{}" />"#,
+                self.cursor_x,
+                baseline_y - font_size * 0.8,
+                token_width,
+                font_size * 1.1,
+                bg,
+            )
+            .unwrap();
+        }
+
+        let fill = self.current_fill();
         if self.pending_list_marker.is_some()
             && !self.at_line_start
             && let Some(pending) = self.pending_list_marker.take()
@@ -613,7 +908,7 @@ impl<T: TextMeasure> Renderer<T> {
 
         self.draw_text_at(
             self.cursor_x,
-            self.cursor_y,
+            baseline_y,
             token,
             "sans-serif",
             font_size,
@@ -623,12 +918,12 @@ impl<T: TextMeasure> Renderer<T> {
         );
 
         if self.in_strikethrough {
-            let line_y = self.cursor_y - font_size * 0.32;
+            let line_y = baseline_y - font_size * 0.32;
             self.draw_line_decoration(line_y, token_width, &fill)?;
         }
 
-        if self.link_depth > 0 {
-            let underline_y = self.cursor_y + font_size * 0.12;
+        if self.link_depth > 0 || eff.underline {
+            let underline_y = baseline_y + font_size * 0.12;
             self.draw_line_decoration(underline_y, token_width, &fill)?;
         }
 
@@ -648,6 +943,57 @@ impl<T: TextMeasure> Renderer<T> {
             return Ok(());
         }
 
+        let space_width = self.space_width(font_size, is_bold, is_italic);
+
+        if self.cursor_x + space_width > self.right_edge() {
+            self.advance_line(font_size);
+            return Ok(());
+        }
+
+        // Inside a <mark>/background-color or <u>/link scope the decoration must
+        // span the space too, otherwise highlights and underlines get a visible
+        // gap at every space (e.g. <mark>marked text</mark> would be two boxes).
+        let eff = self.effective_inline_style();
+        if eff.background.is_some() || eff.underline || self.link_depth > 0 {
+            let baseline_y = self.cursor_y + eff.rise_ratio * self.current_font_size();
+            if let Some(bg) = &eff.background {
+                write!(
+                    self.svg_content,
+                    r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="2" fill="{}" />"#,
+                    self.cursor_x,
+                    baseline_y - font_size * 0.8,
+                    space_width,
+                    font_size * 1.1,
+                    bg,
+                )
+                .unwrap();
+            }
+            if eff.underline || self.link_depth > 0 {
+                let underline_y = baseline_y + font_size * 0.12;
+                let fill = self.current_fill();
+                self.draw_line_decoration(underline_y, space_width, &fill)?;
+            }
+        }
+
+        self.cursor_x += space_width;
+
+        Ok(())
+    }
+
+    /// Memoized space-advance width for a given (font_size, bold, italic) style.
+    /// The first call infers the width with three measurements; every later call
+    /// for the same style is a single hash lookup.
+    fn space_width(&mut self, font_size: f32, is_bold: bool, is_italic: bool) -> f32 {
+        let key = (font_size.to_bits(), is_bold, is_italic);
+        if let Some(&width) = self.space_width_cache.get(&key) {
+            return width;
+        }
+        let width = self.infer_space_width(font_size, is_bold, is_italic);
+        self.space_width_cache.insert(key, width);
+        width
+    }
+
+    fn infer_space_width(&mut self, font_size: f32, is_bold: bool, is_italic: bool) -> f32 {
         let (raw_space_width, _) =
             self.measure
                 .measure_text(" ", font_size, false, is_bold, is_italic, None);
@@ -674,15 +1020,7 @@ impl<T: TextMeasure> Renderer<T> {
         // Guard against shapers reporting near-zero space width.
         space_width = space_width.max(font_size * 0.2);
         // Cap space width to avoid excessively wide gaps (e.g. large headings).
-        space_width = space_width.min(font_size * 0.4);
-
-        if self.cursor_x + space_width > self.right_edge() {
-            self.advance_line(font_size);
-        } else {
-            self.cursor_x += space_width;
-        }
-
-        Ok(())
+        space_width.min(font_size * 0.4)
     }
 
     fn render_token(&mut self, token: &str, is_whitespace: bool) -> Result<(), String> {
@@ -690,7 +1028,10 @@ impl<T: TextMeasure> Renderer<T> {
             return Ok(());
         }
 
-        let font_size = self.current_font_size();
+        // Scale the font size by any active inline HTML style (<sup>/<sub>,
+        // style="font-size: ...").
+        let eff = self.effective_inline_style();
+        let font_size = self.current_font_size() * eff.scale;
         let is_bold = self.is_bold();
         let is_italic = self.is_italic();
 
@@ -741,9 +1082,6 @@ impl<T: TextMeasure> Renderer<T> {
             false,
         );
 
-        let (_, _) =
-            self.measure
-                .measure_text(" ", self.current_font_size(), false, false, false, None);
         self.cursor_x += total_width;
         self.at_line_start = false;
 
@@ -753,34 +1091,140 @@ impl<T: TextMeasure> Renderer<T> {
     fn render_inline_html(&mut self, html: &str) -> Result<(), String> {
         let tag = html.trim().to_ascii_lowercase();
 
+        // Fast path for plain formatting tags without attributes.
         match tag.as_str() {
-            "<br>" | "<br/>" | "<br />" => self.render_newline(),
-            "<del>" => {
+            "<br>" | "<br/>" | "<br />" => return self.render_newline(),
+            "<del>" | "<s>" => {
                 self.in_strikethrough = true;
-                Ok(())
+                return Ok(());
             }
-            "</del>" => {
+            "</del>" | "</s>" => {
                 self.in_strikethrough = false;
-                Ok(())
+                return Ok(());
             }
             "<em>" | "<i>" => {
                 self.emphasis_depth += 1;
-                Ok(())
+                return Ok(());
             }
             "</em>" | "</i>" => {
                 self.emphasis_depth = self.emphasis_depth.saturating_sub(1);
-                Ok(())
+                return Ok(());
             }
             "<strong>" | "<b>" => {
                 self.strong_depth += 1;
-                Ok(())
+                return Ok(());
             }
             "</strong>" | "</b>" => {
                 self.strong_depth = self.strong_depth.saturating_sub(1);
-                Ok(())
+                return Ok(());
             }
-            _ => Ok(()),
+            _ => {}
         }
+
+        let Some(parsed) = self.parse_inline_html_tag(html) else {
+            return Ok(());
+        };
+
+        if parsed.self_closing {
+            return Ok(());
+        }
+
+        if parsed.closing {
+            self.html_style_stack.pop();
+            return Ok(());
+        }
+
+        let mut style = parsed.style;
+        match parsed.name.as_str() {
+            "sup" => {
+                style.scale *= 0.7;
+                style.rise_ratio += -0.45;
+            }
+            "sub" => {
+                style.scale *= 0.7;
+                style.rise_ratio += 0.25;
+            }
+            "u" => style.underline = true,
+            "mark" => {
+                if style.background.is_none() {
+                    style.background = Some(self.default_mark_color());
+                }
+            }
+            // `<span>` and `<font>` carry their styling purely in attributes.
+            "span" | "font" => {}
+            // Unknown tags: ignore the tag itself, keep rendering its content.
+            _ => return Ok(()),
+        }
+
+        if !style.is_empty() {
+            self.html_style_stack.push(style);
+        }
+
+        Ok(())
+    }
+
+    /// Default `<mark>` highlight color, adapted to the theme so text on the
+    /// highlight stays readable (pure yellow is ~1:1 contrast on dark themes).
+    fn default_mark_color(&self) -> String {
+        if theme_is_dark(&self.theme.background_color) {
+            MARK_HIGHLIGHT_DARK.to_string()
+        } else {
+            MARK_HIGHLIGHT_LIGHT.to_string()
+        }
+    }
+
+    /// Fold the open HTML style stack into one effective style (innermost wins).
+    fn effective_inline_style(&self) -> InlineHtmlStyle {
+        let mut eff = InlineHtmlStyle::default();
+        for style in &self.html_style_stack {
+            if eff.color.is_none() {
+                eff.color = style.color.clone();
+            }
+            if eff.background.is_none() {
+                eff.background = style.background.clone();
+            }
+            eff.scale *= style.scale;
+            eff.rise_ratio += style.rise_ratio;
+            eff.underline |= style.underline;
+        }
+        eff
+    }
+
+    /// Parse an inline HTML tag like `<span style="color: red">` or `</sup>`.
+    fn parse_inline_html_tag(&self, html: &str) -> Option<ParsedHtmlTag> {
+        let trimmed = html.trim();
+        if !trimmed.starts_with('<') {
+            return None;
+        }
+
+        let closing = trimmed.starts_with("</");
+        let inner = if closing { &trimmed[2..] } else { &trimmed[1..] };
+        let inner = inner.split_once('>').map(|(head, _)| head).unwrap_or(inner).trim();
+
+        let self_closing = inner.ends_with('/');
+        let inner = inner.trim_end_matches('/').trim();
+
+        let mut parts = inner.splitn(2, char::is_whitespace);
+        let name = parts.next()?.trim().to_ascii_lowercase();
+        if name.is_empty()
+            || !name.chars().all(|c| c.is_ascii_alphanumeric())
+            || name.chars().next().is_some_and(|c| c.is_ascii_digit())
+        {
+            return None;
+        }
+
+        let style = if closing {
+            InlineHtmlStyle::default()
+        } else {
+            parse_inline_html_attrs(parts.next().unwrap_or(""))
+        };
+
+        Some(ParsedHtmlTag {
+            name,
+            closing,
+            self_closing,
+            style,
+        })
     }
 
     fn render_footnote_reference(&mut self, label: &str) -> Result<(), String> {
@@ -796,7 +1240,7 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         let y = self.cursor_y - font_size * 0.45;
-        let fill = self.current_fill().to_string();
+        let fill = self.current_fill();
         self.draw_text_at(
             self.cursor_x,
             y,
@@ -815,7 +1259,7 @@ impl<T: TextMeasure> Renderer<T> {
 
     fn render_inline_math(&mut self, math_src: &str) -> Result<(), String> {
         let font_size = self.current_font_size();
-        let color = self.current_fill().to_string();
+        let color = self.current_fill();
 
         match crate::math::render_math(math_src, font_size, &color, &mut self.measure, false) {
             Ok(result) => {
@@ -866,7 +1310,7 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         let font_size = self.current_font_size();
-        let color = self.current_fill().to_string();
+        let color = self.current_fill();
 
         match crate::math::render_math(&math_src, font_size, &color, &mut self.measure, true) {
             Ok(result) => {
@@ -1253,11 +1697,10 @@ impl<T: TextMeasure> Renderer<T> {
     fn finish_table_head(&mut self) {
         if let Some(state) = self.table_state.as_mut() {
             // Flush the header row if it was implicitly created (no TableRow wrapper)
-            if let Some(row) = state.current_row.take() {
-                if !row.cells.is_empty() {
+            if let Some(row) = state.current_row.take()
+                && !row.cells.is_empty() {
                     state.rows.push(row);
                 }
-            }
             state.in_head = false;
         }
     }
@@ -1332,7 +1775,16 @@ impl<T: TextMeasure> Renderer<T> {
             return Ok(());
         }
 
-        let mut column_widths: Vec<f32> = vec![0.0; column_count];
+        let cell_padding_x = self.theme.font_size_base * 0.5;
+        let cell_padding_y = self.theme.font_size_base * 0.35;
+        let border_color = self.theme.quote_border_color.clone();
+        let line_height = self.theme.font_size_base * self.theme.line_height.max(1.3);
+        let table_x = self.line_start_x();
+        let available_width = (self.right_edge() - table_x).max(1.0);
+
+        // Measure natural column widths (text width + horizontal padding) so an
+        // unscaled table renders every cell on a single line.
+        let mut natural_widths: Vec<f32> = vec![0.0; column_count];
         for row in &state.rows {
             for (idx, cell) in row.cells.iter().enumerate() {
                 let (width, _) = self.measure.measure_text(
@@ -1343,19 +1795,58 @@ impl<T: TextMeasure> Renderer<T> {
                     false,
                     None,
                 );
-                column_widths[idx] = column_widths[idx].max(width);
+                natural_widths[idx] = natural_widths[idx].max(width + cell_padding_x * 2.0);
             }
         }
 
-        let cell_padding_x = self.theme.font_size_base * 0.5;
-        let cell_padding_y = self.theme.font_size_base * 0.35;
-        let border_color = self.theme.quote_border_color.clone();
-        let row_height = self.theme.font_size_base * self.theme.line_height + cell_padding_y * 2.0;
-        let table_x = self.line_start_x();
-        let table_width: f32 = column_widths.iter().map(|w| w + cell_padding_x * 2.0).sum();
+        // Shrink columns proportionally when the natural table is wider than the
+        // page, then enforce a minimum column width if it still fits.
+        let natural_total: f32 = natural_widths.iter().sum();
+        let scale = if natural_total > available_width {
+            available_width / natural_total
+        } else {
+            1.0
+        };
+        let min_col_width = self.theme.font_size_base * 1.5;
+        let mut column_widths: Vec<f32> = natural_widths.iter().map(|w| w * scale).collect();
+        let min_total: f32 = column_widths.len() as f32 * min_col_width;
+        if min_total <= available_width {
+            for w in column_widths.iter_mut() {
+                *w = (*w).max(min_col_width);
+            }
+        }
+        // Final guard: the table must never exceed the available width.
+        let enforced_total: f32 = column_widths.iter().sum();
+        if enforced_total > available_width && enforced_total > 0.0 {
+            let fit = available_width / enforced_total;
+            for w in column_widths.iter_mut() {
+                *w *= fit;
+            }
+        }
 
+        // Wrap every cell to its column width; track per-row line counts so row
+        // heights grow to fit the tallest cell in the row.
+        let mut wrapped_rows: Vec<Vec<Vec<String>>> = Vec::with_capacity(state.rows.len());
+        let mut row_heights: Vec<f32> = Vec::with_capacity(state.rows.len());
+        for row in &state.rows {
+            let mut cell_lines: Vec<Vec<String>> = Vec::with_capacity(row.cells.len());
+            let mut max_lines = 1usize;
+            for (idx, cell) in row.cells.iter().enumerate() {
+                let col_width = column_widths.get(idx).copied().unwrap_or(0.0);
+                let content_width = (col_width - cell_padding_x * 2.0).max(1.0);
+                let lines =
+                    self.wrap_table_text(cell.text.trim(), content_width, row.is_header);
+                max_lines = max_lines.max(lines.len());
+                cell_lines.push(lines);
+            }
+            wrapped_rows.push(cell_lines);
+            row_heights.push(max_lines as f32 * line_height + cell_padding_y * 2.0);
+        }
+
+        // column_widths already include horizontal padding.
+        let table_width: f32 = column_widths.iter().sum();
+        let table_height: f32 = row_heights.iter().sum();
         let mut current_y = self.cursor_y;
-        let table_height = row_height * state.rows.len() as f32;
 
         write!(
             self.svg_content,
@@ -1368,7 +1859,8 @@ impl<T: TextMeasure> Renderer<T> {
         )
         .unwrap();
 
-        for row in &state.rows {
+        for (row_idx, row) in state.rows.iter().enumerate() {
+            let row_height = row_heights[row_idx];
             if row.is_header {
                 write!(
                     self.svg_content,
@@ -1384,8 +1876,8 @@ impl<T: TextMeasure> Renderer<T> {
             }
 
             let mut cell_x = table_x;
-            for (idx, cell) in row.cells.iter().enumerate() {
-                let cell_width = column_widths[idx] + cell_padding_x * 2.0;
+            for idx in 0..row.cells.len() {
+                let cell_width = column_widths[idx];
                 let align = state
                     .alignments
                     .get(idx)
@@ -1403,33 +1895,39 @@ impl<T: TextMeasure> Renderer<T> {
                 )
                 .unwrap();
 
-                let (text_width, _) = self.measure.measure_text(
-                    cell.text.trim(),
-                    self.theme.font_size_base,
-                    false,
-                    row.is_header,
-                    false,
-                    None,
-                );
+                let fill = self.current_fill();
+                let lines = &wrapped_rows[row_idx][idx];
+                for (line_idx, line) in lines.iter().enumerate() {
+                    let (text_width, _) = self.measure.measure_text(
+                        line,
+                        self.theme.font_size_base,
+                        false,
+                        row.is_header,
+                        false,
+                        None,
+                    );
 
-                let text_x = match align {
-                    Alignment::Left | Alignment::None => cell_x + cell_padding_x,
-                    Alignment::Center => cell_x + (cell_width - text_width) / 2.0,
-                    Alignment::Right => cell_x + cell_width - cell_padding_x - text_width,
-                };
+                    let text_x = match align {
+                        Alignment::Left | Alignment::None => cell_x + cell_padding_x,
+                        Alignment::Center => cell_x + (cell_width - text_width) / 2.0,
+                        Alignment::Right => cell_x + cell_width - cell_padding_x - text_width,
+                    };
 
-                let text_y = current_y + cell_padding_y + self.theme.font_size_base * 0.8;
-                let fill = self.current_fill().to_string();
-                self.draw_text_at(
-                    text_x,
-                    text_y,
-                    cell.text.trim(),
-                    "sans-serif",
-                    self.theme.font_size_base,
-                    &fill,
-                    row.is_header,
-                    false,
-                );
+                    let text_y = current_y
+                        + cell_padding_y
+                        + self.theme.font_size_base * 0.8
+                        + line_idx as f32 * line_height;
+                    self.draw_text_at(
+                        text_x,
+                        text_y,
+                        line,
+                        "sans-serif",
+                        self.theme.font_size_base,
+                        &fill,
+                        row.is_header,
+                        false,
+                    );
+                }
 
                 cell_x += cell_width;
             }
@@ -1442,6 +1940,80 @@ impl<T: TextMeasure> Renderer<T> {
         self.at_line_start = true;
         self.finish_block(self.theme.margin_bottom);
         Ok(())
+    }
+
+    /// Greedy word-wrap for table cells. Words wider than the column are
+    /// hard-split so cell content never overflows the table.
+    fn wrap_table_text(&mut self, text: &str, max_width: f32, bold: bool) -> Vec<String> {
+        if text.is_empty() {
+            return vec![String::new()];
+        }
+        if max_width <= 0.0 {
+            return vec![text.to_string()];
+        }
+
+        let font_size = self.theme.font_size_base;
+        let space_w = self.space_width(font_size, bold, false);
+
+        let mut lines: Vec<String> = Vec::new();
+        let mut line = String::new();
+        let mut line_w = 0.0f32;
+
+        for word in text.split_whitespace() {
+            let (word_w, _) =
+                self.measure
+                    .measure_text(word, font_size, false, bold, false, None);
+            let separator_w = if line.is_empty() { 0.0 } else { space_w };
+
+            if line_w + separator_w + word_w > max_width && !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+                line_w = 0.0;
+            }
+
+            if word_w > max_width {
+                // Hard-split words wider than the column.
+                if !line.is_empty() {
+                    lines.push(std::mem::take(&mut line));
+                    line_w = 0.0;
+                }
+                let mut chunk = String::new();
+                let mut chunk_w = 0.0f32;
+                for ch in word.chars() {
+                    let (cw, _) = self.measure.measure_text(
+                        &ch.to_string(),
+                        font_size,
+                        false,
+                        bold,
+                        false,
+                        None,
+                    );
+                    if chunk_w + cw > max_width && !chunk.is_empty() {
+                        lines.push(std::mem::take(&mut chunk));
+                        chunk_w = 0.0;
+                    }
+                    chunk.push(ch);
+                    chunk_w += cw;
+                }
+                if !chunk.is_empty() {
+                    line = chunk;
+                    line_w = chunk_w;
+                }
+            } else {
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(word);
+                line_w += separator_w + word_w;
+            }
+        }
+
+        if !line.is_empty() {
+            lines.push(line);
+        }
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines
     }
 
     fn render_task_marker(&mut self, checked: bool) -> Result<(), String> {
@@ -1462,7 +2034,7 @@ impl<T: TextMeasure> Renderer<T> {
 
         let x = marker_x;
         let y = self.cursor_y - size * 0.7;
-        let marker_stroke = self.current_fill().to_string();
+        let marker_stroke = self.current_fill();
         write!(
             self.svg_content,
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="2" ry="2" stroke="{}" fill="none" stroke-width="1" />"#,
@@ -1482,7 +2054,7 @@ impl<T: TextMeasure> Renderer<T> {
             let y2 = y + size - inset;
             let x3 = x + size - inset;
             let y3 = y + inset;
-            let check_stroke = self.current_fill().to_string();
+            let check_stroke = self.current_fill();
             write!(
                 self.svg_content,
                 r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />"#,
@@ -1574,7 +2146,14 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         if src.starts_with("http://") || src.starts_with("https://") {
-            let mut response = ureq::get(src)
+            // Bound the fetch: a hung or malicious image server must not stall the
+            // render, and an oversized payload must not exhaust memory.
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .timeout_global(Some(std::time::Duration::from_secs(10)))
+                .build()
+                .into();
+            let mut response = agent
+                .get(src)
                 .call()
                 .map_err(|e| format!("Failed to fetch image {}: {}", src, e))?;
             let mime = response
@@ -1587,10 +2166,20 @@ impl<T: TextMeasure> Renderer<T> {
                 return Ok(None);
             }
 
-            let bytes = response
-                .body_mut()
-                .read_to_vec()
+            const MAX_REMOTE_IMAGE_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB
+            use std::io::Read;
+            let reader = response.body_mut().as_reader();
+            let mut bytes = Vec::new();
+            reader
+                .take(MAX_REMOTE_IMAGE_BYTES + 1)
+                .read_to_end(&mut bytes)
                 .map_err(|e| format!("Failed to read image {}: {}", src, e))?;
+            if bytes.len() as u64 > MAX_REMOTE_IMAGE_BYTES {
+                return Err(format!(
+                    "Remote image {} exceeds the 10 MiB size limit",
+                    src
+                ));
+            }
 
             let (width, height) = self.image_dimensions(&mime, &bytes)?;
             let data_url = self.build_data_url(&mime, &bytes);
@@ -1939,15 +2528,19 @@ impl<T: TextMeasure> Renderer<T> {
         self.emphasis_depth > 0
     }
 
-    fn current_fill(&self) -> &str {
+    fn current_fill(&self) -> String {
+        // Inline HTML color overrides the theme-derived color.
+        if let Some(color) = self.effective_inline_style().color {
+            return color;
+        }
         if self.link_depth > 0 {
-            &self.theme.link_color
+            self.theme.link_color.clone()
         } else if self.heading_level.is_some() {
-            &self.theme.heading_color
+            self.theme.heading_color.clone()
         } else if !self.blockquotes.is_empty() {
-            &self.theme.quote_text_color
+            self.theme.quote_text_color.clone()
         } else {
-            &self.theme.text_color
+            self.theme.text_color.clone()
         }
     }
 
@@ -2069,6 +2662,26 @@ mod tests {
             _max_width: Option<f32>,
         ) -> (f32, f32) {
             // Simple approximation: width = len * size * 0.6, height = size
+            (text.len() as f32 * font_size * 0.6, font_size)
+        }
+    }
+
+    /// Records every measured text so tests can assert on measurement counts.
+    #[derive(Default)]
+    struct CountingMeasure {
+        texts: std::cell::RefCell<Vec<String>>,
+    }
+    impl TextMeasure for CountingMeasure {
+        fn measure_text(
+            &mut self,
+            text: &str,
+            font_size: f32,
+            _is_code: bool,
+            _is_bold: bool,
+            _is_italic: bool,
+            _max_width: Option<f32>,
+        ) -> (f32, f32) {
+            self.texts.borrow_mut().push(text.to_string());
             (text.len() as f32 * font_size * 0.6, font_size)
         }
     }
@@ -2274,6 +2887,23 @@ classDiagram
 
         assert_eq!(lang.as_deref(), Some("mermaid"));
         assert!(code.contains("User --> Session : creates"));
+    }
+
+    #[test]
+    fn test_space_width_inference_is_memoized() {
+        let theme = Theme::default();
+        let measure = CountingMeasure::default();
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        // Five spaces: the inference measurements ("m m", "mm") should happen
+        // exactly once, not once per space token.
+        renderer.render("a b c d e f").unwrap();
+
+        let texts = renderer.measure.texts.borrow();
+        let m_m_count = texts.iter().filter(|t| t.as_str() == "m m").count();
+        let mm_count = texts.iter().filter(|t| t.as_str() == "mm").count();
+        assert_eq!(m_m_count, 1, "'m m' inference should run once, not per space");
+        assert_eq!(mm_count, 1, "'mm' inference should run once, not per space");
     }
 
     #[test]
@@ -2521,11 +3151,10 @@ GammaThree
             while let Some(pos) = svg[search_start..].find(pattern) {
                 let abs_pos = search_start + pos;
                 let y_start = abs_pos + pattern.len();
-                if let Some(end_pos) = svg[y_start..].find('"') {
-                    if let Ok(y) = svg[y_start..y_start + end_pos].parse::<f32>() {
+                if let Some(end_pos) = svg[y_start..].find('"')
+                    && let Ok(y) = svg[y_start..y_start + end_pos].parse::<f32>() {
                         positions.push(y);
                     }
-                }
                 search_start = y_start;
             }
             positions
@@ -2536,7 +3165,7 @@ GammaThree
         assert!(y_positions.len() >= 3, "Should have at least 3 text elements, found {}", y_positions.len());
 
         // Sort positions to get correct order
-        let mut sorted: Vec<f32> = y_positions.iter().cloned().collect();
+        let mut sorted: Vec<f32> = y_positions.to_vec();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
         // Check gaps between consecutive elements
@@ -2815,11 +3444,10 @@ GammaThree
                 while let Some(pos) = svg[search_start..].find(pattern) {
                     let abs_pos = search_start + pos;
                     let y_start = abs_pos + pattern.len();
-                    if let Some(end_pos) = svg[y_start..].find('"') {
-                        if let Ok(y) = svg[y_start..y_start + end_pos].parse::<f32>() {
+                    if let Some(end_pos) = svg[y_start..].find('"')
+                        && let Ok(y) = svg[y_start..y_start + end_pos].parse::<f32>() {
                             positions.push(y);
                         }
-                    }
                     search_start = y_start;
                 }
                 positions
@@ -2828,7 +3456,7 @@ GammaThree
             let y_positions = extract_y_positions(&svg);
 
             // Sort and check that unique positions are increasing
-            let mut unique_sorted: Vec<f32> = y_positions.iter().cloned().collect();
+            let mut unique_sorted: Vec<f32> = y_positions.to_vec();
             unique_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
             unique_sorted.dedup();
 
@@ -3151,6 +3779,355 @@ Cherry
 
         // Center-aligned table should render
         assert!(svg.contains("A"), "Center-aligned header should render");
+    }
+
+    #[test]
+    fn test_html_block_renders_as_code_not_dropped() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let markdown = "<div class=\"note\">\nHello HTML content\n</div>\n\nAfter HTML";
+        let result = renderer.render(markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        // HTML blocks are documented as rendered as code, never dropped.
+        assert!(
+            svg.contains("Hello"),
+            "HTML block content should be visible, not silently dropped"
+        );
+        assert!(
+            svg.contains("div"),
+            "HTML block source should render as code"
+        );
+        assert!(
+            svg.contains("After"),
+            "Content after the HTML block should still render"
+        );
+    }
+
+    // Extract (font-size, y, fill) of the first text node with the given content.
+    fn text_metrics(svg: &str, content: &str) -> Option<(f32, f32, String)> {
+        let needle = format!(">{}</text>", content);
+        let idx = svg.find(&needle)?;
+        let prefix = &svg[..idx];
+        // Space-prefixed so `y="` doesn't match the tail of `font-family="`.
+        let attr = |name: &str| -> Option<String> {
+            let pattern = format!(" {}=\"", name);
+            let pos = prefix.rfind(&pattern)? + pattern.len();
+            let rest = &prefix[pos..];
+            Some(rest.split('"').next()?.to_string())
+        };
+        let font_size: f32 = attr("font-size")?.parse().ok()?;
+        let y: f32 = attr("y")?.parse().ok()?;
+        let fill = attr("fill").unwrap_or_default();
+        Some((font_size, y, fill))
+    }
+
+    #[test]
+    fn test_inline_html_superscript_raised_and_smaller() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let svg = renderer.render("x<sup>2</sup>").unwrap();
+        let (x_fs, x_y, _) = text_metrics(&svg, "x").expect("base text");
+        let (two_fs, two_y, _) = text_metrics(&svg, "2").expect("superscript");
+
+        assert!(two_fs < x_fs, "superscript should be smaller: {two_fs} vs {x_fs}");
+        assert!(two_y < x_y, "superscript should be raised: {two_y} vs {x_y}");
+    }
+
+    #[test]
+    fn test_inline_html_subscript_lowered_and_smaller() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let svg = renderer.render("H<sub>2</sub>O").unwrap();
+        let (h_fs, h_y, _) = text_metrics(&svg, "H").expect("base text");
+        let (two_fs, two_y, _) = text_metrics(&svg, "2").expect("subscript");
+
+        assert!(two_fs < h_fs, "subscript should be smaller: {two_fs} vs {h_fs}");
+        assert!(two_y > h_y, "subscript should be lowered: {two_y} vs {h_y}");
+    }
+
+    #[test]
+    fn test_inline_html_span_and_font_color() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let svg = renderer
+            .render("A <span style=\"color: #ff0000\">red</span> and <font color=\"blue\">blue</font>")
+            .unwrap();
+
+        let (_, _, red_fill) = text_metrics(&svg, "red").expect("span text");
+        assert_eq!(red_fill, "#ff0000", "span style color should apply");
+
+        let (_, _, blue_fill) = text_metrics(&svg, "blue").expect("font text");
+        assert_eq!(blue_fill, "blue", "font color attribute should apply");
+
+        let (_, _, a_fill) = text_metrics(&svg, "A").expect("plain text");
+        assert_ne!(a_fill, "#ff0000", "plain text should keep the theme color");
+    }
+
+    #[test]
+    fn test_inline_html_mark_highlight_and_underline() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let svg = renderer
+            .render("<mark>hi</mark> and <u>lo</u>")
+            .unwrap();
+
+        // <mark> draws a yellow highlight rect behind the text.
+        assert!(
+            svg.contains("fill=\"#ffff00\""),
+            "<mark> should add a yellow highlight rect"
+        );
+        // <u> draws a line decoration.
+        assert!(
+            svg.contains("<line"),
+            "<u> should add an underline line"
+        );
+        assert!(svg.contains(">hi</text>"), "mark content should render");
+        assert!(svg.contains(">lo</text>"), "underline content should render");
+    }
+
+    /// Parse `x`/`y`/`width` out of every `<rect ... />` in the SVG.
+    fn svg_rects(svg: &str) -> Vec<(f32, f32, f32)> {
+        let mut out = Vec::new();
+        let mut rest = svg;
+        while let Some(start) = rest.find("<rect ") {
+            let end = rest[start..]
+                .find("/>")
+                .map(|e| start + e)
+                .unwrap_or(rest.len());
+            let tag = &rest[start..end];
+            let attr = |name: &str| {
+                let needle = format!("{}=\"", name);
+                tag.find(&needle).and_then(|i| {
+                    let v = &tag[i + needle.len()..];
+                    let q = v.find('"')?;
+                    v[..q].parse::<f32>().ok()
+                })
+            };
+            if let (Some(x), Some(y), Some(w)) = (attr("x"), attr("y"), attr("width")) {
+                out.push((x, y, w));
+            }
+            rest = &rest[end..];
+        }
+        out
+    }
+
+    /// Parse `x1`/`x2` out of every `<line ... />` in the SVG.
+    fn svg_lines(svg: &str) -> Vec<(f32, f32)> {
+        let mut out = Vec::new();
+        let mut rest = svg;
+        while let Some(start) = rest.find("<line ") {
+            let end = rest[start..]
+                .find("/>")
+                .map(|e| start + e)
+                .unwrap_or(rest.len());
+            let tag = &rest[start..end];
+            let attr = |name: &str| {
+                let needle = format!("{}=\"", name);
+                tag.find(&needle).and_then(|i| {
+                    let v = &tag[i + needle.len()..];
+                    let q = v.find('"')?;
+                    v[..q].parse::<f32>().ok()
+                })
+            };
+            if let (Some(x1), Some(x2)) = (attr("x1"), attr("x2")) {
+                out.push((x1, x2));
+            }
+            rest = &rest[end..];
+        }
+        out
+    }
+
+    #[test]
+    fn test_mark_highlight_continuous_across_space() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        // MockMeasure width: len * 16 * 0.6 → "a" = 9.6, space = 9.6, "b" = 9.6.
+        let svg = renderer.render("<mark>a b</mark>").unwrap();
+        let rects = svg_rects(&svg);
+        assert_eq!(rects.len(), 3, "expected one rect per token, including the space");
+
+        let same_y = rects[0].1;
+        assert!(rects.iter().all(|r| (r.1 - same_y).abs() < 0.01), "same baseline");
+        // No gap between consecutive rects: next.x == prev.x + prev.width.
+        for pair in rects.windows(2) {
+            let gap = pair[1].0 - (pair[0].0 + pair[0].2);
+            assert!(gap.abs() < 0.01, "highlight gap of {gap} at a space");
+        }
+    }
+
+    #[test]
+    fn test_underline_continuous_across_space() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let svg = renderer.render("<u>a b</u>").unwrap();
+        let lines = svg_lines(&svg);
+        assert_eq!(lines.len(), 3, "expected one underline segment per token");
+        for pair in lines.windows(2) {
+            let gap = pair[1].0 - pair[0].1;
+            assert!(gap.abs() < 0.01, "underline gap of {gap} at a space");
+        }
+    }
+
+    #[test]
+    fn test_inline_html_mark_dark_theme_uses_dark_highlight() {
+        // Dark theme: the mark highlight must switch to a dark amber so light
+        // text stays readable (pure yellow would be ~1:1 contrast).
+        let theme = Theme::from_builtin("nord").expect("nord theme");
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let svg = renderer.render("<mark>hi</mark>").unwrap();
+        assert!(
+            svg.contains(&format!("fill=\"{}\"", MARK_HIGHLIGHT_DARK)),
+            "dark theme should use the dark mark highlight"
+        );
+        assert!(
+            !svg.contains("#ffff00"),
+            "dark theme must not use pure yellow highlight"
+        );
+
+        // The light theme keeps the classic yellow.
+        let theme = Theme::default();
+        let mut renderer = Renderer::new(theme, MockMeasure, 800.0).unwrap();
+        let svg = renderer.render("<mark>hi</mark>").unwrap();
+        assert!(svg.contains("fill=\"#ffff00\""), "light theme keeps yellow");
+    }
+
+    #[test]
+    fn test_mark_highlight_contrast_on_all_demo_themes() {
+        // The default <mark> highlight must keep readable contrast against the
+        // theme text on every demo theme (WCAG AA body text is 4.5:1; we accept
+        // 3:1 for the demo's small colored runs, but plain text should pass 4.5).
+        for name in [
+            "solarized_light",
+            "dracula",
+            "nord",
+            "catppuccin_mocha",
+            "solarized_dark",
+        ] {
+            let theme = Theme::from_builtin(name).unwrap_or_else(|_| Theme::default());
+            let mark = if theme_is_dark(&theme.background_color) {
+                MARK_HIGHLIGHT_DARK
+            } else {
+                MARK_HIGHLIGHT_LIGHT
+            };
+            let ratio = contrast_ratio(&theme.text_color, mark)
+                .unwrap_or_else(|| panic!("{name}: theme text color unparseable"));
+            assert!(
+                ratio >= 3.0,
+                "{name}: mark highlight {mark} vs text {} contrast {ratio:.1}:1 < 3:1",
+                theme.text_color
+            );
+        }
+    }
+
+    #[test]
+    fn test_inline_html_nested_sup_with_color() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let svg = renderer.render("a<sup style=\"color: green\">n</sup>b").unwrap();
+        let (a_fs, a_y, _) = text_metrics(&svg, "a").expect("base text");
+        let (n_fs, n_y, n_fill) = text_metrics(&svg, "n").expect("superscript");
+
+        assert!(n_fs < a_fs, "nested sup should be smaller");
+        assert!(n_y < a_y, "nested sup should be raised");
+        assert_eq!(n_fill, "green", "nested sup should keep its color");
+    }
+
+    #[test]
+    fn test_inline_html_unknown_tag_keeps_content() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        let svg = renderer.render("<custom>still here</custom> done").unwrap();
+        assert!(svg.contains("still"), "unknown tags must not drop content");
+        assert!(svg.contains("done"));
+    }
+
+    #[test]
+    fn test_inline_html_rejects_malicious_style_values() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
+
+        // `url(javascript:...)` contains ':' which sanitize_color rejects, and the
+        // whole style value must never be able to break out of the fill attribute.
+        let svg = renderer
+            .render("<span style=\"color: red; background: url(javascript:alert(1))\">x</span>")
+            .unwrap();
+        assert!(svg.contains(">x</text>"));
+        assert!(
+            !svg.contains("javascript"),
+            "unsafe style values should be dropped"
+        );
+        assert!(
+            !svg.contains("onmouseover") && !svg.contains("<script"),
+            "no attribute injection into the SVG"
+        );
+    }
+
+    #[test]
+    fn test_table_long_cell_wraps_within_width() {
+        let theme = Theme::default();
+        let measure = MockMeasure;
+        let mut renderer = Renderer::new(theme, measure, 400.0).unwrap();
+
+        // A 200-char cell is far wider than the 400px output; it must wrap
+        // instead of overflowing past the right edge.
+        let long = "x".repeat(200);
+        let markdown = format!("| A | B |\n|---|--|\n| short | {} |", long);
+        let result = renderer.render(&markdown);
+        assert!(result.is_ok());
+        let svg = result.unwrap();
+
+        let right_edge = 400.0 - 32.0; // width - padding_x
+
+        // Parse every rect and assert none extends beyond the right edge.
+        let mut max_right = 0.0f32;
+        let mut search_start = 0usize;
+        while let Some(pos) = svg[search_start..].find("<rect x=\"") {
+            let abs = search_start + pos + "<rect x=\"".len();
+            let rest = &svg[abs..];
+            let x_end = rest.find('"').unwrap();
+            let x: f32 = rest[..x_end].parse().unwrap();
+            let w_start = rest[x_end..].find("width=\"").unwrap() + x_end + "width=\"".len();
+            let w_rest = &rest[w_start..];
+            let w_end = w_rest.find('"').unwrap();
+            let w: f32 = w_rest[..w_end].parse().unwrap();
+            max_right = max_right.max(x + w);
+            search_start = abs + x_end;
+        }
+
+        assert!(
+            max_right <= right_edge + 1.0,
+            "Table must not overflow the right edge: right edge = {right_edge}, table right = {max_right:.2}"
+        );
+
+        // The long word must have been hard-split into multiple text nodes.
+        let single_run = "x".repeat(200);
+        assert!(
+            !svg.contains(&format!(">{}</text>", single_run)),
+            "Long cell content should be wrapped, not emitted as one huge text node"
+        );
     }
 
     #[test]
