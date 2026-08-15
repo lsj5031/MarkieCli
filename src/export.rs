@@ -107,30 +107,43 @@ pub fn save_output(svg: &str, output: &Path, png_scale: f32) -> Result<(), Strin
     Ok(())
 }
 
-fn configure_font_fallbacks(fontdb: &mut usvg::fontdb::Database) {
+/// Pick sans/serif/mono fallback families from a list of `(family_name, lowercased_name)` pairs.
+fn pick_fallback_families<'a>(
+    families: impl Iterator<Item = &'a (String, String)>,
+) -> (Option<String>, Option<String>, Option<String>) {
     let mut sans_family: Option<String> = None;
     let mut serif_family: Option<String> = None;
     let mut mono_family: Option<String> = None;
     let mut first_family: Option<String> = None;
 
-    for face in fontdb.faces() {
-        for (family, _) in &face.families {
-            if first_family.is_none() {
-                first_family = Some(family.clone());
-            }
+    for (family, lower) in families {
+        if first_family.is_none() {
+            first_family = Some(family.clone());
+        }
 
-            let lower = family.to_ascii_lowercase();
-            if sans_family.is_none() && lower.contains("sans") {
-                sans_family = Some(family.clone());
-            }
-            if serif_family.is_none() && lower.contains("serif") {
-                serif_family = Some(family.clone());
-            }
-            if mono_family.is_none() && (lower.contains("mono") || lower.contains("code")) {
-                mono_family = Some(family.clone());
-            }
+        if sans_family.is_none() && lower.contains("sans") {
+            sans_family = Some(family.clone());
+        }
+        if serif_family.is_none() && lower.contains("serif") {
+            serif_family = Some(family.clone());
+        }
+        if mono_family.is_none() && (lower.contains("mono") || lower.contains("code")) {
+            mono_family = Some(family.clone());
         }
     }
+
+    (sans_family, serif_family, mono_family)
+}
+
+fn configure_font_fallbacks(fontdb: &mut usvg::fontdb::Database) {
+    let families: Vec<(String, String)> = fontdb
+        .faces()
+        .flat_map(|face| &face.families)
+        .map(|(family, _)| (family.clone(), family.to_ascii_lowercase()))
+        .collect();
+
+    let (sans_family, serif_family, mono_family) = pick_fallback_families(families.iter());
+    let first_family = families.first().map(|(f, _)| f.clone());
 
     if let Some(family) = sans_family.as_deref().or(first_family.as_deref()) {
         fontdb.set_sans_serif_family(family);
@@ -148,29 +161,14 @@ fn configure_font_fallbacks(fontdb: &mut usvg::fontdb::Database) {
 }
 
 fn configure_font_fallbacks_svg2pdf(fontdb: &mut svg2pdf::usvg::fontdb::Database) {
-    let mut sans_family: Option<String> = None;
-    let mut serif_family: Option<String> = None;
-    let mut mono_family: Option<String> = None;
-    let mut first_family: Option<String> = None;
+    let families: Vec<(String, String)> = fontdb
+        .faces()
+        .flat_map(|face| &face.families)
+        .map(|(family, _)| (family.clone(), family.to_ascii_lowercase()))
+        .collect();
 
-    for face in fontdb.faces() {
-        for (family, _) in &face.families {
-            if first_family.is_none() {
-                first_family = Some(family.clone());
-            }
-
-            let lower = family.to_ascii_lowercase();
-            if sans_family.is_none() && lower.contains("sans") {
-                sans_family = Some(family.clone());
-            }
-            if serif_family.is_none() && lower.contains("serif") {
-                serif_family = Some(family.clone());
-            }
-            if mono_family.is_none() && (lower.contains("mono") || lower.contains("code")) {
-                mono_family = Some(family.clone());
-            }
-        }
-    }
+    let (sans_family, serif_family, mono_family) = pick_fallback_families(families.iter());
+    let first_family = families.first().map(|(f, _)| f.clone());
 
     if let Some(family) = sans_family.as_deref().or(first_family.as_deref()) {
         fontdb.set_sans_serif_family(family);
