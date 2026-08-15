@@ -15,14 +15,18 @@ pub enum MermaidDiagram {
 pub fn parse_mermaid(input: &str) -> Result<MermaidDiagram, String> {
     let input = input.trim();
 
-    // Detect diagram type from first line
-    let first_line = input.lines().next().unwrap_or("");
+    // Detect the diagram type from the first non-empty, non-comment line so
+    // leading `%%` comments or init config blocks don't confuse detection.
+    let first_line = input
+        .lines()
+        .find(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && !trimmed.starts_with("%%")
+        })
+        .map(str::trim)
+        .unwrap_or("");
 
-    if first_line.starts_with("flowchart")
-        || first_line.starts_with("graph")
-        || first_line.starts_with("flowchart ")
-        || first_line.starts_with("graph ")
-    {
+    if first_line.starts_with("flowchart") || first_line.starts_with("graph") {
         let diagram =
             parse_flowchart(input).map_err(|e| format!("Flowchart parse error: {}", e))?;
         Ok(MermaidDiagram::Flowchart(diagram))
@@ -39,15 +43,20 @@ pub fn parse_mermaid(input: &str) -> Result<MermaidDiagram, String> {
     } else if first_line.starts_with("erDiagram") || first_line.starts_with("er") {
         let diagram = parse_er(input).map_err(|e| format!("ER parse error: {}", e))?;
         Ok(MermaidDiagram::ErDiagram(diagram))
-    } else {
-        let diagram_type = first_line.split_whitespace().next().unwrap_or(first_line);
-        eprintln!(
-            "Warning: unrecognized Mermaid diagram type '{}', attempting flowchart parse",
-            diagram_type
-        );
+    } else if first_line.is_empty() {
+        // Empty diagram (e.g. a blank ```mermaid fence): render an empty
+        // flowchart instead of failing the whole document.
         let diagram =
             parse_flowchart(input).map_err(|e| format!("Flowchart parse error: {}", e))?;
         Ok(MermaidDiagram::Flowchart(diagram))
+    } else {
+        // Unknown diagram types (pie, gantt, journey, ...) are not supported.
+        // Error loudly instead of producing a confusing flowchart fallback.
+        let diagram_type = first_line.split_whitespace().next().unwrap_or(first_line);
+        Err(format!(
+            "Unsupported Mermaid diagram type '{}'. Supported types: flowchart, sequenceDiagram, classDiagram, stateDiagram, erDiagram",
+            diagram_type
+        ))
     }
 }
 
@@ -1285,6 +1294,13 @@ fn parse_er(input: &str) -> Result<ErDiagram, String> {
             continue;
         }
 
+        // With leading comment lines, `.skip(1)` skips the comment instead of the
+        // type declaration, so the `erDiagram` line would otherwise become a phantom
+        // entity.
+        if trimmed.eq_ignore_ascii_case("erDiagram") || trimmed.eq_ignore_ascii_case("er") {
+            continue;
+        }
+
         // Inside an entity block
         if current_entity.is_some() {
             if trimmed == "}" {
@@ -1542,6 +1558,57 @@ fn parse_er_relationship(line: &str) -> Option<ErRelationship> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_unknown_diagram_type_errors() {
+        let result = parse_mermaid("pie title Pets\n  \"Dogs\" : 50");
+        let err = result.expect_err("unknown diagram type should error");
+        assert!(
+            err.contains("Unsupported Mermaid diagram type 'pie'"),
+            "error should name the type, got: {err}"
+        );
+        assert!(
+            err.contains("flowchart"),
+            "error should list supported types, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_leading_comments_do_not_break_type_detection() {
+        // `%%{init: ...}` config blocks are commonly the first line of a diagram.
+        let flowchart = parse_mermaid("%%{init: {'theme': 'base'}}\nflowchart TD\n    A --> B")
+            .expect("flowchart with leading comment should parse");
+        if let MermaidDiagram::Flowchart(fc) = flowchart {
+            assert_eq!(fc.nodes.len(), 2);
+        } else {
+            panic!("Expected flowchart");
+        }
+
+        let er = parse_mermaid("%% comment\nerDiagram\n    CUSTOMER")
+            .expect("er with leading comment should parse");
+        if let MermaidDiagram::ErDiagram(er_diagram) = er {
+            assert!(
+                !er_diagram.entities.iter().any(|e| e.name == "erDiagram"),
+                "the erDiagram type line must not become a phantom entity"
+            );
+            assert_eq!(er_diagram.entities.len(), 1);
+        } else {
+            panic!("Expected er diagram");
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_input_is_ok() {
+        for input in ["", "\n", "%% just a comment"] {
+            let result = parse_mermaid(input);
+            assert!(
+                result.is_ok(),
+                "empty/comment-only input should not fail, got: {:?}",
+                result.err()
+            );
+            assert!(matches!(result.unwrap(), MermaidDiagram::Flowchart(_)));
+        }
+    }
 
     #[test]
     fn test_parse_simple_flowchart() {
@@ -2281,8 +2348,9 @@ mod error_tests {
     }
 
     #[test]
-    fn test_unknown_diagram_type_produces_result() {
+    fn test_unknown_diagram_type_errors() {
         let result = parse_mermaid("unknownDiagram\n  A --> B");
-        assert!(result.is_ok(), "Unknown diagram type should not error");
+        let err = result.expect_err("Unknown diagram type should error");
+        assert!(err.contains("Unsupported Mermaid diagram type 'unknownDiagram'"));
     }
 }

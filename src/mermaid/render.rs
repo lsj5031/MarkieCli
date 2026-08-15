@@ -2572,11 +2572,15 @@ mod tests {
     }
 
     #[test]
-    fn test_unknown_diagram_type_renders_without_panic() {
+    fn test_unknown_diagram_type_errors_clearly() {
         let style = DiagramStyle::default();
         let mut measure = MockMeasure;
         let result = render_diagram("pie title Pets\n  \"Dogs\" : 50", &style, &mut measure);
-        assert!(result.is_ok(), "Unknown diagram type should render without error");
+        let err = result.expect_err("unknown diagram types should error, not fall back");
+        assert!(
+            err.contains("Unsupported Mermaid diagram type 'pie'"),
+            "error should name the unsupported type, got: {err}"
+        );
     }
 
     #[test]
