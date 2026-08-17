@@ -86,14 +86,12 @@ pub fn save_output(svg: &str, output: &Path, png_scale: f32) -> Result<(), Strin
         }
         "png" => {
             let png_data = svg_to_png(svg, png_scale)?;
-            std::fs::write(output, png_data)
-                .map_err(|e| format!("Failed to write PNG: {}", e))?;
+            std::fs::write(output, png_data).map_err(|e| format!("Failed to write PNG: {}", e))?;
             eprintln!("PNG saved to: {}", output.display());
         }
         "pdf" => {
             let pdf_data = svg_to_pdf(svg)?;
-            std::fs::write(output, pdf_data)
-                .map_err(|e| format!("Failed to write PDF: {}", e))?;
+            std::fs::write(output, pdf_data).map_err(|e| format!("Failed to write PDF: {}", e))?;
             eprintln!("PDF saved to: {}", output.display());
         }
         _ => {
@@ -135,54 +133,43 @@ fn pick_fallback_families<'a>(
     (sans_family, serif_family, mono_family)
 }
 
+/// Configure generic-family fallbacks on a font database. The resvg (PNG) and
+/// svg2pdf (PDF) paths pull in different usvg versions, so their
+/// `fontdb::Database` types are unrelated and can't be unified through a shared
+/// function or trait — hence a macro.
+macro_rules! configure_font_fallbacks {
+    ($fontdb:expr) => {{
+        let families: Vec<(String, String)> = $fontdb
+            .faces()
+            .flat_map(|face| &face.families)
+            .map(|(family, _)| (family.clone(), family.to_ascii_lowercase()))
+            .collect();
+
+        let (sans_family, serif_family, mono_family) = pick_fallback_families(families.iter());
+        let first_family = families.first().map(|(f, _)| f.clone());
+
+        if let Some(family) = sans_family.as_deref().or(first_family.as_deref()) {
+            $fontdb.set_sans_serif_family(family);
+        }
+        if let Some(family) = serif_family.as_deref().or(first_family.as_deref()) {
+            $fontdb.set_serif_family(family);
+        }
+        if let Some(family) = mono_family
+            .as_deref()
+            .or(sans_family.as_deref())
+            .or(first_family.as_deref())
+        {
+            $fontdb.set_monospace_family(family);
+        }
+    }};
+}
+
 fn configure_font_fallbacks(fontdb: &mut usvg::fontdb::Database) {
-    let families: Vec<(String, String)> = fontdb
-        .faces()
-        .flat_map(|face| &face.families)
-        .map(|(family, _)| (family.clone(), family.to_ascii_lowercase()))
-        .collect();
-
-    let (sans_family, serif_family, mono_family) = pick_fallback_families(families.iter());
-    let first_family = families.first().map(|(f, _)| f.clone());
-
-    if let Some(family) = sans_family.as_deref().or(first_family.as_deref()) {
-        fontdb.set_sans_serif_family(family);
-    }
-    if let Some(family) = serif_family.as_deref().or(first_family.as_deref()) {
-        fontdb.set_serif_family(family);
-    }
-    if let Some(family) = mono_family
-        .as_deref()
-        .or(sans_family.as_deref())
-        .or(first_family.as_deref())
-    {
-        fontdb.set_monospace_family(family);
-    }
+    configure_font_fallbacks!(fontdb);
 }
 
 fn configure_font_fallbacks_svg2pdf(fontdb: &mut svg2pdf::usvg::fontdb::Database) {
-    let families: Vec<(String, String)> = fontdb
-        .faces()
-        .flat_map(|face| &face.families)
-        .map(|(family, _)| (family.clone(), family.to_ascii_lowercase()))
-        .collect();
-
-    let (sans_family, serif_family, mono_family) = pick_fallback_families(families.iter());
-    let first_family = families.first().map(|(f, _)| f.clone());
-
-    if let Some(family) = sans_family.as_deref().or(first_family.as_deref()) {
-        fontdb.set_sans_serif_family(family);
-    }
-    if let Some(family) = serif_family.as_deref().or(first_family.as_deref()) {
-        fontdb.set_serif_family(family);
-    }
-    if let Some(family) = mono_family
-        .as_deref()
-        .or(sans_family.as_deref())
-        .or(first_family.as_deref())
-    {
-        fontdb.set_monospace_family(family);
-    }
+    configure_font_fallbacks!(fontdb);
 }
 
 #[cfg(test)]
@@ -199,6 +186,10 @@ mod tests {
     #[test]
     fn test_save_output_unsupported_extension() {
         let result = save_output("<svg></svg>", Path::new("output.txt"), 1.0);
-        assert!(result.unwrap_err().contains("Unsupported output format: .txt"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Unsupported output format: .txt")
+        );
     }
 }
