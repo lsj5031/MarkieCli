@@ -1,6 +1,6 @@
 use clap::Parser;
 use markie::fonts::CosmicTextMeasure;
-use markie::mermaid::{render_diagram, DiagramStyle};
+use markie::mermaid::{DiagramStyle, render_diagram};
 use markie::theme::Theme;
 use std::path::PathBuf;
 

@@ -123,9 +123,7 @@ pub fn render_diagram<T: TextMeasure>(
     let diagram = parse_mermaid(source)?;
 
     let result = match diagram {
-        MermaidDiagram::Flowchart(fc) => {
-            super::flowchart::render_flowchart(&fc, style, measure)?
-        }
+        MermaidDiagram::Flowchart(fc) => super::flowchart::render_flowchart(&fc, style, measure)?,
         MermaidDiagram::Sequence(seq) => render_sequence(&seq, style, measure)?,
         MermaidDiagram::ClassDiagram(cls) => render_class(&cls, style, measure)?,
         MermaidDiagram::StateDiagram(st) => render_state(&st, style, measure)?,
@@ -278,9 +276,7 @@ struct RenderSequenceContext<'a, T: TextMeasure> {
     activation_starts: &'a mut HashMap<String, Vec<f32>>,
 }
 
-fn render_sequence_elements<T: TextMeasure>(
-    ctx: &mut RenderSequenceContext<'_, T>,
-) -> String {
+fn render_sequence_elements<T: TextMeasure>(ctx: &mut RenderSequenceContext<'_, T>) -> String {
     let elements = ctx.elements;
     let participant_centers = ctx.participant_centers;
     let style = ctx.style;
@@ -307,7 +303,9 @@ fn render_sequence_elements<T: TextMeasure>(
                         let y_top = *message_y;
                         let y_bot = y_top + loop_h;
 
-                        let dash = if msg.msg_type == MessageType::Dotted || msg.kind == MessageKind::Reply {
+                        let dash = if msg.msg_type == MessageType::Dotted
+                            || msg.kind == MessageKind::Reply
+                        {
                             " stroke-dasharray=\"4,4\""
                         } else {
                             ""
@@ -325,9 +323,12 @@ fn render_sequence_elements<T: TextMeasure>(
                         // Arrowhead pointing left at return point
                         svg.push_str(&format!(
                             r#"<polygon points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="{}" />"#,
-                            cx, y_bot,
-                            cx + 7.0, y_bot - 3.5,
-                            cx + 7.0, y_bot + 3.5,
+                            cx,
+                            y_bot,
+                            cx + 7.0,
+                            y_bot - 3.5,
+                            cx + 7.0,
+                            y_bot + 3.5,
                             style.edge_stroke
                         ));
 
@@ -365,12 +366,13 @@ fn render_sequence_elements<T: TextMeasure>(
                         *message_y = y_bot + 20.0;
                     } else {
                         let is_right = x2 > x1;
-                        let dash =
-                            if msg.msg_type == MessageType::Dotted || msg.kind == MessageKind::Reply {
-                                " stroke-dasharray=\"4,4\""
-                            } else {
-                                ""
-                            };
+                        let dash = if msg.msg_type == MessageType::Dotted
+                            || msg.kind == MessageKind::Reply
+                        {
+                            " stroke-dasharray=\"4,4\""
+                        } else {
+                            ""
+                        };
 
                         svg.push_str(&format!(
                             r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75"{} />"#,
@@ -468,8 +470,8 @@ fn render_sequence_elements<T: TextMeasure>(
                         .entry(activation.participant.clone())
                         .or_default()
                         .pop()
-                    {
-                        svg.push_str(&format!(
+                {
+                    svg.push_str(&format!(
                             r#"<rect x="{:.2}" y="{:.2}" width="8" height="{:.2}" fill="{}" fill-opacity="0.35" stroke="{}" stroke-width="1" />"#,
                             cx - 4.0,
                             start,
@@ -477,7 +479,7 @@ fn render_sequence_elements<T: TextMeasure>(
                             style.node_fill,
                             style.node_stroke
                         ));
-                    }
+                }
                 *message_y += 24.0;
             }
             SequenceElement::Note {
@@ -709,7 +711,10 @@ fn render_class_box(class: &ClassDefinition, pos: &LayoutPos, style: &DiagramSty
     let header_fill = mix_color(&style.node_fill, &style.node_text, 0.05);
     svg.push_str(&format!(
         r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" fill="{}" />"#,
-        pos.x + 0.5, pos.y + 0.5, pos.width - 1.0, header_h,
+        pos.x + 0.5,
+        pos.y + 0.5,
+        pos.width - 1.0,
+        header_h,
         header_fill
     ));
 
@@ -1033,10 +1038,18 @@ fn line_intersects_rect(x1: f32, y1: f32, x2: f32, y2: f32, r: &Rect) -> bool {
 
     let code = |x: f32, y: f32| -> u8 {
         let mut c = 0u8;
-        if x < left { c |= 1; }
-        if x > right { c |= 2; }
-        if y < top { c |= 4; }
-        if y > bottom { c |= 8; }
+        if x < left {
+            c |= 1;
+        }
+        if x > right {
+            c |= 2;
+        }
+        if y < top {
+            c |= 4;
+        }
+        if y > bottom {
+            c |= 8;
+        }
         c
     };
 
@@ -1048,16 +1061,36 @@ fn line_intersects_rect(x1: f32, y1: f32, x2: f32, y2: f32, r: &Rect) -> bool {
     let mut by = y2;
 
     for _ in 0..20 {
-        if c1 == 0 || c2 == 0 { return true; } // one endpoint inside
-        if c1 & c2 != 0 { return false; } // both on same outside
+        if c1 == 0 || c2 == 0 {
+            return true;
+        } // one endpoint inside
+        if c1 & c2 != 0 {
+            return false;
+        } // both on same outside
         let c = if c1 != 0 { c1 } else { c2 };
         let (nx, ny);
-        if c & 8 != 0 { nx = ax + (bx - ax) * (bottom - ay) / (by - ay); ny = bottom; }
-        else if c & 4 != 0 { nx = ax + (bx - ax) * (top - ay) / (by - ay); ny = top; }
-        else if c & 2 != 0 { ny = ay + (by - ay) * (right - ax) / (bx - ax); nx = right; }
-        else { ny = ay + (by - ay) * (left - ax) / (bx - ax); nx = left; }
-        if c == c1 { ax = nx; ay = ny; c1 = code(ax, ay); }
-        else { bx = nx; by = ny; c2 = code(bx, by); }
+        if c & 8 != 0 {
+            nx = ax + (bx - ax) * (bottom - ay) / (by - ay);
+            ny = bottom;
+        } else if c & 4 != 0 {
+            nx = ax + (bx - ax) * (top - ay) / (by - ay);
+            ny = top;
+        } else if c & 2 != 0 {
+            ny = ay + (by - ay) * (right - ax) / (bx - ax);
+            nx = right;
+        } else {
+            ny = ay + (by - ay) * (left - ax) / (bx - ax);
+            nx = left;
+        }
+        if c == c1 {
+            ax = nx;
+            ay = ny;
+            c1 = code(ax, ay);
+        } else {
+            bx = nx;
+            by = ny;
+            c2 = code(bx, by);
+        }
     }
     false
 }
@@ -1103,10 +1136,7 @@ fn render_state(
             .or_insert(0) += 1;
     }
 
-    let state_obstacles: Vec<Rect> = positions
-        .values()
-        .map(|p| rect_from_pos(p, 8.0))
-        .collect();
+    let state_obstacles: Vec<Rect> = positions.values().map(|p| rect_from_pos(p, 8.0)).collect();
 
     let mut transition_min_x = f32::MAX;
     let mut transition_max_x = f32::MIN;
@@ -1165,16 +1195,20 @@ fn render_state(
 
     for state in &diagram.states {
         for child in &state.children {
-            if let StateElement::Note { state: note_state, text } = child
+            if let StateElement::Note {
+                state: note_state,
+                text,
+            } = child
                 && !text.is_empty()
-                    && let Some(pos) = positions.get(note_state.as_str()) {
-                        let note_width = 180.0_f32;
-                        let note_height = 26.0_f32;
-                        let nx = pos.x + pos.width + 28.0;
-                        let ny = pos.y + 4.0;
-                        total_width = total_width.max(nx + note_width + padding);
-                        total_height = total_height.max(ny + note_height + padding);
-                    }
+                && let Some(pos) = positions.get(note_state.as_str())
+            {
+                let note_width = 180.0_f32;
+                let note_height = 26.0_f32;
+                let nx = pos.x + pos.width + 28.0;
+                let ny = pos.y + 4.0;
+                total_width = total_width.max(nx + note_width + padding);
+                total_height = total_height.max(ny + note_height + padding);
+            }
         }
     }
 
@@ -1260,9 +1294,11 @@ fn render_state_node(
                     state: note_state,
                     text,
                 } = child
-                    && note_state == &state.id && !text.is_empty() {
-                        svg.push_str(&render_state_note(note_state, text, pos, style, measure));
-                    }
+                    && note_state == &state.id
+                    && !text.is_empty()
+                {
+                    svg.push_str(&render_state_note(note_state, text, pos, style, measure));
+                }
             }
         }
     }
@@ -1588,7 +1624,8 @@ fn render_state_transition<T: TextMeasure>(
             }
         }
     };
-    let verticalish = (from_cx - to_cx).abs() < (from.width.min(to.width)) / 2.0 && (py2 - py1).abs() > 30.0;
+    let verticalish =
+        (from_cx - to_cx).abs() < (from.width.min(to.width)) / 2.0 && (py2 - py1).abs() > 30.0;
 
     let label_anchor_x;
     let label_anchor_y;
@@ -1611,14 +1648,15 @@ fn render_state_transition<T: TextMeasure>(
             ((rcx - from_cx).abs() < 1.0 && (rcy - from_cy).abs() < 1.0)
                 || ((rcx - to_cx).abs() < 1.0 && (rcy - to_cy).abs() < 1.0)
         };
-        let has_obstacle_between = gap > 0.0 && obstacles.iter().any(|r| {
-            if is_src_or_dst(r) {
-                return false;
-            }
-            // Check if a straight vertical line from from→to would cross this obstacle
-            let line_x = mid_x;
-            line_x >= r.x && line_x <= r.x + r.w && r.y < bot_y && r.y + r.h > top_y
-        });
+        let has_obstacle_between = gap > 0.0
+            && obstacles.iter().any(|r| {
+                if is_src_or_dst(r) {
+                    return false;
+                }
+                // Check if a straight vertical line from from→to would cross this obstacle
+                let line_x = mid_x;
+                line_x >= r.x && line_x <= r.x + r.w && r.y < bot_y && r.y + r.h > top_y
+            });
         // Also check if the straight line crosses any obstacle using full intersection test
         let straight_crosses = obstacles.iter().any(|r| {
             if is_src_or_dst(r) {
@@ -1631,7 +1669,11 @@ fn render_state_transition<T: TextMeasure>(
         if adjacent {
             // Adjacent states: draw a straight vertical line
             let x = (from_cx + to_cx) / 2.0;
-            let y1 = if from_cy < to_cy { from.bottom() } else { from.y };
+            let y1 = if from_cy < to_cy {
+                from.bottom()
+            } else {
+                from.y
+            };
             let y2 = if from_cy < to_cy { to.y } else { to.bottom() };
             svg.push_str(&format!(
                 r#"<line x1="{:.2}" y1="{:.2}" x2="{:.2}" y2="{:.2}" stroke="{}" stroke-width="0.75" />"#,
@@ -1674,11 +1716,7 @@ fn render_state_transition<T: TextMeasure>(
                 } else {
                     from.x
                 };
-                let tex = if base >= to_cx {
-                    to.x + to.width
-                } else {
-                    to.x
-                };
+                let tex = if base >= to_cx { to.x + to.width } else { to.x };
                 for i in 0..max_steps {
                     let candidate = base + try_side * (i as f32) * step;
                     let clear = obstacles.iter().all(|r| {
@@ -1762,7 +1800,11 @@ fn render_state_transition<T: TextMeasure>(
 
             // Strategy 1: Simple Z-route (exit from side, horizontal midline, enter from side)
             let going_right = to_cx > from_cx;
-            let simple_from_exit_x = if going_right { from.x + from.width } else { from.x };
+            let simple_from_exit_x = if going_right {
+                from.x + from.width
+            } else {
+                from.x
+            };
             let simple_to_enter_x = if going_right { to.x } else { to.x + to.width };
             let mid_y = (from_cy + to_cy) / 2.0;
             let simple_clear = obstacles.iter().all(|r| {
@@ -1808,7 +1850,11 @@ fn render_state_transition<T: TextMeasure>(
                     } else {
                         from.y.min(to.y) - 30.0 - lane.abs() * 14.0
                     };
-                    let fey = if try_side > 0.0 { from.bottom() } else { from.y };
+                    let fey = if try_side > 0.0 {
+                        from.bottom()
+                    } else {
+                        from.y
+                    };
                     let tey = if try_side > 0.0 { to.bottom() } else { to.y };
                     for i in 0..max_steps {
                         let candidate = base + try_side * (i as f32) * step;
@@ -1839,8 +1885,16 @@ fn render_state_transition<T: TextMeasure>(
 
                 for &try_side in &[route_side, -route_side] {
                     let base_x = from_cx + try_side * (max_half_width + 30.0 + lane.abs() * 14.0);
-                    let fex = if base_x >= from_cx { from.x + from.width } else { from.x };
-                    let tex = if base_x >= to_cx { to.x + to.width } else { to.x };
+                    let fex = if base_x >= from_cx {
+                        from.x + from.width
+                    } else {
+                        from.x
+                    };
+                    let tex = if base_x >= to_cx {
+                        to.x + to.width
+                    } else {
+                        to.x
+                    };
                     for i in 0..max_steps {
                         let candidate = base_x + try_side * (i as f32) * step;
                         let clear = obstacles.iter().all(|r| {
@@ -1866,7 +1920,11 @@ fn render_state_transition<T: TextMeasure>(
 
                 if use_u_route {
                     let lane_y = best_u_lane_y;
-                    let from_exit_y = if lane_y > from_cy { from.bottom() } else { from.y };
+                    let from_exit_y = if lane_y > from_cy {
+                        from.bottom()
+                    } else {
+                        from.y
+                    };
                     let to_enter_y = if lane_y > to_cy { to.bottom() } else { to.y };
 
                     svg.push_str(&format!(
@@ -1889,8 +1947,16 @@ fn render_state_transition<T: TextMeasure>(
                     arrow_y = to_enter_y;
                 } else if !best_side_lane_x.is_nan() {
                     let lane_x = best_side_lane_x;
-                    let from_exit_x = if lane_x >= from_cx { from.x + from.width } else { from.x };
-                    let to_enter_x = if lane_x >= to_cx { to.x + to.width } else { to.x };
+                    let from_exit_x = if lane_x >= from_cx {
+                        from.x + from.width
+                    } else {
+                        from.x
+                    };
+                    let to_enter_x = if lane_x >= to_cx {
+                        to.x + to.width
+                    } else {
+                        to.x
+                    };
 
                     svg.push_str(&format!(
                         r#"<polyline points="{:.2},{:.2} {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="0.75" />"#,
@@ -1903,7 +1969,11 @@ fn render_state_transition<T: TextMeasure>(
                     track_point!(to_enter_x, enter_y);
                     label_anchor_x = lane_x;
                     label_anchor_y = (exit_y + enter_y) / 2.0;
-                    arrow_angle = if to_enter_x > lane_x { 0.0 } else { std::f32::consts::PI };
+                    arrow_angle = if to_enter_x > lane_x {
+                        0.0
+                    } else {
+                        std::f32::consts::PI
+                    };
                     arrow_x = to_enter_x;
                     arrow_y = enter_y;
                 } else {
@@ -2005,12 +2075,8 @@ fn render_state_transition<T: TextMeasure>(
         // Always include the previous heuristic as a candidate.
         let movement_weight = 2.0;
         let base_dist = 28.0 + lane.abs() * 10.0 + global_lane.abs() * 4.0;
-        let base_x = label_anchor_x
-            + perp_x * base_dist * route_side
-            + tx * tangent_offset;
-        let base_y = label_anchor_y
-            + perp_y * base_dist * route_side
-            + ty * tangent_offset;
+        let base_x = label_anchor_x + perp_x * base_dist * route_side + tx * tangent_offset;
+        let base_y = label_anchor_y + perp_y * base_dist * route_side + ty * tangent_offset;
         let base_rect = rect_for(base_x, base_y);
         let base_score = score(&base_rect);
         let mut best_x = base_x;
@@ -2031,7 +2097,9 @@ fn render_state_transition<T: TextMeasure>(
                     let sc = score(&r);
                     let mv = ((lx - label_anchor_x).powi(2) + (ly - label_anchor_y).powi(2)).sqrt();
                     let cost = sc + mv * movement_weight;
-                    if cost < best_cost || ((cost - best_cost).abs() < f32::EPSILON && mv < best_move) {
+                    if cost < best_cost
+                        || ((cost - best_cost).abs() < f32::EPSILON && mv < best_move)
+                    {
                         best_cost = cost;
                         best_move = mv;
                         best_x = lx;
@@ -2052,7 +2120,9 @@ fn render_state_transition<T: TextMeasure>(
                     let sc = score(&r);
                     let mv = ((lx - label_anchor_x).powi(2) + (ly - label_anchor_y).powi(2)).sqrt();
                     let cost = sc + mv * movement_weight;
-                    if cost < best_cost || ((cost - best_cost).abs() < f32::EPSILON && mv < best_move) {
+                    if cost < best_cost
+                        || ((cost - best_cost).abs() < f32::EPSILON && mv < best_move)
+                    {
                         best_cost = cost;
                         best_move = mv;
                         best_x = lx;
@@ -2568,7 +2638,10 @@ mod tests {
         let end = rest.find('"').expect("expected points terminator");
         let points = &rest[..end];
         let pair_count = points.split_whitespace().count();
-        assert_eq!(pair_count, 3, "inheritance triangle should have exactly 3 points");
+        assert_eq!(
+            pair_count, 3,
+            "inheritance triangle should have exactly 3 points"
+        );
     }
 
     #[test]
@@ -2587,8 +2660,11 @@ mod tests {
     fn test_syntax_error_renders_without_panic() {
         let style = DiagramStyle::default();
         let mut measure = MockMeasure;
-        let result =
-            render_diagram("flowchart LR\n  ??? invalid syntax ???", &style, &mut measure);
+        let result = render_diagram(
+            "flowchart LR\n  ??? invalid syntax ???",
+            &style,
+            &mut measure,
+        );
         assert!(result.is_ok(), "Syntax errors should not cause panic");
     }
 }

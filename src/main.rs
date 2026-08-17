@@ -107,8 +107,7 @@ fn run() -> Result<(), String> {
             .map_err(|e| format!("Failed to read from stdin: {}", e))?;
         buffer
     } else {
-        std::fs::read_to_string(&input)
-            .map_err(|e| format!("Failed to read input file: {}", e))?
+        std::fs::read_to_string(&input).map_err(|e| format!("Failed to read input file: {}", e))?
     };
 
     let base_path = if input.to_str() == Some("-") {

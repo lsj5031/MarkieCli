@@ -97,7 +97,6 @@ impl GlobalFontSystem {
 
         measured
     }
-
 }
 
 fn measure_text_impl(
@@ -160,7 +159,6 @@ impl CosmicTextMeasure {
         let _ = &*GLOBAL_FONT_SYSTEM;
         Ok(Self)
     }
-
 }
 
 impl TextMeasure for CosmicTextMeasure {

@@ -212,9 +212,10 @@ fn parse_mathml(mathml: &str) -> Result<MathNode, String> {
             Ok(XmlEvent::Text(ref e)) => {
                 let text = e.decode().unwrap_or_default().to_string();
                 if !text.is_empty()
-                    && let Some((_, children, _)) = stack.last_mut() {
-                        children.push(MathNode::Text(text));
-                    }
+                    && let Some((_, children, _)) = stack.last_mut()
+                {
+                    children.push(MathNode::Text(text));
+                }
             }
             Ok(XmlEvent::End(ref e)) => {
                 let _name = String::from_utf8_lossy(e.name().as_ref()).to_string();
@@ -270,9 +271,10 @@ fn parse_mathml(mathml: &str) -> Result<MathNode, String> {
                     let mut width_em = 0.0;
                     for (key, val) in &attrs {
                         if key == "width"
-                            && let Some(stripped) = val.strip_suffix("em") {
-                                width_em = stripped.parse().unwrap_or(0.0);
-                            }
+                            && let Some(stripped) = val.strip_suffix("em")
+                        {
+                            width_em = stripped.parse().unwrap_or(0.0);
+                        }
                     }
                     let node = MathNode::Space(width_em);
                     if let Some((_, parent_children, _)) = stack.last_mut() {
@@ -470,8 +472,7 @@ fn layout_node<T: TextMeasure>(
 ) -> MathBox {
     match node {
         MathNode::Ident(text) => {
-            let italic =
-                text.len() == 1 && text.chars().next().is_some_and(|c| c.is_alphabetic());
+            let italic = text.len() == 1 && text.chars().next().is_some_and(|c| c.is_alphabetic());
             let (w, _h) = measure_token(text, font_size, italic, measure);
             let style = if italic { " font-style=\"italic\"" } else { "" };
             let svg = format!(
@@ -1228,6 +1229,9 @@ mod tests {
         let mut measure = MockMeasure;
         let latex = r"\begin{bmatrix} a & b \\ c & d \end{bmatrix}";
         let result = render_math(latex, 16.0, "#000000", &mut measure, true);
-        assert!(result.is_ok(), "bmatrix should still work after preprocessing");
+        assert!(
+            result.is_ok(),
+            "bmatrix should still work after preprocessing"
+        );
     }
 }

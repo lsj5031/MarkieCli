@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use crate::fonts::TextMeasure;
 
-use crate::layout::Rect;
 use super::layout::{BBox, LayoutEngine, LayoutPos};
 use super::render::{DiagramStyle, escape_xml};
 use super::types::{ArrowType, EdgeStyle, FlowDirection, Flowchart, NodeShape};
+use crate::layout::Rect;
 
 /// Render a flowchart to SVG
 pub fn render_flowchart(
@@ -38,8 +38,7 @@ pub fn render_flowchart(
         let from_node = node_map.get(edge.from.as_str());
         let to_node = node_map.get(edge.to.as_str());
 
-        if let (Some(from), Some(to), Some(fn_), Some(tn)) =
-            (from_pos, to_pos, from_node, to_node)
+        if let (Some(from), Some(to), Some(fn_), Some(tn)) = (from_pos, to_pos, from_node, to_node)
         {
             let waypoints = edge_waypoints
                 .get(&(edge.from.clone(), edge.to.clone()))
@@ -85,7 +84,10 @@ pub fn render_flowchart(
 
 fn render_node(label: &str, shape: &NodeShape, pos: &LayoutPos, style: &DiagramStyle) -> String {
     let mut svg = String::new();
-    let label = label.replace("<br/>", "\n").replace("<br>", "\n").replace("<br />", "\n");
+    let label = label
+        .replace("<br/>", "\n")
+        .replace("<br>", "\n")
+        .replace("<br />", "\n");
     let escaped_label = escape_xml(&label);
 
     match shape {
@@ -295,8 +297,16 @@ fn clip_to_shape(
         _ => {
             let hw = pos.width / 2.0;
             let hh = pos.height / 2.0;
-            let scale_x = if dx.abs() > 0.001 { hw / dx.abs() } else { f32::MAX };
-            let scale_y = if dy.abs() > 0.001 { hh / dy.abs() } else { f32::MAX };
+            let scale_x = if dx.abs() > 0.001 {
+                hw / dx.abs()
+            } else {
+                f32::MAX
+            };
+            let scale_y = if dy.abs() > 0.001 {
+                hh / dy.abs()
+            } else {
+                f32::MAX
+            };
             let scale = scale_x.min(scale_y);
             (cx + dx * scale, cy + dy * scale)
         }
@@ -315,9 +325,7 @@ struct RenderEdgeContext<'a, T: TextMeasure> {
     measure: &'a mut T,
 }
 
-fn render_edge<T: TextMeasure>(
-    ctx: &mut RenderEdgeContext<'_, T>,
-) -> String {
+fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
     let edge = ctx.edge;
     let from_node = ctx.from_node;
     let from = ctx.from;
@@ -398,14 +406,8 @@ fn render_edge<T: TextMeasure>(
         // Edge label
         if let Some(ref label) = edge.label {
             let escaped = escape_xml(label);
-            let (label_w, _) = measure.measure_text(
-                label,
-                style.font_size * 0.82,
-                false,
-                false,
-                false,
-                None,
-            );
+            let (label_w, _) =
+                measure.measure_text(label, style.font_size * 0.82, false, false, false, None);
             let label_x = exit_x + loop_radius - label_w / 2.0;
             let label_y = from.y - loop_radius;
             svg.push_str(&format!(
@@ -517,7 +519,13 @@ fn render_edge<T: TextMeasure>(
     };
 
     if edge.arrow_head != ArrowType::None {
-        svg.push_str(&render_arrow_head(enter_x, enter_y, head_angle, &edge.arrow_head, style));
+        svg.push_str(&render_arrow_head(
+            enter_x,
+            enter_y,
+            head_angle,
+            &edge.arrow_head,
+            style,
+        ));
     }
 
     // Arrow tail
@@ -529,7 +537,13 @@ fn render_edge<T: TextMeasure>(
         } else {
             head_angle + std::f32::consts::PI
         };
-        svg.push_str(&render_arrow_head(exit_x, exit_y, tail_angle, &edge.arrow_tail, style));
+        svg.push_str(&render_arrow_head(
+            exit_x,
+            exit_y,
+            tail_angle,
+            &edge.arrow_tail,
+            style,
+        ));
     }
 
     // Label on middle segment
@@ -681,8 +695,7 @@ fn render_subgraph_box(
 
     format!(
         r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="8" fill="{}" fill-opacity="0.3" stroke="{}" stroke-width="1" stroke-dasharray="4,2" />"#,
-        min_x, min_y, width, height,
-        style.node_fill, style.node_stroke
+        min_x, min_y, width, height, style.node_fill, style.node_stroke
     )
 }
 
@@ -710,7 +723,12 @@ fn render_subgraph_title(
 
     // Offset title if it would overlap a previously placed title
     for used in used_rects.iter() {
-        let candidate = Rect::new(title_x - 4.0, title_y - title_h / 2.0 - 1.0, title_w, title_h);
+        let candidate = Rect::new(
+            title_x - 4.0,
+            title_y - title_h / 2.0 - 1.0,
+            title_w,
+            title_h,
+        );
         if candidate.overlaps(used) {
             title_y = used.y + used.h + title_h / 2.0 + 3.0;
         }

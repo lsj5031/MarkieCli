@@ -10,18 +10,33 @@ const GITHUB_LIGHT_QUOTE_BORDER: &str = "#d0d7de";
 const GITHUB_LIGHT_QUOTE_TEXT: &str = "#57606a";
 
 const BUILTIN_THEMES: &[(&str, &str)] = &[
-    ("catppuccin_latte", include_str!("../themes/catppuccin_latte.toml")),
-    ("catppuccin_mocha", include_str!("../themes/catppuccin_mocha.toml")),
+    (
+        "catppuccin_latte",
+        include_str!("../themes/catppuccin_latte.toml"),
+    ),
+    (
+        "catppuccin_mocha",
+        include_str!("../themes/catppuccin_mocha.toml"),
+    ),
     ("dracula", include_str!("../themes/dracula.toml")),
     ("everforest", include_str!("../themes/everforest.toml")),
     ("github_dark", include_str!("../themes/github_dark.toml")),
     ("github_light", include_str!("../themes/github_light.toml")),
     ("gruvbox_dark", include_str!("../themes/gruvbox_dark.toml")),
-    ("gruvbox_light", include_str!("../themes/gruvbox_light.toml")),
+    (
+        "gruvbox_light",
+        include_str!("../themes/gruvbox_light.toml"),
+    ),
     ("monokai_pro", include_str!("../themes/monokai_pro.toml")),
     ("nord", include_str!("../themes/nord.toml")),
-    ("solarized_dark", include_str!("../themes/solarized_dark.toml")),
-    ("solarized_light", include_str!("../themes/solarized_light.toml")),
+    (
+        "solarized_dark",
+        include_str!("../themes/solarized_dark.toml"),
+    ),
+    (
+        "solarized_light",
+        include_str!("../themes/solarized_light.toml"),
+    ),
     ("tokyo_night", include_str!("../themes/tokyo_night.toml")),
 ];
 

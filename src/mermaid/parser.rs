@@ -31,8 +31,7 @@ pub fn parse_mermaid(input: &str) -> Result<MermaidDiagram, String> {
             parse_flowchart(input).map_err(|e| format!("Flowchart parse error: {}", e))?;
         Ok(MermaidDiagram::Flowchart(diagram))
     } else if first_line.starts_with("sequenceDiagram") || first_line.starts_with("sequence") {
-        let diagram =
-            parse_sequence(input).map_err(|e| format!("Sequence parse error: {}", e))?;
+        let diagram = parse_sequence(input).map_err(|e| format!("Sequence parse error: {}", e))?;
         Ok(MermaidDiagram::Sequence(diagram))
     } else if first_line.starts_with("classDiagram") || first_line.starts_with("class") {
         let diagram = parse_class(input).map_err(|e| format!("Class parse error: {}", e))?;
@@ -211,9 +210,7 @@ struct ParsedEdgeLine {
     arrow_tail: ArrowType,
 }
 
-fn parse_edge_line(
-    line: &str,
-) -> Option<ParsedEdgeLine> {
+fn parse_edge_line(line: &str) -> Option<ParsedEdgeLine> {
     // Edge patterns (order matters - longer patterns first)
     let patterns = [
         ("<==>", EdgeStyle::Thick, ArrowType::Arrow, ArrowType::Arrow),
@@ -641,10 +638,9 @@ fn parse_sequence_note(line: &str) -> Option<SequenceElement> {
         ("right", after)
     } else if let Some(after) = rest.strip_prefix("left of ") {
         ("left", after)
-    } else if let Some(after) = rest.strip_prefix("over ") {
-        ("over", after)
     } else {
-        return None;
+        let after = rest.strip_prefix("over ")?;
+        ("over", after)
     };
 
     let colon_pos = after_prefix.find(':')?;
@@ -733,7 +729,9 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
 
             // Check for stereotype
             let (name, stereotype) = if rest.starts_with("<<") {
-                let end = rest.find(">>").ok_or_else(|| format!("line {}: missing '>>' in stereotype", line_num))?;
+                let end = rest
+                    .find(">>")
+                    .ok_or_else(|| format!("line {}: missing '>>' in stereotype", line_num))?;
                 let st = &rest[2..end];
                 let after = rest[end + 2..].trim();
                 (after.to_string(), Some(st.trim().to_string()))
@@ -842,7 +840,9 @@ fn parse_class_method(vis: Visibility, member: &str) -> Option<ClassMethod> {
 
     let return_type = if close_paren + 1 < member.len() {
         let after = member[close_paren + 1..].trim();
-        after.strip_prefix(':').map(|stripped| stripped.trim().to_string())
+        after
+            .strip_prefix(':')
+            .map(|stripped| stripped.trim().to_string())
     } else {
         None
     };
@@ -897,11 +897,7 @@ fn parse_class_relation(line: &str) -> Option<ClassRelation> {
 
             let (to, label) = if let Some((to_part, label_part)) = rest.split_once(':') {
                 let to = to_part.trim().to_string();
-                let label = label_part
-                    .trim()
-                    .trim_matches('"')
-                    .trim()
-                    .to_string();
+                let label = label_part.trim().trim_matches('"').trim().to_string();
                 let label = if label.is_empty() { None } else { Some(label) };
                 (to, label)
             } else {
@@ -967,8 +963,8 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
         if line.starts_with("state ") {
             let rest = line.strip_prefix("state ").unwrap_or("");
 
-            let (id, label, is_composite) = parse_state_definition(rest)
-                .map_err(|e| format!("line {}: {}", line_num, e))?;
+            let (id, label, is_composite) =
+                parse_state_definition(rest).map_err(|e| format!("line {}: {}", line_num, e))?;
             let state = ensure_state(&mut states, &id, &label, false, false, is_composite);
 
             if let Some(parent_id) = composite_stack.last().cloned() {
@@ -989,7 +985,9 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
                 let rest = &line[pos + arrow.len()..];
 
                 let (to, label) = if rest.contains(':') {
-                    let colon_pos = rest.find(':').ok_or_else(|| format!("line {}: expected ':' separator in transition", line_num))?;
+                    let colon_pos = rest.find(':').ok_or_else(|| {
+                        format!("line {}: expected ':' separator in transition", line_num)
+                    })?;
                     (
                         rest[..colon_pos].trim().to_string(),
                         Some(rest[colon_pos + 1..].trim().to_string()),
@@ -1079,9 +1077,12 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
         for (ci, child_elem) in parent.children.iter().enumerate() {
             if let StateElement::State(child_state) = child_elem
                 && let Some(&si) = state_index.get(&child_state.id)
-                    && si != pi && states[si].is_composite && !child_state.is_composite {
-                        patches.push((pi, ci, si));
-                    }
+                && si != pi
+                && states[si].is_composite
+                && !child_state.is_composite
+            {
+                patches.push((pi, ci, si));
+            }
         }
     }
     for (pi, ci, si) in patches {
@@ -1498,11 +1499,7 @@ fn parse_er_relationship(line: &str) -> Option<ErRelationship> {
             ErCardinality::OneOrMore,
             ErCardinality::ZeroOrMore,
         ),
-        (
-            "}|--|{",
-            ErCardinality::OneOrMore,
-            ErCardinality::OneOrMore,
-        ),
+        ("}|--|{", ErCardinality::OneOrMore, ErCardinality::OneOrMore),
         // }| patterns (OneOrMore from-side) - dotted
         (
             "}|..||",
@@ -1514,11 +1511,7 @@ fn parse_er_relationship(line: &str) -> Option<ErRelationship> {
             ErCardinality::OneOrMore,
             ErCardinality::ZeroOrMore,
         ),
-        (
-            "}|..|{",
-            ErCardinality::OneOrMore,
-            ErCardinality::OneOrMore,
-        ),
+        ("}|..|{", ErCardinality::OneOrMore, ErCardinality::OneOrMore),
     ];
 
     for (pattern, from_card, to_card) in &patterns {
@@ -1528,11 +1521,7 @@ fn parse_er_relationship(line: &str) -> Option<ErRelationship> {
 
             let (to, label) = if let Some((to_part, label_part)) = rest.split_once(':') {
                 let to = to_part.trim().to_string();
-                let label = label_part
-                    .trim()
-                    .trim_matches('"')
-                    .trim()
-                    .to_string();
+                let label = label_part.trim().trim_matches('"').trim().to_string();
                 let label = if label.is_empty() { None } else { Some(label) };
                 (to, label)
             } else if let Some(stripped) = rest.strip_prefix('"') {
@@ -2033,7 +2022,10 @@ classDiagram
                 .find(|r| r.from == "User" && r.to == "AuditLog")
                 .expect("missing writes relation");
             assert_eq!(writes.label.as_deref(), Some("writes"));
-            assert!(matches!(writes.relation_type, ClassRelationType::Dependency));
+            assert!(matches!(
+                writes.relation_type,
+                ClassRelationType::Dependency
+            ));
         } else {
             panic!("Expected class diagram");
         }
@@ -2336,7 +2328,11 @@ mod error_tests {
         let input = "stateDiagram\nstate \"Label";
         let result = parse_mermaid(input);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Missing closing quote in state label"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Missing closing quote in state label")
+        );
     }
 
     #[test]

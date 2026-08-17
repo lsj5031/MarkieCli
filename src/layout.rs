@@ -167,9 +167,9 @@ impl<T: TextMeasure> TextLayout for TextLayoutEngine<T> {
         is_bold: bool,
         is_italic: bool,
     ) -> Vec<GlyphBox> {
-        let (width, _height) = self.measure.measure_text(
-            text, font_size, is_code, is_bold, is_italic, None,
-        );
+        let (width, _height) = self
+            .measure
+            .measure_text(text, font_size, is_code, is_bold, is_italic, None);
 
         vec![GlyphBox::new_estimated(0.0, 0.0, width, font_size)]
     }
@@ -348,9 +348,7 @@ impl EdgeLabelPlacer {
         let (anchor_x, anchor_y) = anchor;
         let (w, h) = label_size;
 
-        let rect_at = |lx: f32, ly: f32| -> Rect {
-            Rect::new(lx - w / 2.0, ly - h + 2.0, w, h)
-        };
+        let rect_at = |lx: f32, ly: f32| -> Rect { Rect::new(lx - w / 2.0, ly - h + 2.0, w, h) };
 
         let mut best = LabelPosition {
             x: anchor_x,
@@ -368,7 +366,8 @@ impl EdgeLabelPlacer {
             // Prefer lower cost, or same cost but closer to anchor
             if total_cost < best.score
                 || ((total_cost - best.score).abs() < f32::EPSILON
-                    && distance < ((best.x - anchor_x).powi(2) + (best.y - anchor_y).powi(2)).sqrt())
+                    && distance
+                        < ((best.x - anchor_x).powi(2) + (best.y - anchor_y).powi(2)).sqrt())
             {
                 best = LabelPosition {
                     x: lx,
@@ -384,9 +383,16 @@ impl EdgeLabelPlacer {
 
     /// Check if a rectangle at the given position would collide with any occupied region.
     fn collides(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
-        let proposed =
-            Rect::new(x - self.padding, y - self.padding, w + self.padding * 2.0, h + self.padding * 2.0);
-        self.obstacles.iter().chain(self.labels.iter()).any(|r| proposed.overlaps(r))
+        let proposed = Rect::new(
+            x - self.padding,
+            y - self.padding,
+            w + self.padding * 2.0,
+            h + self.padding * 2.0,
+        );
+        self.obstacles
+            .iter()
+            .chain(self.labels.iter())
+            .any(|r| proposed.overlaps(r))
     }
 
     /// Commit a placed label so future searches avoid it.

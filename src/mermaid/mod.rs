@@ -4,5 +4,5 @@ mod parser;
 mod render;
 mod types;
 
-pub use parser::{parse_mermaid, MermaidDiagram};
-pub use render::{render_diagram, DiagramStyle};
+pub use parser::{MermaidDiagram, parse_mermaid};
+pub use render::{DiagramStyle, render_diagram};
