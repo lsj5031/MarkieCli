@@ -30,85 +30,16 @@ echo "==> Building markie binary"
   cd "$ROOT_DIR"
   cargo build
 )
-cat >"$OUTPUT_DIR/smoke_math.md" <<'EOF'
-# Math Smoke Test
-
-Inline nth-root: $\sqrt[3]{x^3 + y^3}$
-
-Inline binomial: $\binom{n}{k}$
-
-Display matrix:
-
-$$
-\begin{bmatrix}
-a & b \\
-c & d
-\end{bmatrix}
-$$
-
-Display mixed expression:
-
-$$
-\sqrt[4]{\frac{a^2 + b^2}{c^2}} + \binom{n}{2}
-$$
-EOF
-
-cat >"$OUTPUT_DIR/smoke_mermaid.md" <<'EOF'
-# Mermaid Smoke Test
-
-## Flowchart
-
-```mermaid
-flowchart TD
-    A[Start] --> B{Working?}
-    B -->|Yes| C[Done]
-    B -->|No| D[Retry]
-    D --> B
-```
-
-## Sequence
-
-```mermaid
-sequenceDiagram
-    participant Alice
-    participant Bob
-    Alice->>Bob: Hello
-    Bob-->>Alice: Hi
-```
-
-## Class
-
-```mermaid
-classDiagram
-    class Animal {
-        +String name
-        +int age
-        +makeSound()
-    }
-    class Dog {
-        +bark()
-    }
-    Animal <|-- Dog
-```
-
-## State
-
-```mermaid
-stateDiagram
-    [*] --> Idle
-    Idle --> Processing
-    Processing --> [*]
-```
-
-## ER
-
-```mermaid
-erDiagram
-    CUSTOMER
-    ORDER
-    CUSTOMER ||--o{ ORDER
-```
-EOF
+# Smoke inputs are committed fixtures so the CI gate and the interactive
+# visual check render exactly the same content.
+FIXTURE_DIR="$ROOT_DIR/tests/smoke"
+for stem in math mermaid; do
+  if [[ ! -f "$FIXTURE_DIR/smoke_$stem.md" ]]; then
+    echo "Smoke fixture not found: $FIXTURE_DIR/smoke_$stem.md" >&2
+    exit 1
+  fi
+  cp "$FIXTURE_DIR/smoke_$stem.md" "$OUTPUT_DIR/smoke_$stem.md"
+done
 
 render_all_formats() {
   local input="$1"
