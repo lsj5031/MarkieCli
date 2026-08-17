@@ -5,24 +5,73 @@ on:
     branches: [master, main]
   pull_request:
 
+# Cancel superseded runs of the same branch/PR to avoid wasting runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pin the toolchain so a fresh stable release can't silently break the
+  # `-D warnings` clippy gate (new clippy lints ship with every Rust release).
+  # Bump this deliberately and fix any fallout in the same change.
+  RUST_VERSION: "1.97.1"
+
 jobs:
   test:
-    name: Test + Clippy
+    name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
-          components: clippy
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test
+
+  lint:
+    name: Format + Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --check
       - name: Lint
         run: cargo clippy --all-targets -- -D warnings
+
+  smoke-test:
+    name: Smoke visuals in sync
+    runs-on: ubuntu-latest
+    needs: [test, lint]
+    timeout-minutes: 30
+    # Same pinned font environment as demo-sync so the committed smoke
+    # baselines resolve the same generic families and text metrics.
+    container: ubuntu:24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies and Rust
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates git build-essential pkg-config \
+            libfontconfig1-dev fonts-dejavu-core python3
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Check smoke visuals match baselines
+        run: bash scripts/check-smoke.sh /tmp/ci-smoke
 
   demo-sync:
     name: Demo assets in sync
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, lint]
+    timeout-minutes: 30
     # Run in a pinned font environment: the runner image ships many fonts, and
     # generic families (sans-serif/monospace/serif) resolve differently per
     # platform, which shifts text metrics. DejaVu-only matches the baseline the
@@ -36,7 +85,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             curl ca-certificates git build-essential pkg-config \
             libfontconfig1-dev fonts-dejavu-core python3
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Regenerate demos
         run: bash scripts/make-demo.sh /tmp/ci-demos
