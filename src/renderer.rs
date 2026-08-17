@@ -251,9 +251,7 @@ fn apply_inline_html_attr(style: &mut InlineHtmlStyle, name: &str, value: &str) 
                     "background" | "background-color" => {
                         style.background = sanitize_color(val);
                     }
-                    "text-decoration"
-                        if val.to_ascii_lowercase().contains("underline") =>
-                    {
+                    "text-decoration" if val.to_ascii_lowercase().contains("underline") => {
                         style.underline = true;
                     }
                     "font-size" => {
@@ -299,9 +297,10 @@ fn sanitize_color(value: &str) -> Option<String> {
     if v.is_empty() || v.len() > 64 {
         return None;
     }
-    if !v.chars().all(|c| {
-        c.is_ascii_alphanumeric() || matches!(c, '#' | ',' | '(' | ')' | '%' | '.' | ' ')
-    }) {
+    if !v
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '#' | ',' | '(' | ')' | '%' | '.' | ' '))
+    {
         return None;
     }
     if let Some(hex) = v.strip_prefix('#') {
@@ -312,10 +311,12 @@ fn sanitize_color(value: &str) -> Option<String> {
         }
     } else if v.starts_with("rgb")
         || v.starts_with("hsl")
-        || v.starts_with("var")
         || v.chars().all(|c| c.is_ascii_alphabetic())
     {
-        // rgb()/rgba()/hsl()/var()/named colors: passed through for resvg to resolve.
+        // rgb()/rgba()/hsl()/named colors: passed through for resvg to resolve.
+        // (var() is intentionally not accepted: resvg doesn't resolve CSS custom
+        // properties, and the only valid form `var(--x)` is rejected by the char
+        // whitelist above anyway.)
         Some(v.to_string())
     } else {
         None
@@ -864,9 +865,9 @@ impl<T: TextMeasure> Renderer<T> {
         is_italic: bool,
     ) -> Result<(), String> {
         let eff = self.effective_inline_style();
-        let (token_width, _) =
-            self.measure
-                .measure_text(token, font_size, false, is_bold, is_italic, None);
+        let (token_width, _) = self
+            .measure
+            .measure_text(token, font_size, false, is_bold, is_italic, None);
 
         if !self.at_line_start && self.cursor_x + token_width > self.right_edge() {
             self.advance_line(font_size);
@@ -994,18 +995,18 @@ impl<T: TextMeasure> Renderer<T> {
     }
 
     fn infer_space_width(&mut self, font_size: f32, is_bold: bool, is_italic: bool) -> f32 {
-        let (raw_space_width, _) =
-            self.measure
-                .measure_text(" ", font_size, false, is_bold, is_italic, None);
+        let (raw_space_width, _) = self
+            .measure
+            .measure_text(" ", font_size, false, is_bold, is_italic, None);
 
         // Some shapers trim trailing whitespace and report a zero/tiny width for " ".
         // Infer space advance from "m m" - "mm" and prefer the larger valid value.
-        let (with_space, _) =
-            self.measure
-                .measure_text("m m", font_size, false, is_bold, is_italic, None);
-        let (without_space, _) =
-            self.measure
-                .measure_text("mm", font_size, false, is_bold, is_italic, None);
+        let (with_space, _) = self
+            .measure
+            .measure_text("m m", font_size, false, is_bold, is_italic, None);
+        let (without_space, _) = self
+            .measure
+            .measure_text("mm", font_size, false, is_bold, is_italic, None);
         let inferred = with_space - without_space;
 
         let mut space_width = if inferred.is_finite() && inferred > 0.0 {
@@ -1056,7 +1057,9 @@ impl<T: TextMeasure> Renderer<T> {
         let rect_height = self.theme.font_size_code * 1.25 + self.theme.code_padding_y;
         // Use font metrics for proper alignment (ascent ratio 0.75)
         let ascent_ratio = 0.75;
-        let rect_y = self.cursor_y - self.theme.font_size_code * ascent_ratio - self.theme.code_padding_y * 0.5;
+        let rect_y = self.cursor_y
+            - self.theme.font_size_code * ascent_ratio
+            - self.theme.code_padding_y * 0.5;
 
         write!(
             self.svg_content,
@@ -1198,8 +1201,16 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         let closing = trimmed.starts_with("</");
-        let inner = if closing { &trimmed[2..] } else { &trimmed[1..] };
-        let inner = inner.split_once('>').map(|(head, _)| head).unwrap_or(inner).trim();
+        let inner = if closing {
+            &trimmed[2..]
+        } else {
+            &trimmed[1..]
+        };
+        let inner = inner
+            .split_once('>')
+            .map(|(head, _)| head)
+            .unwrap_or(inner)
+            .trim();
 
         let self_closing = inner.ends_with('/');
         let inner = inner.trim_end_matches('/').trim();
@@ -1277,7 +1288,10 @@ impl<T: TextMeasure> Renderer<T> {
                 self.last_margin_added = 0.0;
             }
             Err(e) => {
-                eprintln!("Warning: math render failed (line {}): {}", self.current_event_line, e);
+                eprintln!(
+                    "Warning: math render failed (line {}): {}",
+                    self.current_event_line, e
+                );
                 self.render_inline_code(math_src)?;
             }
         }
@@ -1335,7 +1349,10 @@ impl<T: TextMeasure> Renderer<T> {
                 self.finish_block(self.theme.margin_bottom);
             }
             Err(e) => {
-                eprintln!("Warning: math render failed (line {}): {}", self.current_event_line, e);
+                eprintln!(
+                    "Warning: math render failed (line {}): {}",
+                    self.current_event_line, e
+                );
                 self.start_block(self.theme.margin_top, false);
                 self.render_inline_code(&math_src)?;
                 self.finish_block(self.theme.margin_bottom);
@@ -1450,7 +1467,10 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         let line_height = self.theme.font_size_code * self.theme.line_height;
-        let effective_code_pad_y = self.theme.code_padding_y.max(self.theme.font_size_code * 0.5);
+        let effective_code_pad_y = self
+            .theme
+            .code_padding_y
+            .max(self.theme.font_size_code * 0.5);
         let block_height = (lines.len().saturating_sub(1) as f32) * line_height
             + self.theme.font_size_code
             + effective_code_pad_y * 2.0;
@@ -1513,8 +1533,13 @@ impl<T: TextMeasure> Renderer<T> {
             &self.theme.code_bg_color,
         );
 
-        let (svg, width, height) = render_diagram(source, &style, &mut self.measure)
-            .map_err(|e| format!("Mermaid diagram (line {}): {}", self.code_block_start_line, e))?;
+        let (svg, width, height) =
+            render_diagram(source, &style, &mut self.measure).map_err(|e| {
+                format!(
+                    "Mermaid diagram (line {}): {}",
+                    self.code_block_start_line, e
+                )
+            })?;
 
         // Scale down oversized diagrams so they never overflow the code-block frame.
         let available_width = self.right_edge() - x;
@@ -1630,10 +1655,11 @@ impl<T: TextMeasure> Renderer<T> {
 
         let font_size = self.current_font_size();
         if let Some(state) = self.list_stack.last()
-            && !state.needs_ascent {
-                self.advance_line(font_size);
-                return Ok(());
-            }
+            && !state.needs_ascent
+        {
+            self.advance_line(font_size);
+            return Ok(());
+        }
 
         self.new_line();
         Ok(())
@@ -1698,9 +1724,10 @@ impl<T: TextMeasure> Renderer<T> {
         if let Some(state) = self.table_state.as_mut() {
             // Flush the header row if it was implicitly created (no TableRow wrapper)
             if let Some(row) = state.current_row.take()
-                && !row.cells.is_empty() {
-                    state.rows.push(row);
-                }
+                && !row.cells.is_empty()
+            {
+                state.rows.push(row);
+            }
             state.in_head = false;
         }
     }
@@ -1722,9 +1749,10 @@ impl<T: TextMeasure> Renderer<T> {
     /// bold styling and a background tint to header cells.
     fn finish_table_row(&mut self) {
         if let Some(state) = self.table_state.as_mut()
-            && let Some(row) = state.current_row.take() {
-                state.rows.push(row);
-            }
+            && let Some(row) = state.current_row.take()
+        {
+            state.rows.push(row);
+        }
     }
 
     fn start_table_cell(&mut self) {
@@ -1738,16 +1766,18 @@ impl<T: TextMeasure> Renderer<T> {
     fn finish_table_cell(&mut self) {
         if let Some(state) = self.table_state.as_mut()
             && let Some(cell) = state.current_cell.take()
-                && let Some(row) = state.current_row.as_mut() {
-                    row.cells.push(cell);
-                }
+            && let Some(row) = state.current_row.as_mut()
+        {
+            row.cells.push(cell);
+        }
     }
 
     fn render_table_text(&mut self, text: &str) {
         if let Some(state) = self.table_state.as_mut()
-            && let Some(cell) = state.current_cell.as_mut() {
-                cell.text.push_str(text);
-            }
+            && let Some(cell) = state.current_cell.as_mut()
+        {
+            cell.text.push_str(text);
+        }
     }
 
     fn finish_table(&mut self) -> Result<(), String> {
@@ -1834,8 +1864,7 @@ impl<T: TextMeasure> Renderer<T> {
             for (idx, cell) in row.cells.iter().enumerate() {
                 let col_width = column_widths.get(idx).copied().unwrap_or(0.0);
                 let content_width = (col_width - cell_padding_x * 2.0).max(1.0);
-                let lines =
-                    self.wrap_table_text(cell.text.trim(), content_width, row.is_header);
+                let lines = self.wrap_table_text(cell.text.trim(), content_width, row.is_header);
                 max_lines = max_lines.max(lines.len());
                 cell_lines.push(lines);
             }
@@ -1960,9 +1989,9 @@ impl<T: TextMeasure> Renderer<T> {
         let mut line_w = 0.0f32;
 
         for word in text.split_whitespace() {
-            let (word_w, _) =
-                self.measure
-                    .measure_text(word, font_size, false, bold, false, None);
+            let (word_w, _) = self
+                .measure
+                .measure_text(word, font_size, false, bold, false, None);
             let separator_w = if line.is_empty() { 0.0 } else { space_w };
 
             if line_w + separator_w + word_w > max_width && !line.is_empty() {
@@ -2297,7 +2326,10 @@ impl<T: TextMeasure> Renderer<T> {
         // Security: Disallow absolute paths for local images.
         // All local images must be resolved relative to the base_path.
         if src_path.is_absolute() {
-            eprintln!("Warning: absolute image paths are disallowed for security: {}", src);
+            eprintln!(
+                "Warning: absolute image paths are disallowed for security: {}",
+                src
+            );
             return None;
         }
 
@@ -2318,7 +2350,9 @@ impl<T: TextMeasure> Renderer<T> {
                     std::path::Component::ParentDir => {
                         normalized.pop();
                     }
-                    std::path::Component::RootDir => normalized.push(std::path::MAIN_SEPARATOR.to_string()),
+                    std::path::Component::RootDir => {
+                        normalized.push(std::path::MAIN_SEPARATOR.to_string())
+                    }
                     std::path::Component::Prefix(p) => normalized.push(p.as_os_str()),
                 }
             }
@@ -2332,7 +2366,9 @@ impl<T: TextMeasure> Renderer<T> {
                     std::path::Component::ParentDir => {
                         normalized_base.pop();
                     }
-                    std::path::Component::RootDir => normalized_base.push(std::path::MAIN_SEPARATOR.to_string()),
+                    std::path::Component::RootDir => {
+                        normalized_base.push(std::path::MAIN_SEPARATOR.to_string())
+                    }
                     std::path::Component::Prefix(p) => normalized_base.push(p.as_os_str()),
                 }
             }
@@ -2356,10 +2392,11 @@ impl<T: TextMeasure> Renderer<T> {
         if self.at_line_start {
             // Move from list block top to first list-item baseline.
             if let Some(state) = self.list_stack.last_mut()
-                && state.needs_ascent {
-                    self.cursor_y += self.theme.font_size_base * 0.8;
-                    state.needs_ascent = false;
-                }
+                && state.needs_ascent
+            {
+                self.cursor_y += self.theme.font_size_base * 0.8;
+                state.needs_ascent = false;
+            }
         } else {
             self.new_line();
         }
@@ -2902,7 +2939,10 @@ classDiagram
         let texts = renderer.measure.texts.borrow();
         let m_m_count = texts.iter().filter(|t| t.as_str() == "m m").count();
         let mm_count = texts.iter().filter(|t| t.as_str() == "mm").count();
-        assert_eq!(m_m_count, 1, "'m m' inference should run once, not per space");
+        assert_eq!(
+            m_m_count, 1,
+            "'m m' inference should run once, not per space"
+        );
         assert_eq!(mm_count, 1, "'mm' inference should run once, not per space");
     }
 
@@ -2991,7 +3031,8 @@ flowchart LR
         let measure = MockMeasure;
         // Using a real directory that should exist in the sandbox
         let base_path = std::env::current_dir().unwrap().join("src");
-        let renderer = Renderer::new_with_base_path(theme, measure, 800.0, Some(base_path.clone())).unwrap();
+        let renderer =
+            Renderer::new_with_base_path(theme, measure, 800.0, Some(base_path.clone())).unwrap();
 
         // Try to traverse to Cargo.toml which is one level up from src/
         let traversal_path = "../Cargo.toml";
@@ -3012,9 +3053,14 @@ flowchart LR
         let theme = Theme::default();
         let measure = MockMeasure;
         let base_path = std::env::current_dir().unwrap().join("src");
-        let renderer = Renderer::new_with_base_path(theme, measure, 800.0, Some(base_path)).unwrap();
+        let renderer =
+            Renderer::new_with_base_path(theme, measure, 800.0, Some(base_path)).unwrap();
 
-        let abs_path = if cfg!(windows) { "C:\\Windows\\System32\\drivers\\etc\\hosts" } else { "/etc/passwd" };
+        let abs_path = if cfg!(windows) {
+            "C:\\Windows\\System32\\drivers\\etc\\hosts"
+        } else {
+            "/etc/passwd"
+        };
         let resolved = renderer.resolve_image_path(abs_path);
 
         // Absolute paths should be blocked
@@ -3047,8 +3093,8 @@ flowchart LR
         // Expected: All gaps between title→definition and definition→next_title
         // should be consistent (within tolerance).
         let theme = Theme::default();
-        let measure = crate::fonts::CosmicTextMeasure::new()
-            .expect("Failed to initialize font system");
+        let measure =
+            crate::fonts::CosmicTextMeasure::new().expect("Failed to initialize font system");
         let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
 
         // Use unique identifiers to distinguish title from definition text
@@ -3078,16 +3124,16 @@ GammaThree
         }
 
         // Title text is bold, definition text is not
-        let first_title_y = extract_y_for_text(&svg, "AlphaOne")
-            .expect("Should find 'AlphaOne' in SVG");
-        let first_def_y = extract_y_for_text(&svg, "AlphaDef")
-            .expect("Should find 'AlphaDef' in SVG");
-        let second_title_y = extract_y_for_text(&svg, "BetaTwo")
-            .expect("Should find 'BetaTwo' in SVG");
-        let second_def_y = extract_y_for_text(&svg, "BetaDef")
-            .expect("Should find 'BetaDef' in SVG");
-        let third_title_y = extract_y_for_text(&svg, "GammaThree")
-            .expect("Should find 'GammaThree' in SVG");
+        let first_title_y =
+            extract_y_for_text(&svg, "AlphaOne").expect("Should find 'AlphaOne' in SVG");
+        let first_def_y =
+            extract_y_for_text(&svg, "AlphaDef").expect("Should find 'AlphaDef' in SVG");
+        let second_title_y =
+            extract_y_for_text(&svg, "BetaTwo").expect("Should find 'BetaTwo' in SVG");
+        let second_def_y =
+            extract_y_for_text(&svg, "BetaDef").expect("Should find 'BetaDef' in SVG");
+        let third_title_y =
+            extract_y_for_text(&svg, "GammaThree").expect("Should find 'GammaThree' in SVG");
 
         // Calculate gaps
         let gap_title_to_def = first_def_y - first_title_y;
@@ -3152,9 +3198,10 @@ GammaThree
                 let abs_pos = search_start + pos;
                 let y_start = abs_pos + pattern.len();
                 if let Some(end_pos) = svg[y_start..].find('"')
-                    && let Ok(y) = svg[y_start..y_start + end_pos].parse::<f32>() {
-                        positions.push(y);
-                    }
+                    && let Ok(y) = svg[y_start..y_start + end_pos].parse::<f32>()
+                {
+                    positions.push(y);
+                }
                 search_start = y_start;
             }
             positions
@@ -3162,7 +3209,11 @@ GammaThree
 
         let y_positions = extract_y_positions(&svg);
         // We should have at least 3 text elements (one for each paragraph)
-        assert!(y_positions.len() >= 3, "Should have at least 3 text elements, found {}", y_positions.len());
+        assert!(
+            y_positions.len() >= 3,
+            "Should have at least 3 text elements, found {}",
+            y_positions.len()
+        );
 
         // Sort positions to get correct order
         let mut sorted: Vec<f32> = y_positions.to_vec();
@@ -3174,9 +3225,10 @@ GammaThree
         let min_expected_gap = font_size * 1.4; // line_height with safety margin
 
         for i in 1..sorted.len().min(5) {
-            let gap = sorted[i] - sorted[i-1];
+            let gap = sorted[i] - sorted[i - 1];
             // We expect reasonable gaps (some might be in same line, so only check larger gaps)
-            if gap > font_size * 0.5 {  // Only check if it's potentially a line break
+            if gap > font_size * 0.5 {
+                // Only check if it's potentially a line break
                 assert!(
                     gap >= min_expected_gap * 0.8, // Allow some tolerance
                     "Line spacing gap ({gap:.2}) should be at least {min:.2} (80% tolerance)",
@@ -3517,11 +3569,23 @@ GammaThree
         let markdown = "# Title\n\n![Alt description](nonexistent-image-12345.png)\n\nMore text";
         let result = renderer.render(markdown);
 
-        assert!(result.is_ok(), "Missing image should not cause render failure");
+        assert!(
+            result.is_ok(),
+            "Missing image should not cause render failure"
+        );
         let svg = result.unwrap();
-        assert!(svg.contains("Alt"), "SVG should contain alt text as fallback");
-        assert!(svg.contains("Title"), "SVG should still contain other content");
-        assert!(svg.contains("More"), "SVG should contain content after the image");
+        assert!(
+            svg.contains("Alt"),
+            "SVG should contain alt text as fallback"
+        );
+        assert!(
+            svg.contains("Title"),
+            "SVG should still contain other content"
+        );
+        assert!(
+            svg.contains("More"),
+            "SVG should contain content after the image"
+        );
     }
 
     #[test]
@@ -3624,11 +3688,19 @@ GammaThree
 
         // Should have 3 checkboxes (rects) - 1 checked + 2 unchecked
         let rect_count = svg.matches("<rect").count();
-        assert!(rect_count >= 3, "Should have at least 3 checkbox rects, found {}", rect_count);
+        assert!(
+            rect_count >= 3,
+            "Should have at least 3 checkbox rects, found {}",
+            rect_count
+        );
 
         // Should have exactly 1 polyline (checkmark for checked item)
         let polyline_count = svg.matches("<polyline").count();
-        assert!(polyline_count == 1, "Should have exactly 1 checkmark, found {}", polyline_count);
+        assert!(
+            polyline_count == 1,
+            "Should have exactly 1 checkmark, found {}",
+            polyline_count
+        );
     }
 
     #[test]
@@ -3643,8 +3715,14 @@ GammaThree
         let svg = result.unwrap();
 
         // Should contain both texts
-        assert!(svg.contains("deleted"), "SVG should contain strikethrough text");
-        assert!(svg.contains("remaining"), "SVG should contain remaining text");
+        assert!(
+            svg.contains("deleted"),
+            "SVG should contain strikethrough text"
+        );
+        assert!(
+            svg.contains("remaining"),
+            "SVG should contain remaining text"
+        );
         // Should have a line element for strikethrough decoration
         assert!(
             svg.contains("<line"),
@@ -3663,8 +3741,14 @@ GammaThree
         assert!(result.is_ok());
         let svg = result.unwrap();
 
-        assert!(svg.contains("quick"), "Strikethrough text should be rendered");
-        assert!(svg.contains("brown"), "Text after strikethrough should be rendered");
+        assert!(
+            svg.contains("quick"),
+            "Strikethrough text should be rendered"
+        );
+        assert!(
+            svg.contains("brown"),
+            "Text after strikethrough should be rendered"
+        );
     }
 
     #[test]
@@ -3679,7 +3763,10 @@ GammaThree
         let svg = result.unwrap();
 
         // Should contain the footnote marker
-        assert!(svg.contains("footnote"), "Footnote reference should be rendered");
+        assert!(
+            svg.contains("footnote"),
+            "Footnote reference should be rendered"
+        );
     }
 
     #[test]
@@ -3835,8 +3922,14 @@ Cherry
         let (x_fs, x_y, _) = text_metrics(&svg, "x").expect("base text");
         let (two_fs, two_y, _) = text_metrics(&svg, "2").expect("superscript");
 
-        assert!(two_fs < x_fs, "superscript should be smaller: {two_fs} vs {x_fs}");
-        assert!(two_y < x_y, "superscript should be raised: {two_y} vs {x_y}");
+        assert!(
+            two_fs < x_fs,
+            "superscript should be smaller: {two_fs} vs {x_fs}"
+        );
+        assert!(
+            two_y < x_y,
+            "superscript should be raised: {two_y} vs {x_y}"
+        );
     }
 
     #[test]
@@ -3849,7 +3942,10 @@ Cherry
         let (h_fs, h_y, _) = text_metrics(&svg, "H").expect("base text");
         let (two_fs, two_y, _) = text_metrics(&svg, "2").expect("subscript");
 
-        assert!(two_fs < h_fs, "subscript should be smaller: {two_fs} vs {h_fs}");
+        assert!(
+            two_fs < h_fs,
+            "subscript should be smaller: {two_fs} vs {h_fs}"
+        );
         assert!(two_y > h_y, "subscript should be lowered: {two_y} vs {h_y}");
     }
 
@@ -3860,7 +3956,9 @@ Cherry
         let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
 
         let svg = renderer
-            .render("A <span style=\"color: #ff0000\">red</span> and <font color=\"blue\">blue</font>")
+            .render(
+                "A <span style=\"color: #ff0000\">red</span> and <font color=\"blue\">blue</font>",
+            )
             .unwrap();
 
         let (_, _, red_fill) = text_metrics(&svg, "red").expect("span text");
@@ -3879,9 +3977,7 @@ Cherry
         let measure = MockMeasure;
         let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
 
-        let svg = renderer
-            .render("<mark>hi</mark> and <u>lo</u>")
-            .unwrap();
+        let svg = renderer.render("<mark>hi</mark> and <u>lo</u>").unwrap();
 
         // <mark> draws a yellow highlight rect behind the text.
         assert!(
@@ -3889,12 +3985,12 @@ Cherry
             "<mark> should add a yellow highlight rect"
         );
         // <u> draws a line decoration.
-        assert!(
-            svg.contains("<line"),
-            "<u> should add an underline line"
-        );
+        assert!(svg.contains("<line"), "<u> should add an underline line");
         assert!(svg.contains(">hi</text>"), "mark content should render");
-        assert!(svg.contains(">lo</text>"), "underline content should render");
+        assert!(
+            svg.contains(">lo</text>"),
+            "underline content should render"
+        );
     }
 
     /// Parse `x`/`y`/`width` out of every `<rect ... />` in the SVG.
@@ -3958,10 +4054,17 @@ Cherry
         // MockMeasure width: len * 16 * 0.6 → "a" = 9.6, space = 9.6, "b" = 9.6.
         let svg = renderer.render("<mark>a b</mark>").unwrap();
         let rects = svg_rects(&svg);
-        assert_eq!(rects.len(), 3, "expected one rect per token, including the space");
+        assert_eq!(
+            rects.len(),
+            3,
+            "expected one rect per token, including the space"
+        );
 
         let same_y = rects[0].1;
-        assert!(rects.iter().all(|r| (r.1 - same_y).abs() < 0.01), "same baseline");
+        assert!(
+            rects.iter().all(|r| (r.1 - same_y).abs() < 0.01),
+            "same baseline"
+        );
         // No gap between consecutive rects: next.x == prev.x + prev.width.
         for pair in rects.windows(2) {
             let gap = pair[1].0 - (pair[0].0 + pair[0].2);
@@ -4043,7 +4146,9 @@ Cherry
         let measure = MockMeasure;
         let mut renderer = Renderer::new(theme, measure, 800.0).unwrap();
 
-        let svg = renderer.render("a<sup style=\"color: green\">n</sup>b").unwrap();
+        let svg = renderer
+            .render("a<sup style=\"color: green\">n</sup>b")
+            .unwrap();
         let (a_fs, a_y, _) = text_metrics(&svg, "a").expect("base text");
         let (n_fs, n_y, n_fill) = text_metrics(&svg, "n").expect("superscript");
 
@@ -4169,7 +4274,10 @@ Term
         // Verify all features are present - use simpler strings to find
         assert!(svg.contains("Heading"), "Heading should render");
         assert!(svg.contains("Done"), "Task list checked item should render");
-        assert!(svg.contains("Pending"), "Task list unchecked item should render");
+        assert!(
+            svg.contains("Pending"),
+            "Task list unchecked item should render"
+        );
         assert!(svg.contains("example.com"), "Autolink should render");
         assert!(svg.contains("deleted"), "Strikethrough should render");
         assert!(svg.contains("note"), "Footnote reference should render");
