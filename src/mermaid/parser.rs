@@ -64,9 +64,12 @@ pub fn parse_mermaid(input: &str) -> Result<MermaidDiagram, String> {
 // ============================================
 
 fn parse_flowchart(input: &str) -> Result<Flowchart, String> {
-    let mut lines = input.lines().peekable();
+    let mut lines = input
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("%%"));
 
-    // Parse direction from first line
+    // Consume the same non-comment header used for diagram type detection.
     let first_line = lines.next().unwrap_or("");
     let direction = parse_flow_direction(first_line);
 
@@ -78,19 +81,15 @@ fn parse_flowchart(input: &str) -> Result<Flowchart, String> {
         std::collections::HashMap::new();
 
     for line in lines {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        // Skip comments
-        if line.starts_with("%%") {
-            continue;
-        }
-
         // Subgraph start
         if line.starts_with("subgraph ") {
             let raw_title = line.strip_prefix("subgraph ").unwrap_or("").trim();
+            if let Some(parent) = &current_subgraph {
+                return Err(format!(
+                    "Nested subgraphs are not supported: subgraph '{}' is inside '{}'. Use separate, non-nested subgraphs.",
+                    raw_title, parent.title
+                ));
+            }
             let title = if let Some(bracket_pos) = raw_title.find("[\"") {
                 let after = &raw_title[bracket_pos + 2..];
                 if let Some(end) = after.find("\"]") {
@@ -1550,7 +1549,7 @@ mod tests {
 
     #[test]
     fn test_parse_unknown_diagram_type_errors() {
-        let result = parse_mermaid("pie title Pets\n  \"Dogs\" : 50");
+        let result = parse_mermaid("%% comment\n\npie title Pets\n  \"Dogs\" : 50");
         let err = result.expect_err("unknown diagram type should error");
         assert!(
             err.contains("Unsupported Mermaid diagram type 'pie'"),
@@ -1584,6 +1583,73 @@ mod tests {
         } else {
             panic!("Expected er diagram");
         }
+    }
+
+    #[test]
+    fn test_parse_flowchart_direction_with_leading_comments() {
+        for header in ["flowchart", "graph"] {
+            for (direction, expected) in [
+                ("LR", FlowDirection::LeftRight),
+                ("RL", FlowDirection::RightLeft),
+                ("BT", FlowDirection::BottomUp),
+                ("TB", FlowDirection::TopDown),
+                ("TD", FlowDirection::TopDown),
+            ] {
+                for prefix in [
+                    "",
+                    "%% comment\n\n",
+                    "%%{init: {'theme': 'base'}}\n%% TB\n\n",
+                ] {
+                    let input = format!("{prefix}{header} {direction}\n    A[Start] --> B[Finish]");
+                    let MermaidDiagram::Flowchart(fc) = parse_mermaid(&input).unwrap() else {
+                        panic!("Expected flowchart");
+                    };
+                    assert_eq!(fc.direction, expected, "input: {input}");
+                    assert_eq!(
+                        fc.nodes
+                            .iter()
+                            .map(|node| node.id.as_str())
+                            .collect::<Vec<_>>(),
+                        ["A", "B"],
+                        "header must not become a node: {input}"
+                    );
+                    assert_eq!(fc.edges.len(), 1);
+                    assert_eq!(fc.edges[0].from, "A");
+                    assert_eq!(fc.edges[0].to, "B");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_flowchart_rejects_nested_subgraphs() {
+        let input = "flowchart LR\nsubgraph Outer\nA[Before]\nsubgraph Inner\nB[Inside]\nend\nC[After]\nend";
+        let error =
+            parse_mermaid(input).expect_err("nested grouping must not silently lose membership");
+        assert!(error.contains("Flowchart parse error:"), "{error}");
+        assert!(
+            error.contains("Nested subgraphs are not supported"),
+            "{error}"
+        );
+        assert!(error.contains("Inner"), "{error}");
+        assert!(error.contains("Outer"), "{error}");
+    }
+
+    #[test]
+    fn test_parse_flowchart_flat_subgraphs_preserve_membership() {
+        let input = "%% comment\nflowchart LR\nsubgraph first[\"First group\"]\nA[Start]\nA --> B[Middle]\nend\nsubgraph Second\nC[Finish]\nend\nB --> C";
+        let MermaidDiagram::Flowchart(fc) = parse_mermaid(input).unwrap() else {
+            panic!("Expected flowchart");
+        };
+        assert_eq!(fc.direction, FlowDirection::LeftRight);
+        assert_eq!(fc.nodes.len(), 3);
+        assert_eq!(fc.edges.len(), 2);
+        assert_eq!(fc.subgraphs.len(), 2);
+        assert_eq!(fc.subgraphs[0].title, "First group");
+        assert_eq!(fc.subgraphs[0].nodes, ["A", "B"]);
+        assert_eq!(fc.subgraphs[1].title, "Second");
+        assert_eq!(fc.subgraphs[1].nodes, ["C"]);
+        assert_ne!(fc.subgraphs[0].id, fc.subgraphs[1].id);
     }
 
     #[test]
