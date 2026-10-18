@@ -76,7 +76,7 @@ def import_json(path):
         try:
             with tempfile.NamedTemporaryFile(mode="w", newline="", encoding="utf-8", dir=CSV.parent, delete=False) as stream:
                 temporary = stream.name
-                writer = csv.DictWriter(stream, fieldnames=FIELDS)
+                writer = csv.DictWriter(stream, fieldnames=FIELDS, lineterminator="\n")
                 writer.writeheader()
                 writer.writerows(current.values())
                 stream.flush()
