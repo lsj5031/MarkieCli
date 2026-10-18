@@ -26,20 +26,21 @@ pub fn parse_mermaid(input: &str) -> Result<MermaidDiagram, String> {
         .map(str::trim)
         .unwrap_or("");
 
-    if first_line.starts_with("flowchart") || first_line.starts_with("graph") {
+    let family = first_line.split_whitespace().next().unwrap_or("");
+    if matches!(family, "flowchart" | "graph") {
         let diagram =
             parse_flowchart(input).map_err(|e| format!("Flowchart parse error: {}", e))?;
         Ok(MermaidDiagram::Flowchart(diagram))
-    } else if first_line.starts_with("sequenceDiagram") || first_line.starts_with("sequence") {
+    } else if matches!(family, "sequenceDiagram" | "sequence") {
         let diagram = parse_sequence(input).map_err(|e| format!("Sequence parse error: {}", e))?;
         Ok(MermaidDiagram::Sequence(diagram))
-    } else if first_line.starts_with("classDiagram") || first_line.starts_with("class") {
+    } else if matches!(family, "classDiagram" | "class") {
         let diagram = parse_class(input).map_err(|e| format!("Class parse error: {}", e))?;
         Ok(MermaidDiagram::ClassDiagram(diagram))
-    } else if first_line.starts_with("stateDiagram") || first_line.starts_with("state") {
+    } else if matches!(family, "stateDiagram" | "stateDiagram-v2" | "state") {
         let diagram = parse_state(input).map_err(|e| format!("State parse error: {}", e))?;
         Ok(MermaidDiagram::StateDiagram(diagram))
-    } else if first_line.starts_with("erDiagram") || first_line.starts_with("er") {
+    } else if matches!(family, "erDiagram" | "er") {
         let diagram = parse_er(input).map_err(|e| format!("ER parse error: {}", e))?;
         Ok(MermaidDiagram::ErDiagram(diagram))
     } else if first_line.is_empty() {
@@ -117,6 +118,60 @@ fn parse_flowchart(input: &str) -> Result<Flowchart, String> {
             continue;
         }
 
+        if ["style ", "classDef ", "class ", "linkStyle ", "direction "]
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+        {
+            return Err(format!("Flowchart directives are not supported: {line}"));
+        }
+        // Inspect only syntax outside labels/shapes: punctuation inside a label
+        // is user text, not a shorthand operator or statement separator.
+        let mut syntax = String::new();
+        let mut depth = 0_usize;
+        let mut quoted = false;
+        let mut edge_label = false;
+        for c in line.chars() {
+            if c == '"' {
+                quoted = !quoted;
+                continue;
+            }
+            if quoted {
+                continue;
+            }
+            if c == '|' && depth == 0 {
+                edge_label = !edge_label;
+                continue;
+            }
+            if edge_label {
+                continue;
+            }
+            match c {
+                '[' | '(' | '{' => depth += 1,
+                ']' | ')' | '}' if depth > 0 => depth -= 1,
+                _ if depth == 0 => syntax.push(c),
+                _ => {}
+            }
+        }
+        if syntax.contains([';', '&', ']']) {
+            return Err(format!(
+                "Flowchart shorthand, semicolons and asymmetric shapes are not supported; use one explicit node or edge per line: {line}"
+            ));
+        }
+        let operators = syntax
+            .split(|c: char| !"-=.<>".contains(c))
+            .filter(|part| {
+                part.contains("--")
+                    || part.contains("->")
+                    || part.contains("==")
+                    || part.contains("-.")
+            })
+            .count();
+        if operators > 1 {
+            return Err(format!(
+                "Chained flowchart edges are not supported; use one edge per line: {line}"
+            ));
+        }
+
         // Try to parse as edge or node definition
         if let Some(parsed) = parse_edge_line(line) {
             // Register nodes if not already present (with full info including label and shape)
@@ -157,11 +212,16 @@ fn parse_flowchart(input: &str) -> Result<Flowchart, String> {
                 min_length: 1,
             });
         } else if let Some((id, label, shape)) = parse_node_definition(line) {
-            nodes.push(FlowchartNode {
-                id: id.clone(),
-                label: label.clone(),
-                shape,
-            });
+            if let Some(node) = nodes.iter_mut().find(|node| node.id == id) {
+                node.label = label.clone();
+                node.shape = shape;
+            } else {
+                nodes.push(FlowchartNode {
+                    id: id.clone(),
+                    label: label.clone(),
+                    shape,
+                });
+            }
             node_labels.insert(id.clone(), label);
 
             // Add to current subgraph if in one
@@ -506,6 +566,29 @@ fn parse_sequence(input: &str) -> Result<SequenceDiagram, String> {
     }
 
     let mut index = 0;
+    for line in &lines {
+        if line.starts_with("actor ") || line.starts_with("and ") {
+            return Err(format!(
+                "Sequence actors and and-branches are not supported: {line}"
+            ));
+        }
+        if let Some(message) = parse_sequence_message(line) {
+            for endpoint in [&message.from, &message.to] {
+                if !participants.iter().any(|p| &p.id == endpoint) {
+                    return Err(format!(
+                        "Implicit participants and inline activations are not supported; declare participant {endpoint} and use explicit activate/deactivate statements"
+                    ));
+                }
+            }
+        }
+        if let Some(SequenceElement::Note { participant, .. }) = parse_sequence_note(line)
+            && !participants.iter().any(|p| p.id == participant)
+        {
+            return Err(format!(
+                "Multi-participant or undeclared-participant notes are not supported: {line}"
+            ));
+        }
+    }
     let elements = parse_sequence_elements(&lines, &mut index, true);
 
     Ok(SequenceDiagram {
@@ -663,10 +746,12 @@ fn parse_sequence_message(line: &str) -> Option<SequenceMessage> {
         ("->>", MessageType::Solid, MessageKind::Sync),
         (">>+", MessageType::Solid, MessageKind::Async),
         (">>-", MessageType::Solid, MessageKind::Async),
-        ("-->", MessageType::Dotted, MessageKind::Sync),
-        ("->", MessageType::Solid, MessageKind::Sync),
-        ("-x", MessageType::Solid, MessageKind::Sync),
-        ("-)", MessageType::Solid, MessageKind::Sync),
+        ("-->", MessageType::Dotted, MessageKind::Plain),
+        ("->", MessageType::Solid, MessageKind::Plain),
+        ("--x", MessageType::Dotted, MessageKind::Cross),
+        ("--)", MessageType::Dotted, MessageKind::Async),
+        ("-x", MessageType::Solid, MessageKind::Cross),
+        ("-)", MessageType::Solid, MessageKind::Async),
     ];
 
     for (pattern, msg_type, kind) in &patterns {
@@ -742,20 +827,20 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
             if name.ends_with('{') {
                 current_class = Some(ClassDefinition {
                     name: name.trim_end_matches('{').trim().to_string(),
+                    is_abstract: stereotype.as_deref() == Some("abstract"),
+                    is_interface: stereotype.as_deref() == Some("interface"),
                     stereotype,
                     attributes: Vec::new(),
                     methods: Vec::new(),
-                    is_abstract: false,
-                    is_interface: false,
                 });
             } else {
                 classes.push(ClassDefinition {
                     name,
+                    is_abstract: stereotype.as_deref() == Some("abstract"),
+                    is_interface: stereotype.as_deref() == Some("interface"),
                     stereotype,
                     attributes: Vec::new(),
                     methods: Vec::new(),
-                    is_abstract: false,
-                    is_interface: false,
                 });
             }
             continue;
@@ -792,6 +877,19 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
                 };
 
                 let member = &line[1..].trim();
+                if member.ends_with(['$', '*']) {
+                    return Err(format!(
+                        "Static and abstract class member suffixes are not supported at line {line_num}: {line}"
+                    ));
+                }
+                if let Some((_, suffix)) = member.rsplit_once(')')
+                    && !suffix.trim().is_empty()
+                    && !suffix.trim().starts_with(':')
+                {
+                    return Err(format!(
+                        "Trailing class return types are not supported; use ': Type' at line {line_num}: {line}"
+                    ));
+                }
 
                 // Check if method (has parentheses)
                 if member.contains('(') {
@@ -806,8 +904,29 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
         }
 
         // Relation
+        if line.contains("<|..")
+            || line
+                .split(':')
+                .next()
+                .is_some_and(|endpoints| endpoints.contains('"'))
+        {
+            return Err(format!(
+                "Reverse realization and quoted class multiplicities are not supported at line {line_num}: {line}"
+            ));
+        }
         if let Some(rel) = parse_class_relation(line) {
             relations.push(rel);
+        }
+    }
+
+    for relation in &relations {
+        if !classes.iter().any(|c| c.name == relation.from)
+            || !classes.iter().any(|c| c.name == relation.to)
+        {
+            return Err(format!(
+                "Implicit classes are not supported; declare class {} and class {} before rendering their relation",
+                relation.from, relation.to
+            ));
         }
     }
 
@@ -907,6 +1026,7 @@ fn parse_class_relation(line: &str) -> Option<ClassRelation> {
                 from,
                 to,
                 relation_type: rel_type.clone(),
+                directed: !matches!(*pattern, "--" | ".."),
                 label,
                 multiplicity_from: None,
                 multiplicity_to: None,
@@ -931,16 +1051,6 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
     let mut transitions: Vec<StateTransition> = Vec::new();
     let mut composite_stack: Vec<String> = Vec::new();
 
-    // Add start state
-    states.push(State {
-        id: START_STATE_ID.to_string(),
-        label: "[*]".to_string(),
-        is_start: true,
-        is_end: false,
-        is_composite: false,
-        children: Vec::new(),
-    });
-
     for (line_idx, line) in (&mut lines).enumerate() {
         let line_num = line_idx + 2; // +2: skip first line + 1-indexed
         let line = line.trim();
@@ -953,8 +1063,8 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
             continue;
         }
 
-        if let Some((state_id, text)) = parse_state_note(line) {
-            add_state_note(&mut states, &state_id, text);
+        if let Some((state_id, text, position)) = parse_state_note(line) {
+            add_state_note(&mut states, &state_id, text, position);
             continue;
         }
 
@@ -995,20 +1105,21 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
                     (rest.trim().to_string(), None)
                 };
 
+                let scope = composite_stack.last().map(String::as_str).unwrap_or("");
                 let normalized_from = if from == "[*]" {
-                    START_STATE_ID.to_string()
+                    format!("{START_STATE_ID}{scope}")
                 } else {
                     from.clone()
                 };
                 let normalized_to = if to == "[*]" {
-                    END_STATE_ID.to_string()
+                    format!("{END_STATE_ID}{scope}")
                 } else {
                     to.clone()
                 };
 
                 // Add end state if needed
                 if to == "[*]" {
-                    ensure_state(&mut states, END_STATE_ID, "[*]", false, true, false);
+                    ensure_state(&mut states, &normalized_to, "[*]", false, true, false);
                 }
 
                 // Add states from transition if not already present
@@ -1022,8 +1133,14 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
                         false,
                     ))
                 } else {
-                    ensure_state(&mut states, START_STATE_ID, "[*]", true, false, false);
-                    None
+                    Some(ensure_state(
+                        &mut states,
+                        &normalized_from,
+                        "[*]",
+                        true,
+                        false,
+                        false,
+                    ))
                 };
                 let to_state = if to != "[*]" {
                     Some(ensure_state(
@@ -1035,7 +1152,14 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
                         false,
                     ))
                 } else {
-                    None
+                    Some(ensure_state(
+                        &mut states,
+                        &normalized_to,
+                        "[*]",
+                        false,
+                        true,
+                        false,
+                    ))
                 };
 
                 let transition = StateTransition {
@@ -1061,32 +1185,48 @@ fn parse_state(input: &str) -> Result<StateDiagram, String> {
         }
     }
 
-    // Sync composite state data into parent children entries.
-    // During parsing, children are added as clones before the composite's own children
-    // are parsed, so the child-of-parent copy may be stale.  Walk every parent and
-    // update its child entries from the authoritative top-level state.
-    let state_index: HashMap<String, usize> = states
+    // Resolve child references only after every definition and note is complete.
+    let state_index: HashMap<String, State> = states
         .iter()
-        .enumerate()
-        .map(|(i, s)| (s.id.clone(), i))
+        .map(|state| (state.id.clone(), state.clone()))
         .collect();
-    // Collect (parent_idx, child_pos, source_idx) tuples first to avoid borrow issues.
-    let mut patches: Vec<(usize, usize, usize)> = Vec::new();
-    for (pi, parent) in states.iter().enumerate() {
-        for (ci, child_elem) in parent.children.iter().enumerate() {
-            if let StateElement::State(child_state) = child_elem
-                && let Some(&si) = state_index.get(&child_state.id)
-                && si != pi
-                && states[si].is_composite
-                && !child_state.is_composite
-            {
-                patches.push((pi, ci, si));
+    fn resolve(
+        state: &mut State,
+        index: &HashMap<String, State>,
+        ancestors: &mut Vec<String>,
+    ) -> Result<(), String> {
+        if ancestors.contains(&state.id) {
+            return Err(format!(
+                "Recursive state containment is not supported: {}",
+                state.id
+            ));
+        }
+        ancestors.push(state.id.clone());
+        for child in &mut state.children {
+            if let StateElement::State(child) = child {
+                *child = index[&child.id].clone();
+                resolve(child, index, ancestors)?;
             }
         }
+        ancestors.pop();
+        Ok(())
     }
-    for (pi, ci, si) in patches {
-        let fresh = states[si].clone();
-        states[pi].children[ci] = StateElement::State(fresh);
+    for state in &mut states {
+        resolve(state, &state_index, &mut Vec::new())?;
+    }
+    let child_ids: std::collections::HashSet<&str> = states
+        .iter()
+        .flat_map(|s| &s.children)
+        .filter_map(|e| match e {
+            StateElement::State(s) => Some(s.id.as_str()),
+            _ => None,
+        })
+        .collect();
+    if transitions
+        .iter()
+        .any(|t| child_ids.contains(t.from.as_str()) || child_ids.contains(t.to.as_str()))
+    {
+        return Err("Cross-boundary state transitions are not supported; connect the composite state instead of its child".to_string());
     }
 
     Ok(StateDiagram {
@@ -1137,7 +1277,7 @@ fn parse_state_definition(rest: &str) -> Result<(String, String, bool), String> 
     Ok((value.to_string(), value.to_string(), is_composite))
 }
 
-fn parse_state_note(line: &str) -> Option<(String, String)> {
+fn parse_state_note(line: &str) -> Option<(String, String, String)> {
     let lower = line.to_ascii_lowercase();
     let prefixes = ["note right of ", "note left of ", "note over "];
 
@@ -1150,7 +1290,11 @@ fn parse_state_note(line: &str) -> Option<(String, String)> {
             if state_id.is_empty() {
                 return None;
             }
-            return Some((state_id.to_string(), text.to_string()));
+            return Some((
+                state_id.to_string(),
+                text.to_string(),
+                prefix[5..].trim().trim_end_matches(" of").to_string(),
+            ));
         }
     }
 
@@ -1166,7 +1310,7 @@ fn ensure_state(
     is_composite: bool,
 ) -> State {
     if let Some(state) = states.iter_mut().find(|state| state.id == id) {
-        if !label.is_empty() {
+        if !label.is_empty() && (label != id || state.label == id) {
             state.label = label.to_string();
         }
         state.is_start |= is_start;
@@ -1228,7 +1372,7 @@ fn add_state_child_transition(states: &mut [State], parent_id: &str, transition:
     }
 }
 
-fn add_state_note(states: &mut Vec<State>, state_id: &str, text: String) {
+fn add_state_note(states: &mut Vec<State>, state_id: &str, text: String, position: String) {
     let state = ensure_state(states, state_id, state_id, false, false, false);
     if let Some(target_state) = states.iter_mut().find(|s| s.id == state.id) {
         let has_note = target_state.children.iter().any(|element| {
@@ -1237,6 +1381,7 @@ fn add_state_note(states: &mut Vec<State>, state_id: &str, text: String) {
                 StateElement::Note {
                     state,
                     text: existing_text,
+                    ..
                 } if state == state_id && existing_text == &text
             )
         });
@@ -1244,33 +1389,7 @@ fn add_state_note(states: &mut Vec<State>, state_id: &str, text: String) {
             target_state.children.push(StateElement::Note {
                 state: state_id.to_string(),
                 text: text.clone(),
-            });
-        }
-    }
-
-    for parent in states.iter_mut() {
-        let contains_state = parent
-            .children
-            .iter()
-            .any(|element| matches!(element, StateElement::State(s) if s.id == state_id));
-        if !contains_state {
-            continue;
-        }
-
-        let has_note = parent.children.iter().any(|element| {
-            matches!(
-                element,
-                StateElement::Note {
-                    state,
-                    text: existing_text,
-                } if state == state_id && existing_text == &text
-            )
-        });
-
-        if !has_note {
-            parent.children.push(StateElement::Note {
-                state: state_id.to_string(),
-                text: text.clone(),
+                position: position.clone(),
             });
         }
     }
@@ -1403,6 +1522,30 @@ fn parse_er(input: &str) -> Result<ErDiagram, String> {
 
 fn parse_er_relationship(line: &str) -> Option<ErRelationship> {
     let patterns = [
+        (
+            "||--o|",
+            ErCardinality::ExactlyOne,
+            ErCardinality::ZeroOrOne,
+        ),
+        (
+            "||..o|",
+            ErCardinality::ExactlyOne,
+            ErCardinality::ZeroOrOne,
+        ),
+        ("|o--o|", ErCardinality::ZeroOrOne, ErCardinality::ZeroOrOne),
+        ("|o..o|", ErCardinality::ZeroOrOne, ErCardinality::ZeroOrOne),
+        (
+            "}o--o|",
+            ErCardinality::ZeroOrMore,
+            ErCardinality::ZeroOrOne,
+        ),
+        (
+            "}o..o|",
+            ErCardinality::ZeroOrMore,
+            ErCardinality::ZeroOrOne,
+        ),
+        ("}|--o|", ErCardinality::OneOrMore, ErCardinality::ZeroOrOne),
+        ("}|..o|", ErCardinality::OneOrMore, ErCardinality::ZeroOrOne),
         // Solid line patterns (--)
         (
             "||--||",
@@ -1535,6 +1678,7 @@ fn parse_er_relationship(line: &str) -> Option<ErRelationship> {
                 to,
                 from_cardinality: from_card.clone(),
                 to_cardinality: to_card.clone(),
+                dotted: pattern.contains(".."),
                 label,
             });
         }
@@ -2201,6 +2345,7 @@ stateDiagram
                     StateElement::Note {
                         state,
                         text,
+                        ..
                     } if state == "Child" && text == "child note"
                 )
             }));

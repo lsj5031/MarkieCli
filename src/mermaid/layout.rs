@@ -634,7 +634,7 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
             .map(|s| self.calculate_state_size(s))
             .collect();
 
-        let child_gap = 20.0;
+        let child_gap = 40.0;
         let inner_pad = 16.0;
         let route_lane = 40.0; // routing lanes on each side for transitions
         let header_h = self.font_size * 2.0 + 16.0;
@@ -682,6 +682,8 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
             return self.layout_grid(&nodes, &node_sizes, 40.0, 40.0, 180.0, 140.0);
         }
 
+        // Leave a visible relationship segment between the two cardinality glyphs.
+        self.node_spacing_x = self.node_spacing_x.max(96.0);
         self.layout_layered_graph(&nodes, &edges, &node_sizes, FlowDirection::LeftRight)
     }
 

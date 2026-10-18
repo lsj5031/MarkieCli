@@ -22,6 +22,29 @@ pub fn render_flowchart(
 
     let mut svg = String::new();
     let padding = 20.0;
+    let mut extents = vec![Rect::new(bbox.x, bbox.y, bbox.width, bbox.height)];
+    let group_bounds: Vec<Rect> = flowchart
+        .subgraphs
+        .iter()
+        .filter_map(|group| {
+            subgraph_bbox(group, &positions).map(|(x, y, w, h)| Rect::new(x, y, w, h))
+        })
+        .collect();
+    extents.extend(group_bounds.iter().copied());
+    let mut pair_totals = HashMap::new();
+    let pair_key = |a: &str, b: &str| {
+        if a <= b {
+            (a.to_owned(), b.to_owned())
+        } else {
+            (b.to_owned(), a.to_owned())
+        }
+    };
+    for edge in &flowchart.edges {
+        *pair_totals
+            .entry(pair_key(&edge.from, &edge.to))
+            .or_insert(0_usize) += 1;
+    }
+    let mut pair_seen = HashMap::new();
 
     let node_map: HashMap<&str, &super::types::FlowchartNode> =
         flowchart.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
@@ -44,6 +67,9 @@ pub fn render_flowchart(
                 .get(&(edge.from.clone(), edge.to.clone()))
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
+            let key = pair_key(&edge.from, &edge.to);
+            let route_index = *pair_seen.entry(key.clone()).or_insert(0);
+            pair_seen.insert(key.clone(), route_index + 1);
             svg.push_str(&render_edge(&mut RenderEdgeContext {
                 edge,
                 from_node: fn_,
@@ -54,6 +80,10 @@ pub fn render_flowchart(
                 direction: &flowchart.direction,
                 waypoints,
                 measure,
+                route_index,
+                route_total: pair_totals[&key],
+                extents: &mut extents,
+                group_bounds: &group_bounds,
             }));
         }
     }
@@ -76,8 +106,16 @@ pub fn render_flowchart(
         ));
     }
 
-    let total_width = bbox.right() + padding;
-    let total_height = bbox.bottom() + padding;
+    extents.extend(used_title_rects);
+    let min_x = extents.iter().map(|r| r.x).fold(0.0, f32::min);
+    let min_y = extents.iter().map(|r| r.y).fold(0.0, f32::min);
+    let shift_x = if min_x < 0.0 { padding - min_x } else { 0.0 };
+    let shift_y = if min_y < 0.0 { padding - min_y } else { 0.0 };
+    let total_width = extents.iter().map(|r| r.x + r.w).fold(0.0, f32::max) + shift_x + padding;
+    let total_height = extents.iter().map(|r| r.y + r.h).fold(0.0, f32::max) + shift_y + padding;
+    if shift_x > 0.0 || shift_y > 0.0 {
+        svg = format!(r#"<g transform="translate({shift_x:.2},{shift_y:.2})">{svg}</g>"#);
+    }
 
     Ok((svg, total_width, total_height))
 }
@@ -323,6 +361,10 @@ struct RenderEdgeContext<'a, T: TextMeasure> {
     direction: &'a FlowDirection,
     waypoints: &'a [(f32, f32)],
     measure: &'a mut T,
+    route_index: usize,
+    route_total: usize,
+    extents: &'a mut Vec<Rect>,
+    group_bounds: &'a [Rect],
 }
 
 fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
@@ -354,14 +396,14 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
     // Adjust loop direction based on the graph flow direction so the loop
     // doesn't overlap content in the primary flow axis.
     if edge.from == edge.to {
-        let loop_radius = 20.0;
+        let loop_radius = 40.0 + ctx.route_index as f32 * 28.0;
 
         let (exit_x, exit_y, enter_x, enter_y, cp1_x, cp1_y, cp2_x, cp2_y) = match direction {
             FlowDirection::LeftRight | FlowDirection::RightLeft => {
                 // Horizontal graph: loop upward
-                let exit_x = from_cx;
+                let exit_x = from_cx + from.width / 4.0;
                 let exit_y = from.y;
-                let enter_x = from_cx;
+                let enter_x = from_cx - from.width / 4.0;
                 let enter_y = from.y;
                 let cp1_x = exit_x + loop_radius;
                 let cp1_y = exit_y - loop_radius * 1.5;
@@ -372,16 +414,18 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
             // TopDown, BottomUp: loop to the right
             _ => {
                 let exit_x = from.x + from.width;
-                let exit_y = from_cy;
-                let enter_x = from_cx;
-                let enter_y = from.y;
+                let exit_y = from_cy - from.height / 4.0;
+                let enter_x = from.right();
+                let enter_y = from_cy + from.height / 4.0;
                 let cp1_x = exit_x + loop_radius;
-                let cp1_y = exit_y - loop_radius;
+                let cp1_y = exit_y;
                 let cp2_x = enter_x + loop_radius;
-                let cp2_y = enter_y - loop_radius;
+                let cp2_y = enter_y;
                 (exit_x, exit_y, enter_x, enter_y, cp1_x, cp1_y, cp2_x, cp2_y)
             }
         };
+        let (exit_x, exit_y) = clip_to_shape(from_node, from, exit_x, exit_y);
+        let (enter_x, enter_y) = clip_to_shape(to_node, to, enter_x, enter_y);
 
         svg.push_str(&format!(
             r#"<path d="M {:.2},{:.2} C {:.2},{:.2} {:.2},{:.2} {:.2},{:.2}" fill="none" stroke="{}" stroke-width="{:.2}"{} />"#,
@@ -392,24 +436,55 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
             style.edge_stroke, stroke_width, dash_attr
         ));
 
-        // Arrowhead pointing down into the top of the node
+        // Follow the final curve tangent into the actual shape boundary.
         if edge.arrow_head != ArrowType::None {
             svg.push_str(&render_arrow_head(
                 enter_x,
                 enter_y,
-                -std::f32::consts::FRAC_PI_2,
+                (enter_y - cp2_y).atan2(enter_x - cp2_x),
                 &edge.arrow_head,
                 style,
             ));
         }
+        if edge.arrow_tail != ArrowType::None {
+            svg.push_str(&render_arrow_head(
+                exit_x,
+                exit_y,
+                (exit_y - cp1_y).atan2(exit_x - cp1_x),
+                &edge.arrow_tail,
+                style,
+            ));
+        }
+        let min_x = exit_x.min(enter_x).min(cp1_x).min(cp2_x);
+        let min_y = exit_y.min(enter_y).min(cp1_y).min(cp2_y);
+        ctx.extents.push(Rect::new(
+            min_x - 8.0,
+            min_y - 8.0,
+            exit_x.max(enter_x).max(cp1_x).max(cp2_x) - min_x + 16.0,
+            exit_y.max(enter_y).max(cp1_y).max(cp2_y) - min_y + 16.0,
+        ));
 
         // Edge label
         if let Some(ref label) = edge.label {
             let escaped = escape_xml(label);
             let (label_w, _) =
                 measure.measure_text(label, style.font_size * 0.82, false, false, false, None);
-            let label_x = exit_x + loop_radius - label_w / 2.0;
-            let label_y = from.y - loop_radius;
+            let label_x = if vertical {
+                from.right() + loop_radius + 10.0
+            } else {
+                from_cx - label_w / 2.0
+            };
+            let label_y = if vertical {
+                from_cy + style.font_size * 0.3
+            } else {
+                from.y - loop_radius * 1.5 - 10.0
+            };
+            ctx.extents.push(Rect::new(
+                label_x - 2.0,
+                label_y - style.font_size * 0.7,
+                label_w + 4.0,
+                style.font_size * 1.1,
+            ));
             svg.push_str(&format!(
                 r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="4" fill="{}" stroke="{}" stroke-width="0.5" />"#,
                 label_x - 2.0,
@@ -457,6 +532,17 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
         }
     };
 
+    let (exit_x, exit_y, enter_x, enter_y) = if ctx.route_total > 1 {
+        let offset = (ctx.route_index as f32 - (ctx.route_total - 1) as f32 / 2.0) * 12.0;
+        if vertical {
+            (from.right(), from_cy + offset, to.right(), to_cy + offset)
+        } else {
+            (from_cx + offset, from.y, to_cx + offset, to.y)
+        }
+    } else {
+        (exit_x, exit_y, enter_x, enter_y)
+    };
+
     // Clip exit/enter points to actual shape boundaries
     let (exit_x, exit_y) = clip_to_shape(from_node, from, exit_x, exit_y);
     let (enter_x, enter_y) = clip_to_shape(to_node, to, enter_x, enter_y);
@@ -496,6 +582,31 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
             }
         }
         points.push((x2, y2));
+    }
+
+    if ctx.route_total > 1 {
+        points = if vertical {
+            let lane = from.right().max(to.right()) + 30.0 + ctx.route_index as f32 * 30.0;
+            vec![
+                (exit_x, exit_y),
+                (lane, exit_y),
+                (lane, enter_y),
+                (enter_x, enter_y),
+            ]
+        } else {
+            let lane = from.y.min(to.y) - 30.0 - ctx.route_index as f32 * 30.0;
+            vec![
+                (exit_x, exit_y),
+                (exit_x, lane),
+                (enter_x, lane),
+                (enter_x, enter_y),
+            ]
+        };
+    }
+    // Coincident dogleg vertices have no direction and must not determine markers.
+    points.dedup_by(|a, b| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01);
+    for &(x, y) in &points {
+        ctx.extents.push(Rect::new(x - 8.0, y - 8.0, 16.0, 16.0));
     }
 
     // Render polyline
@@ -548,12 +659,12 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
 
     // Label on middle segment
     let mid = points.len() / 2;
-    let label_x = if points.len() >= 2 {
+    let mut label_x = if points.len() >= 2 {
         (points[mid.saturating_sub(1)].0 + points[mid.min(points.len() - 1)].0) / 2.0
     } else {
         (exit_x + enter_x) / 2.0
     };
-    let label_y = if points.len() >= 2 {
+    let mut label_y = if points.len() >= 2 {
         (points[mid.saturating_sub(1)].1 + points[mid.min(points.len() - 1)].1) / 2.0
     } else {
         (exit_y + enter_y) / 2.0
@@ -568,6 +679,35 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
         let pill_pad = 8.0;
         let pill_w = (text_w + pill_pad * 2.0).max(label_font_size * 2.5);
         let pill_h = label_font_size + pill_pad * 2.0;
+        if points.len() >= 2 {
+            let a = points[mid.saturating_sub(1)];
+            let b = points[mid.min(points.len() - 1)];
+            if (a.1 - b.1).abs() < 0.1 && (a.0 - b.0).abs() < pill_w + 32.0 {
+                label_y -= pill_h / 2.0 + 8.0;
+            } else if (a.0 - b.0).abs() < 0.1 && (a.1 - b.1).abs() < pill_h + 32.0 {
+                label_x += pill_w / 2.0 + 8.0;
+            }
+        }
+        // Keep labels off the horizontal borders of groups crossed by the route.
+        for group in ctx.group_bounds {
+            if label_x + pill_w / 2.0 > group.x && label_x - pill_w / 2.0 < group.x + group.w {
+                for border in [group.y, group.y + group.h] {
+                    if (label_y - border).abs() < pill_h / 2.0 + 4.0 {
+                        label_y = if label_y >= border {
+                            border + pill_h / 2.0 + 6.0
+                        } else {
+                            border - pill_h / 2.0 - 6.0
+                        };
+                    }
+                }
+            }
+        }
+        ctx.extents.push(Rect::new(
+            label_x - pill_w / 2.0,
+            label_y - pill_h / 2.0,
+            pill_w,
+            pill_h,
+        ));
 
         svg.push_str(&format!(
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="4" fill="{}" stroke="{}" stroke-width="0.5" />"#,
@@ -831,6 +971,10 @@ mod tests {
             direction: &FlowDirection::LeftRight,
             waypoints: &[],
             measure: &mut measure,
+            route_index: 0,
+            route_total: 1,
+            extents: &mut Vec::new(),
+            group_bounds: &[],
         });
 
         let pts = first_polygon_points(&svg);

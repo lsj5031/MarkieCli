@@ -97,9 +97,11 @@ pub enum MessageType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MessageKind {
+    Plain,
     Sync,
     Async,
     Reply,
+    Cross,
 }
 
 #[derive(Debug, Clone)]
@@ -200,6 +202,7 @@ pub struct ClassRelation {
     pub from: String,
     pub to: String,
     pub relation_type: ClassRelationType,
+    pub directed: bool,
     pub label: Option<String>,
     pub multiplicity_from: Option<String>,
     pub multiplicity_to: Option<String>,
@@ -246,7 +249,11 @@ pub struct StateTransition {
 pub enum StateElement {
     State(State),
     Transition(StateTransition),
-    Note { state: String, text: String },
+    Note {
+        state: String,
+        text: String,
+        position: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -286,6 +293,7 @@ pub struct ErRelationship {
     pub to: String,
     pub from_cardinality: ErCardinality,
     pub to_cardinality: ErCardinality,
+    pub dotted: bool,
     pub label: Option<String>,
 }
 
