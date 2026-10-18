@@ -43,8 +43,28 @@ impl GlobalFontSystem {
     fn new() -> Self {
         // Cache up to ~10MB of text measurements (estimated ~100 bytes per entry average)
         const CACHE_CAPACITY: usize = 100_000;
+        let mut font_system = FontSystem::new();
+        let has_system_fonts = font_system.db().faces().next().is_some();
+        font_system.db_mut().load_fonts_dir("fonts");
+        if !has_system_fonts {
+            let db = font_system.db_mut();
+            let sans = db
+                .faces()
+                .find(|face| !face.monospaced)
+                .or_else(|| db.faces().next())
+                .and_then(|face| face.families.first().map(|(name, _)| name.clone()));
+            let mono = db
+                .faces()
+                .find(|face| face.monospaced)
+                .and_then(|face| face.families.first().map(|(name, _)| name.clone()));
+            if let Some(sans) = sans {
+                db.set_sans_serif_family(&sans);
+                db.set_serif_family(&sans);
+                db.set_monospace_family(mono.as_deref().unwrap_or(&sans));
+            }
+        }
         Self {
-            font_system: Mutex::new(FontSystem::new()),
+            font_system: Mutex::new(font_system),
             cache: Mutex::new(LruCache::new(NonZeroUsize::new(CACHE_CAPACITY).unwrap())),
         }
     }
@@ -155,8 +175,16 @@ pub struct CosmicTextMeasure;
 
 impl CosmicTextMeasure {
     pub fn new() -> Result<Self, String> {
-        // Initialize the global system (no-op if already initialized)
-        let _ = &*GLOBAL_FONT_SYSTEM;
+        if GLOBAL_FONT_SYSTEM
+            .font_system
+            .lock()
+            .db()
+            .faces()
+            .next()
+            .is_none()
+        {
+            return Err("No usable fonts found. Install system fonts (for example DejaVu Sans), or place TTF/OTF fonts in ./fonts in the current working directory.".to_string());
+        }
         Ok(Self)
     }
 }

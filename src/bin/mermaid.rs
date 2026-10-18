@@ -34,17 +34,18 @@ struct Args {
 fn main() -> Result<(), String> {
     let args = Args::parse();
 
+    if !args.padding.is_finite() || args.padding < 0.0 {
+        return Err(format!(
+            "Invalid --padding value: {} (expected a finite, nonnegative number)",
+            args.padding
+        ));
+    }
+
     let theme = if let Some(ref theme_path) = args.theme {
         if theme_path.exists() && theme_path.is_file() {
             let content = std::fs::read_to_string(theme_path)
                 .map_err(|e| format!("Failed to read theme file: {}", e))?;
-            if let Ok(theme) = Theme::from_alacritty_toml(&content) {
-                theme
-            } else if let Ok(theme) = Theme::from_alacritty_yaml(&content) {
-                theme
-            } else {
-                return Err("Failed to parse theme file as TOML or YAML".to_string());
-            }
+            Theme::from_alacritty(&content)?
         } else {
             return Err(format!("Theme file not found: {}", theme_path.display()));
         }
@@ -74,6 +75,10 @@ fn main() -> Result<(), String> {
     let pad = args.padding;
     let total_w = width + pad * 2.0;
     let total_h = height + pad * 2.0;
+
+    if !total_w.is_finite() || !total_h.is_finite() {
+        return Err("Invalid --padding value: padded canvas dimensions overflow".to_string());
+    }
 
     let svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="{total_h}" viewBox="0 0 {total_w} {total_h}">

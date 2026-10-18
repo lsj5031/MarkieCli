@@ -2,6 +2,7 @@ use crate::fonts::TextMeasure;
 use latex2mathml::{DisplayStyle, latex_to_mathml};
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::reader::Reader as XmlReader;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 enum MathNode {
@@ -117,8 +118,9 @@ fn preprocess_latex(latex: &str) -> String {
                 }
             }
         } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            let ch = latex[i..].chars().next().unwrap();
+            result.push(ch);
+            i += ch.len_utf8();
         }
     }
 
@@ -136,18 +138,9 @@ pub fn render_math_at<T: TextMeasure>(
     x: f32,
     baseline_y: f32,
 ) -> Result<MathResult, String> {
-    let latex = preprocess_latex(latex);
-    let style = if display {
-        DisplayStyle::Block
-    } else {
-        DisplayStyle::Inline
-    };
-
-    let mathml =
-        latex_to_mathml(&latex, style).map_err(|e| format!("LaTeX parse error: {:?}", e))?;
-
-    let root = parse_mathml(&mathml)?;
-    let mbox = layout_node(&root, font_size, text_color, measure, x, baseline_y);
+    let root = latex_node(latex, display)?;
+    let text_color = crate::xml::escape_xml(text_color);
+    let mbox = layout_node(&root, font_size, &text_color, measure, x, baseline_y);
 
     Ok(MathResult {
         width: mbox.width,
@@ -166,19 +159,172 @@ struct MathBox {
 
 type Attrs = Vec<(String, String)>;
 
-fn parse_mathml(mathml: &str) -> Result<MathNode, String> {
+/// Read one TeX script argument without consuming the following postfix script.
+fn script_argument(input: &str) -> Option<(&str, usize)> {
+    let trimmed = input.trim_start();
+    let leading = input.len() - trimmed.len();
+    if trimmed.starts_with('{') {
+        let mut depth = 0;
+        let mut escaped = false;
+        for (i, ch) in trimmed.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some((&trimmed[1..i], leading + i + 1));
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    } else if let Some(command) = trimmed.strip_prefix('\\') {
+        let len = command
+            .chars()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .count();
+        let len = if len == 0 {
+            command.chars().next()?.len_utf8()
+        } else {
+            len
+        };
+        Some((&trimmed[..1 + len], leading + 1 + len))
+    } else {
+        let ch = trimmed.chars().next()?;
+        if matches!(ch, '}' | '^' | '_') {
+            return None;
+        }
+        Some((&trimmed[..ch.len_utf8()], leading + ch.len_utf8()))
+    }
+}
+
+fn latex_node(latex: &str, display: bool) -> Result<MathNode, String> {
+    let latex = preprocess_latex(latex);
+    let mut normalized = String::with_capacity(latex.len());
+    let mut pairs = HashMap::new();
+    let mut texts = HashMap::new();
+    let mut prefix = "MarkieScriptSlot".to_string();
+    while latex.contains(&prefix) {
+        prefix.push('X');
+    }
+    let mut i = 0;
+    while i < latex.len() {
+        let remaining = &latex[i..];
+        // Keep text outside the converter's math lexer, which drops spaces and
+        // misparses digits in \text. Letter-only slots survive that lexer.
+        if remaining.starts_with("\\text{")
+            && let Some((text, consumed)) = script_argument(&remaining[5..])
+        {
+            let marker = format!("{prefix}Text{}", "X".repeat(texts.len() + 1));
+            let mut text = text.to_string();
+            for literal in ['&', '%', '$', '#', '_', '{', '}', ' '] {
+                text = text.replace(&format!("\\{literal}"), &literal.to_string());
+            }
+            texts.insert(marker.clone(), text);
+            normalized.push_str(&format!("\\text{{{marker}}}"));
+            i += 5 + consumed;
+            continue;
+        }
+        let ch = remaining.chars().next().unwrap();
+        if ch == '\\'
+            && let Some((_, consumed)) = script_argument(remaining)
+        {
+            // Consume commands and escaped literals as one token so \_ cannot
+            // become a script operator during paired-script normalization.
+            normalized.push_str(&remaining[..consumed]);
+            i += consumed;
+            continue;
+        }
+        if matches!(ch, '_' | '^')
+            && let Some((first, consumed)) = script_argument(&remaining[1..])
+        {
+            let after = &remaining[1 + consumed..];
+            let second = after.trim_start();
+            if second.starts_with(if ch == '_' { '^' } else { '_' })
+                && let Some((second_arg, second_len)) = script_argument(&second[1..])
+            {
+                // The converter incorrectly nests x_i^2 as x_{i^2}. Keep the
+                // two source arguments separate without changing x_{i^2}.
+                let (sub, sup) = if ch == '_' {
+                    (first, second_arg)
+                } else {
+                    (second_arg, first)
+                };
+                let marker = format!("{prefix}Pair{}", "X".repeat(pairs.len() + 1));
+                pairs.insert(
+                    marker.clone(),
+                    (latex_node(sub, display)?, latex_node(sup, display)?),
+                );
+                normalized.push_str(&format!("_{{\\text{{{marker}}}}}"));
+                i += 1 + consumed + (after.len() - second.len()) + 1 + second_len;
+                continue;
+            }
+        }
+        normalized.push(ch);
+        i += ch.len_utf8();
+    }
+    let style = if display {
+        DisplayStyle::Block
+    } else {
+        DisplayStyle::Inline
+    };
+    let mut mathml =
+        latex_to_mathml(&normalized, style).map_err(|e| format!("LaTeX parse error: {e:?}"))?;
+    if mathml.contains("<mtext>[PARSE ERROR:") {
+        return Err("LaTeX parse error: unsupported or invalid command".to_string());
+    }
+    // The converter emits bare operator text and unquoted column alignment.
+    // Escape only token contents, leaving the generated MathML structure intact.
+    for tag in ["mtext", "mi", "mn", "mo"] {
+        let mut offset = 0;
+        while let Some(start) = mathml[offset..].find(&format!("<{tag}")) {
+            let start = offset + start;
+            if !matches!(
+                mathml.as_bytes().get(start + tag.len() + 1),
+                Some(b' ' | b'>')
+            ) {
+                offset = start + tag.len() + 1;
+                continue;
+            }
+            let Some(open_end) = mathml[start..].find('>') else {
+                break;
+            };
+            let text_start = start + open_end + 1;
+            let Some(end) = mathml[text_start..].find(&format!("</{tag}>")) else {
+                break;
+            };
+            let text_end = text_start + end;
+            let escaped = escape_xml(&mathml[text_start..text_end]);
+            mathml.replace_range(text_start..text_end, &escaped);
+            offset = text_start + escaped.len() + tag.len() + 3;
+        }
+    }
+    mathml = mathml.replace("<mtable columnalign=left>", "<mtable columnalign=\"left\">");
+    for (marker, text) in texts {
+        mathml = mathml.replace(
+            &format!("<mtext>{marker}</mtext>"),
+            &format!("<mtext>{}</mtext>", escape_xml(&text)),
+        );
+    }
+    parse_mathml(&mathml, &mut pairs)
+}
+
+fn parse_mathml(
+    mathml: &str,
+    pairs: &mut HashMap<String, (MathNode, MathNode)>,
+) -> Result<MathNode, String> {
     let mut reader = XmlReader::from_str(mathml);
-    reader.config_mut().trim_text(true);
+    reader.config_mut().trim_text(false);
 
     // Stack now stores: (tag_name, children, attributes)
     let mut stack: Vec<(String, Vec<MathNode>, Attrs)> = Vec::new();
     let mut buf = Vec::new();
-
-    // Track table row context for mtable parsing
-    let mut current_table_rows: Vec<Vec<MathNode>> = Vec::new();
-    let mut current_row_cells: Vec<MathNode> = Vec::new();
-    let mut in_table = 0i32; // nesting counter
-    let mut in_row = 0i32;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -195,18 +341,6 @@ fn parse_mathml(mathml: &str) -> Result<MathNode, String> {
                     })
                     .collect();
 
-                if name == "mtable" {
-                    in_table += 1;
-                    if in_table == 1 {
-                        current_table_rows.clear();
-                    }
-                } else if name == "mtr" && in_table == 1 {
-                    in_row += 1;
-                    current_row_cells.clear();
-                } else if name == "mtd" && in_table == 1 && in_row == 1 {
-                    // mtd content goes on stack
-                }
-
                 stack.push((name, Vec::new(), attrs));
             }
             Ok(XmlEvent::Text(ref e)) => {
@@ -217,40 +351,24 @@ fn parse_mathml(mathml: &str) -> Result<MathNode, String> {
                     children.push(MathNode::Text(text));
                 }
             }
+            Ok(XmlEvent::GeneralRef(ref e)) => {
+                let entity = e.decode().map_err(|e| format!("XML entity error: {e}"))?;
+                let reference = format!("&{entity};");
+                let text = quick_xml::escape::unescape(&reference)
+                    .map_err(|e| format!("XML entity error: {e}"))?
+                    .into_owned();
+                if let Some((_, children, _)) = stack.last_mut() {
+                    children.push(MathNode::Text(text));
+                }
+            }
             Ok(XmlEvent::End(ref e)) => {
                 let _name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                 if let Some((tag, children, attrs)) = stack.pop() {
-                    // Handle table elements specially
-                    if tag == "mtd" && in_table == 1 && in_row == 1 {
-                        let cell = if children.len() == 1 {
-                            children.into_iter().next().unwrap_or_default()
-                        } else {
-                            MathNode::Row(children)
-                        };
-                        current_row_cells.push(cell);
-                    } else if tag == "mtr" && in_table == 1 {
-                        in_row -= 1;
-                        if !current_row_cells.is_empty() {
-                            current_table_rows.push(std::mem::take(&mut current_row_cells));
-                        }
-                    } else if tag == "mtable" && in_table == 1 {
-                        in_table -= 1;
-                        let table_node = MathNode::Table {
-                            rows: std::mem::take(&mut current_table_rows),
-                            column_align: vec!["center".to_string()], // default center
-                        };
-                        if let Some((_, parent_children, _)) = stack.last_mut() {
-                            parent_children.push(table_node);
-                        } else {
-                            return Ok(table_node);
-                        }
+                    let node = build_node(&tag, children, &attrs, pairs);
+                    if let Some((_, parent_children, _)) = stack.last_mut() {
+                        parent_children.push(node);
                     } else {
-                        let node = build_node(&tag, children, &attrs);
-                        if let Some((_, parent_children, _)) = stack.last_mut() {
-                            parent_children.push(node);
-                        } else {
-                            return Ok(node);
-                        }
+                        return Ok(node);
                     }
                 }
             }
@@ -299,8 +417,48 @@ fn get_attr(attrs: &[(String, String)], name: &str) -> Option<String> {
         .map(|(_, v)| v.clone())
 }
 
-fn build_node(tag: &str, mut children: Vec<MathNode>, attrs: &Attrs) -> MathNode {
+fn build_node(
+    tag: &str,
+    mut children: Vec<MathNode>,
+    attrs: &Attrs,
+    pairs: &mut HashMap<String, (MathNode, MathNode)>,
+) -> MathNode {
+    if matches!(tag, "msub" | "munder")
+        && children.len() == 2
+        && let MathNode::Text(marker) = &children[1]
+        && let Some((sub, sup)) = pairs.remove(marker)
+    {
+        let base = Box::new(children.remove(0));
+        return if tag == "munder" {
+            MathNode::UnderOver {
+                base,
+                under: Some(Box::new(sub)),
+                over: Some(Box::new(sup)),
+            }
+        } else {
+            MathNode::SubSup {
+                base,
+                sub: Box::new(sub),
+                sup: Box::new(sup),
+            }
+        };
+    }
     match tag {
+        "mtd" | "mtr" => MathNode::Row(children),
+        "mtable" => MathNode::Table {
+            rows: children
+                .into_iter()
+                .map(|row| match row {
+                    MathNode::Row(cells) => cells,
+                    node => vec![node],
+                })
+                .collect(),
+            column_align: get_attr(attrs, "columnalign")
+                .unwrap_or_else(|| "center".to_string())
+                .split_whitespace()
+                .map(str::to_string)
+                .collect(),
+        },
         "mi" => {
             let text = extract_text(&children);
             MathNode::Ident(text)
@@ -545,7 +703,7 @@ fn layout_node<T: TextMeasure>(
         MathNode::Text(text) => {
             let (w, _h) = measure_token(text, font_size, false, measure);
             let svg = format!(
-                r#"<text x="{:.2}" y="{:.2}" font-family="sans-serif" font-size="{:.2}" fill="{}">{}</text>"#,
+                r#"<text x="{:.2}" y="{:.2}" font-family="sans-serif" font-size="{:.2}" fill="{}" xml:space="preserve">{}</text>"#,
                 x,
                 baseline_y,
                 font_size,
@@ -826,9 +984,20 @@ fn layout_row<T: TextMeasure>(
     let mut max_descent: f32 = font_size * 0.25;
 
     for child in children {
-        let child_box = layout_node(child, font_size, color, measure, cx, baseline_y);
-        max_ascent = max_ascent.max(child_box.ascent);
-        max_descent = max_descent.max(child_box.descent);
+        if !matches!(child, MathNode::StretchyOp { .. }) {
+            let child_box = layout_node(child, font_size, color, measure, 0.0, 0.0);
+            max_ascent = max_ascent.max(child_box.ascent);
+            max_descent = max_descent.max(child_box.descent);
+        }
+    }
+    for child in children {
+        let child_box = if matches!(child, MathNode::StretchyOp { .. }) {
+            let size = max_ascent + max_descent;
+            let baseline = baseline_y + size * 0.75 - max_ascent;
+            layout_node(child, size, color, measure, cx, baseline)
+        } else {
+            layout_node(child, font_size, color, measure, cx, baseline_y)
+        };
         cx += child_box.width;
         svg.push_str(&child_box.svg);
     }
@@ -924,7 +1093,7 @@ fn layout_underover<T: TextMeasure>(
 
 fn layout_table<T: TextMeasure>(
     rows: &[Vec<MathNode>],
-    _column_align: &[String],
+    column_align: &[String],
     font_size: f32,
     color: &str,
     measure: &mut T,
@@ -989,8 +1158,13 @@ fn layout_table<T: TextMeasure>(
             let col_width = col_widths.get(col_idx).copied().unwrap_or(0.0);
             let cell_box = layout_node(cell, cell_size, color, measure, 0.0, 0.0);
 
-            // Center cell in column
-            let cell_x = current_x + (col_width - cell_box.width) / 2.0;
+            let alignment = column_align.get(col_idx).or_else(|| column_align.last());
+            let cell_x = current_x
+                + match alignment.map(String::as_str) {
+                    Some("left") => 0.0,
+                    Some("right") => col_width - cell_box.width,
+                    _ => (col_width - cell_box.width) / 2.0,
+                };
 
             let rendered = layout_node(cell, cell_size, color, measure, cell_x, row_baseline);
             svg.push_str(&rendered.svg);
@@ -1136,10 +1310,89 @@ mod tests {
     #[test]
     fn test_render_math_error() {
         let mut measure = MockMeasure;
-        // Invalid LaTeX (missing closing brace)
-        let result = render_math("\\frac{a}{", 16.0, "#000000", &mut measure, false);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("LaTeX parse error"));
+        for latex in [r"\frac{a}{", r"\definitelyunknown{x}"] {
+            let result = render_math(latex, 16.0, "#000000", &mut measure, false);
+            assert!(result.unwrap_err().contains("LaTeX parse error"));
+        }
+    }
+
+    #[test]
+    fn render_math_escapes_color_attributes_without_restricting_css_colors() {
+        let mut measure = MockMeasure;
+        for color in [
+            "#123456\" injected=\"yes",
+            "rebeccapurple",
+            "rgb(12, 34, 56)",
+        ] {
+            let rendered = render_math(r"\frac{x}{y}", 16.0, color, &mut measure, false).unwrap();
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg">{}</svg>"#,
+                rendered.svg_fragment
+            );
+            let mut reader = quick_xml::Reader::from_str(&svg);
+            let mut fills = 0;
+            let mut strokes = 0;
+            loop {
+                match reader.read_event().unwrap() {
+                    quick_xml::events::Event::Start(node)
+                    | quick_xml::events::Event::Empty(node) => {
+                        for attribute in node.attributes() {
+                            let attribute = attribute.unwrap();
+                            assert_ne!(attribute.key.as_ref(), b"injected");
+                            match attribute.key.as_ref() {
+                                b"fill" | b"stroke" => {
+                                    assert_eq!(
+                                        attribute
+                                            .decode_and_unescape_value(reader.decoder())
+                                            .unwrap(),
+                                        color
+                                    );
+                                    if attribute.key.as_ref() == b"fill" {
+                                        fills += 1;
+                                    } else {
+                                        strokes += 1;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+            }
+            assert!(fills > 0 && strokes > 0);
+        }
+    }
+
+    #[test]
+    fn render_math_preserves_text_and_nested_matrix_cells() {
+        let mut measure = MockMeasure;
+        for (latex, tokens) in [
+            ("α+β+漢", vec!["α", "β", "漢"]),
+            (r"\_a^b", vec![">_</text>", ">a</text>", ">b</text>"]),
+            (r"\text{hello 17 < 3 \& x}", vec!["hello 17 &lt; 3 &amp; x"]),
+            (
+                r"\begin{matrix}1&\begin{matrix}2&3\\5&7\end{matrix}\\9&4\end{matrix}",
+                vec![
+                    ">1</text>",
+                    ">2</text>",
+                    ">3</text>",
+                    ">5</text>",
+                    ">7</text>",
+                    ">9</text>",
+                    ">4</text>",
+                ],
+            ),
+        ] {
+            let rendered = render_math(latex, 16.0, "#000000", &mut measure, true).unwrap();
+            for token in tokens {
+                assert!(
+                    rendered.svg_fragment.contains(token),
+                    "lost {token} in {latex}"
+                );
+            }
+        }
     }
 
     #[test]

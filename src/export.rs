@@ -105,27 +105,21 @@ pub fn save_output(svg: &str, output: &Path, png_scale: f32) -> Result<(), Strin
     Ok(())
 }
 
-/// Pick sans/serif/mono fallback families from a list of `(family_name, lowercased_name)` pairs.
+/// Pick fallback families using names and font metadata.
 fn pick_fallback_families<'a>(
-    families: impl Iterator<Item = &'a (String, String)>,
+    families: impl Iterator<Item = &'a (String, String, bool)>,
 ) -> (Option<String>, Option<String>, Option<String>) {
     let mut sans_family: Option<String> = None;
     let mut serif_family: Option<String> = None;
     let mut mono_family: Option<String> = None;
-    let mut first_family: Option<String> = None;
-
-    for (family, lower) in families {
-        if first_family.is_none() {
-            first_family = Some(family.clone());
-        }
-
-        if sans_family.is_none() && lower.contains("sans") {
+    for (family, lower, is_mono) in families {
+        if sans_family.is_none() && lower.contains("sans") && !*is_mono {
             sans_family = Some(family.clone());
         }
-        if serif_family.is_none() && lower.contains("serif") {
+        if serif_family.is_none() && lower.contains("serif") && !*is_mono {
             serif_family = Some(family.clone());
         }
-        if mono_family.is_none() && (lower.contains("mono") || lower.contains("code")) {
+        if mono_family.is_none() && *is_mono {
             mono_family = Some(family.clone());
         }
     }
@@ -139,19 +133,30 @@ fn pick_fallback_families<'a>(
 /// function or trait — hence a macro.
 macro_rules! configure_font_fallbacks {
     ($fontdb:expr) => {{
-        let families: Vec<(String, String)> = $fontdb
+        let families: Vec<(String, String, bool)> = $fontdb
             .faces()
-            .flat_map(|face| &face.families)
-            .map(|(family, _)| (family.clone(), family.to_ascii_lowercase()))
+            .flat_map(|face| {
+                face.families.iter().map(move |(family, _)| {
+                    (family.clone(), family.to_ascii_lowercase(), face.monospaced)
+                })
+            })
             .collect();
 
         let (sans_family, serif_family, mono_family) = pick_fallback_families(families.iter());
-        let first_family = families.first().map(|(f, _)| f.clone());
+        let first_family = families
+            .iter()
+            .find(|(_, _, mono)| !mono)
+            .or(families.first())
+            .map(|(f, _, _)| f.clone());
 
         if let Some(family) = sans_family.as_deref().or(first_family.as_deref()) {
             $fontdb.set_sans_serif_family(family);
         }
-        if let Some(family) = serif_family.as_deref().or(first_family.as_deref()) {
+        if let Some(family) = serif_family
+            .as_deref()
+            .or(sans_family.as_deref())
+            .or(first_family.as_deref())
+        {
             $fontdb.set_serif_family(family);
         }
         if let Some(family) = mono_family

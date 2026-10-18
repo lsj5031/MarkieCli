@@ -48,9 +48,9 @@ jobs:
         run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
-          # (optional) Comma-separated list of binary names (non-extension portion of filename) to build and upload.
-          # Note that glob pattern is not supported yet.
-          bin: markie
+          bin: markie,markie-mermaid
+          # Keep existing installer and cargo-binstall asset URLs stable.
+          archive: markie-$target
           target: ${{ matrix.target }}
           token: ${{ secrets.GITHUB_TOKEN }}
           checksum: sha256

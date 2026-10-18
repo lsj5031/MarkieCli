@@ -9,7 +9,7 @@ A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents in
 ## Features
 
 - **Pure Rust**: Built entirely with Rust for performance and reliability
-- **Zero Runtime Dependencies**: Single static binary with no Node.js, Python, or external runtime required
+- **Native CLI**: No Node.js or Python runtime required; text rendering uses installed system fonts or valid fonts in `./fonts`
 - **Multiple Output Formats**: Export to SVG, PNG, or PDF
 - **High-Resolution PNG Output**: Use `--png-scale` for sharper raster output
 - **Native Mermaid Rendering**: A subset of flowchart, sequence, class, state, and ER syntax; see the [support boundary](docs/engine-quality.md)
@@ -20,27 +20,17 @@ A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents in
 - **Smart Defaults**: `markie input.md` → `input.png` at 2× retina scale, no flags needed
 - **Shell Completions**: `--completions bash/zsh/fish/powershell/elvish`
 - **Flexible Input**: Read from file or stdin
-- **Adjustable Width**: Control output image width (default: 1200px)
-- **Font Support**: Includes local font directory, system fallback, and global font caching
+- **Adjustable Width**: Control output image width (default: 1200px; minimum 128px with the default spacing)
+- **Font Support**: Loads system fonts or valid fonts from `./fonts`, with shared text-measurement caching
 - **XML-Safe Output**: Invalid XML control characters are stripped during rendering
 
 ## Why Markie?
 
-| Feature | Markie | JavaScript-based Alternatives |
-|---------|--------|------------------------------|
-| **Runtime** | Zero - single binary | Requires Node/Bun/Deno |
-| **Output Formats** | SVG, PNG, PDF | Typically SVG only |
-| **Markdown documents** | Text, code, tables, math and diagrams | Typically diagrams only |
-| **LaTeX Math** | Native support | Usually not available |
-| **Syntax Highlighting** | Built-in | Separate setup required |
-| **Deployment** | Copy and run | npm install + runtime |
-
-**Key advantages:**
-
-- **All-in-one renderer** - Complete markdown documents with embedded Mermaid diagrams and LaTeX math in a single tool
+- **All-in-one renderer** - Markdown text, highlighted code, tables, supported Mermaid diagrams and LaTeX-style math in one document
+- **Export choices** - Vector SVG, high-resolution PNG and PDF from the same input
 - **PDF export** - Text-as-paths for viewer compatibility; text is not searchable/selectable
-- **Single-binary distribution** - No runtime version management, dependency resolution, or `npm install` needed
-- **Native performance** - Rust's zero-cost abstractions for fast, memory-efficient rendering
+- **Direct deployment** - Install the native CLI and provide fonts, without a JavaScript package or runtime setup
+- **Native diagram and math engines** - Rendering stays within the Rust application
 
 ## Markdown Support
 
@@ -164,7 +154,7 @@ curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/in
 Optional environment overrides:
 
 ```bash
-MARKIE_VERSION=0.4.0 INSTALL_DIR="$HOME/.local/bin" curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/install.sh | MARKIE_VERSION=0.4.0 INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
 ## Usage

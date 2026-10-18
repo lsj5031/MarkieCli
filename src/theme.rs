@@ -231,6 +231,15 @@ impl Theme {
         BUILTIN_THEMES.iter().map(|(n, _)| *n).collect()
     }
 
+    /// Detect Alacritty theme syntax by content, retaining diagnostics from both parsers.
+    pub fn from_alacritty(content: &str) -> Result<Self, String> {
+        Self::from_alacritty_toml(content).or_else(|toml_error| {
+            Self::from_alacritty_yaml(content).map_err(|yaml_error| {
+                format!("Failed to parse theme file as TOML or YAML:\n{toml_error}\n{yaml_error}")
+            })
+        })
+    }
+
     pub fn from_alacritty_yaml(content: &str) -> Result<Self, String> {
         let alacritty: AlacrittyTheme = serde_yaml::from_str(content)
             .map_err(|e| format!("Failed to parse Alacritty YAML: {}", e))?;
@@ -246,7 +255,27 @@ impl Theme {
     }
 
     fn from_alacritty_theme(alacritty: AlacrittyTheme) -> Result<Self, String> {
-        let colors = alacritty.colors;
+        let mut colors = alacritty.colors;
+        for (field, color) in [
+            ("primary.background", &mut colors.primary.background),
+            ("primary.foreground", &mut colors.primary.foreground),
+            ("normal.black", &mut colors.normal.black),
+            ("normal.blue", &mut colors.normal.blue),
+            ("normal.cyan", &mut colors.normal.cyan),
+            ("normal.white", &mut colors.normal.white),
+        ] {
+            let hex = color.strip_prefix('#').or_else(|| color.strip_prefix("0x"));
+            match hex {
+                Some(hex) if hex.len() == 6 && hex.bytes().all(|c| c.is_ascii_hexdigit()) => {
+                    *color = format!("#{hex}");
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid Alacritty color colors.{field}: {color:?} (expected #RRGGBB or 0xRRGGBB)"
+                    ));
+                }
+            }
+        }
 
         Ok(Theme {
             background_color: colors.primary.background,
@@ -276,6 +305,28 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::Theme;
+
+    #[test]
+    fn alacritty_colors_are_validated_and_hex_prefixes_normalized() {
+        let content = include_str!("../themes/dracula.toml");
+        for (value, field) in [
+            ("#282a36", "primary.background"),
+            ("#f8f8f2", "primary.foreground"),
+            ("#000000", "normal.black"),
+            ("#bd93f9", "normal.blue"),
+            ("#8be9fd", "normal.cyan"),
+            ("#bbbbbb", "normal.white"),
+        ] {
+            let error = Theme::from_alacritty(&content.replace(value, "not-a-color")).unwrap_err();
+            assert!(
+                error.contains(&format!("Invalid Alacritty color colors.{field}")),
+                "{error}"
+            );
+        }
+        let theme = Theme::from_alacritty(&content.replace("'#", "'0x")).unwrap();
+        assert_eq!(theme.background_color, "#282a36");
+        assert_eq!(theme.text_color, "#f8f8f2");
+    }
 
     #[test]
     fn from_builtin_accepts_hyphenated_and_case_insensitive_names() {

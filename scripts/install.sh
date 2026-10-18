@@ -74,6 +74,12 @@ mkdir -p "$INSTALL_DIR"
 install -m 755 "$src_bin" "$INSTALL_DIR/$BIN_NAME"
 
 echo "Installed $BIN_NAME to $INSTALL_DIR/$BIN_NAME"
+# Older releases contain only markie; install the standalone tool when bundled.
+mermaid_bin="$(dirname "$src_bin")/markie-mermaid"
+if [ -f "$mermaid_bin" ]; then
+    install -m 755 "$mermaid_bin" "$INSTALL_DIR/markie-mermaid"
+    echo "Installed markie-mermaid to $INSTALL_DIR/markie-mermaid"
+fi
 case ":$PATH:" in
     *":$INSTALL_DIR:"*) ;;
     *)

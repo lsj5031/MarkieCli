@@ -81,14 +81,7 @@ fn run() -> Result<(), String> {
                 let content = std::fs::read_to_string(theme_path)
                     .map_err(|e| format!("Failed to read theme file: {}", e))?;
 
-                // Try TOML first (since Alacritty is moving to TOML), then YAML
-                if let Ok(theme) = theme::Theme::from_alacritty_toml(&content) {
-                    theme
-                } else if let Ok(theme) = theme::Theme::from_alacritty_yaml(&content) {
-                    theme
-                } else {
-                    return Err("Failed to parse theme file as TOML or YAML".to_string());
-                }
+                theme::Theme::from_alacritty(&content)?
             } else {
                 return Err(format!(
                     "Unknown theme '{}'. Use --list-themes to see built-in themes, or provide a valid file path.",
