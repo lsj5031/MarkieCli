@@ -12,7 +12,7 @@ A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents in
 - **Zero Runtime Dependencies**: Single static binary with no Node.js, Python, or external runtime required
 - **Multiple Output Formats**: Export to SVG, PNG, or PDF
 - **High-Resolution PNG Output**: Use `--png-scale` for sharper raster output
-- **Native Mermaid Rendering**: Flowchart, sequence, class, state, and ER diagrams (including advanced edge/control syntax)
+- **Native Mermaid Rendering**: A subset of flowchart, sequence, class, state, and ER syntax; see the [support boundary](docs/engine-quality.md)
 - **Improved Mermaid Layout**: Sparser node spacing and collision-aware edge label placement
 - **Enhanced Math Rendering**: LaTeX-style math including nth roots, binomials, and matrices
 - **Customizable Themes**: Supports Alacritty theme files (`.yaml`/`.toml`)
@@ -30,7 +30,7 @@ A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents in
 |---------|--------|------------------------------|
 | **Runtime** | Zero - single binary | Requires Node/Bun/Deno |
 | **Output Formats** | SVG, PNG, PDF | Typically SVG only |
-| **Full Markdown** | Complete renderer | Diagrams only |
+| **Markdown documents** | Text, code, tables, math and diagrams | Typically diagrams only |
 | **LaTeX Math** | Native support | Usually not available |
 | **Syntax Highlighting** | Built-in | Separate setup required |
 | **Deployment** | Copy and run | npm install + runtime |
@@ -38,7 +38,7 @@ A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents in
 **Key advantages:**
 
 - **All-in-one renderer** - Complete markdown documents with embedded Mermaid diagrams and LaTeX math in a single tool
-- **PDF export** - Production-ready PDFs with text-as-paths for universal viewer compatibility
+- **PDF export** - Text-as-paths for viewer compatibility; text is not searchable/selectable
 - **Single-binary distribution** - No runtime version management, dependency resolution, or `npm install` needed
 - **Native performance** - Rust's zero-cost abstractions for fast, memory-efficient rendering
 
@@ -90,7 +90,10 @@ Supported diagram types:
 
 Rendering notes:
 - Diagram layout is intentionally sparse for readability.
-- Edge labels are offset and collision-checked against nodes and nearby labels.
+- Edge labels are offset and collision-checked against nodes and nearby labels; complex routing still needs visual review.
+- Flat flowchart subgraphs are supported; nested subgraphs are rejected explicitly.
+- Unknown diagram families fail the document render with the Mermaid fence line. Not every unsupported statement inside a recognized family is diagnosed.
+- See [engine support and quality evidence](docs/engine-quality.md) for syntax boundaries, font requirements, observed limitations, and review instructions.
 
 ### Enhanced Math Support
 
@@ -239,7 +242,9 @@ markie input.md --theme ~/my-custom-theme.toml
 
 ### Smoke test script
 
-A local smoke-test helper is included to verify math, Mermaid, theme handling, and all output formats.
+A local smoke-test helper runs tests and renders math, all five Mermaid families,
+and a small quality corpus to SVG/PNG/PDF. It checks representative content and
+export dimensions; inspect the outputs for geometry and missing glyphs.
 
 ```bash
 ./scripts/smoke-test.sh ./smoke-test-output
@@ -250,6 +255,12 @@ Optional overrides:
 ```bash
 THEME_FILE=tests/fixtures/solarized_light.toml PNG_SCALE=2 ./scripts/smoke-test.sh ./smoke-test-output
 ```
+
+The quality corpus includes long/CJK labels, multiline flowchart nodes, cycles,
+self-loops, wide tables, and mixed documents at 640px and 1200px. CI retains the
+full outputs as review artifacts instead of adding binary baselines. See the
+[validation guide](docs/engine-quality.md#repeatable-validation) for the font
+environment and what a passing check does and does not prove.
 
 ### Regenerating demo assets
 
@@ -266,7 +277,9 @@ Optional overrides:
 BIN=./target/release/markie PNG_SCALE=2 WIDTH=1200 ./scripts/make-demo.sh
 ```
 
-CI verifies the committed assets are in sync after every push/PR — it regenerates the demos in a pinned font environment and compares them against the committed files (tolerating platform font-metric differences in geometry):
+CI checks committed asset content after every push/PR in a pinned font environment.
+SVG comparisons strip most geometry, PNG checks compare dimensions, and PDF checks
+inspect a signature. These checks detect drift but do not prove visual correctness:
 
 ```bash
 bash scripts/check-demos.sh /tmp/out

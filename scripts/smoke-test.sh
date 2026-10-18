@@ -44,29 +44,62 @@ done
 render_all_formats() {
   local input="$1"
   local stem="$2"
+  shift 2
 
-  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.svg" --theme "$THEME_FILE"
-  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.png" --png-scale "$PNG_SCALE" --theme "$THEME_FILE"
-  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.pdf" --theme "$THEME_FILE"
+  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.svg" --theme "$THEME_FILE" "$@"
+  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.png" --png-scale "$PNG_SCALE" --theme "$THEME_FILE" "$@"
+  "$BIN" "$input" -o "$OUTPUT_DIR/$stem.pdf" --theme "$THEME_FILE" "$@"
 }
 
 echo "==> Rendering smoke outputs"
 render_all_formats "$OUTPUT_DIR/smoke_math.md" "smoke_math"
 render_all_formats "$OUTPUT_DIR/smoke_mermaid.md" "smoke_mermaid"
 
-echo "==> Done. Generated files:"
-printf "  - %s\n" \
-  "$OUTPUT_DIR/smoke_math.md" \
-  "$OUTPUT_DIR/smoke_math.svg" \
-  "$OUTPUT_DIR/smoke_math.png" \
-  "$OUTPUT_DIR/smoke_math.pdf" \
-  "$OUTPUT_DIR/smoke_mermaid.md" \
-  "$OUTPUT_DIR/smoke_mermaid.svg" \
-  "$OUTPUT_DIR/smoke_mermaid.png" \
-  "$OUTPUT_DIR/smoke_mermaid.pdf"
+# Keep full geometry as review artifacts, separate from normalized baselines.
+# Two fixed widths expose scaling/wrapping differences without a large matrix.
+for input in "$FIXTURE_DIR"/quality/*.md; do
+  stem="$(basename "$input" .md)"
+  cp "$input" "$OUTPUT_DIR/quality_$stem.md"
+  for width in 640 1200; do
+    render_all_formats "$input" "quality_${stem}_$width" --width "$width"
+  done
+done
 
-echo "==> Open for visual check (Linux):"
-echo "  xdg-open $OUTPUT_DIR/smoke_math.svg"
-echo "  xdg-open $OUTPUT_DIR/smoke_mermaid.svg"
-echo "  xdg-open $OUTPUT_DIR/smoke_math.pdf"
-echo "  xdg-open $OUTPUT_DIR/smoke_mermaid.pdf"
+echo "==> Checking unsupported syntax diagnostics"
+for entry in 'nested|Nested subgraphs are not supported' 'pie|Unsupported Mermaid diagram type'; do
+  stem="${entry%%|*}"
+  cp "$FIXTURE_DIR/quality/unsupported/$stem.md" "$OUTPUT_DIR/unsupported_$stem.md"
+  if "$BIN" "$FIXTURE_DIR/quality/unsupported/$stem.md" \
+    -o "$OUTPUT_DIR/unsupported_$stem.svg" --theme "$THEME_FILE" \
+    >"$OUTPUT_DIR/unsupported_$stem.stdout" 2>"$OUTPUT_DIR/unsupported_$stem.stderr"; then
+    echo "Expected $stem to fail, but rendering succeeded" >&2
+    exit 1
+  fi
+  grep -F "${entry#*|}" "$OUTPUT_DIR/unsupported_$stem.stderr"
+  grep -F 'Mermaid diagram (line 3)' "$OUTPUT_DIR/unsupported_$stem.stderr"
+done
+
+# Record the actual environment; local and CI font inventories may differ.
+{
+  rustc --version
+  printf 'PNG_SCALE=%s\nTHEME_FILE=%s\n' "$PNG_SCALE" "$THEME_FILE"
+  sha256sum "$THEME_FILE" "$BIN"
+  if command -v fc-list >/dev/null; then
+    fc-match sans-serif
+    fc-match monospace
+    fc-match 'sans-serif:lang=zh'
+    fc-list | sort
+  fi
+} >"$OUTPUT_DIR/environment.txt"
+
+# PDF is text-as-paths: inspect a raster preview rather than relying on text
+# extraction. Poppler is optional locally, installed by the evidence CI step.
+if command -v pdftoppm >/dev/null; then
+  for pdf in "$OUTPUT_DIR"/smoke_*.pdf "$OUTPUT_DIR"/quality_*.pdf; do
+    pdftoppm -f 1 -singlefile -scale-to 1800 -png "$pdf" "${pdf%.pdf}-pdf"
+  done
+fi
+
+python3 "$ROOT_DIR/scripts/check-quality.py" "$OUTPUT_DIR" "$PNG_SCALE"
+
+echo "==> Evidence written to $OUTPUT_DIR (see docs/engine-quality.md for review limits)"

@@ -66,6 +66,25 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Check smoke visuals match baselines
         run: bash scripts/check-smoke.sh /tmp/ci-smoke
+      # Add CJK coverage only after the historical DejaVu baseline check.
+      - name: Install evidence fonts and PDF preview tools
+        if: ${{ !cancelled() }}
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends fontconfig fonts-noto-cjk poppler-utils
+      - name: Render quality corpus and check semantic content
+        if: ${{ !cancelled() }}
+        run: bash scripts/smoke-test.sh /tmp/ci-quality
+      - name: Upload full geometry and format evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-quality-${{ github.sha }}
+          path: |
+            /tmp/ci-smoke
+            /tmp/ci-quality
+          retention-days: 14
+          if-no-files-found: warn
 
   demo-sync:
     name: Demo assets in sync
@@ -91,3 +110,11 @@ jobs:
         run: bash scripts/make-demo.sh /tmp/ci-demos
       - name: Check committed demos match the renderer
         run: bash scripts/check-demos.sh /tmp/ci-demos
+      - name: Upload regenerated demos for review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-evidence-${{ github.sha }}
+          path: /tmp/ci-demos
+          retention-days: 14
+          if-no-files-found: warn
