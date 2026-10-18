@@ -68,7 +68,7 @@ def cases():
     add('flowchart', 'two flat groups', 'flowchart LR\nsubgraph First\nA[One]\nend\nsubgraph Second\nB[Two]\nend\nA --> B', 'Display two separately bounded titled groups, with correct membership and one intergroup edge.', {'texts':['First','Second','One','Two'], 'group_count':2, 'edge_count':1})
     add('flowchart', 'nested groups rejection', 'flowchart LR\nsubgraph Outer\nA[Before]\nsubgraph Inner\nB[Inside]\nend\nend', 'Reject unsupported nesting explicitly, naming Inner and Outer; never silently flatten ownership.', {'error':'Nested subgraphs are not supported'}, True)
     add('flowchart', 'group border edge label', 'flowchart TD\nsubgraph Review\nA[An intentionally long review label that exercises measured node width] --> B[承認待ち 日本語 中文]\nend\nB -->|approved| C[Release]', 'Keep the approved label clear of the Review border so the outgoing edge and group membership remain legible.', {'texts':['approved','Review','Release'], 'group_label_clear':True})
-    add('flowchart', 'reverse cycle routing', 'flowchart LR\nA[Queued] --> B[Running]\nB -->|retry| A\nB --> C[Finished]', 'Draw independently distinguishable outgoing and return routes with arrowheads at their correct targets.', {'texts':['retry'], 'edge_count':3, 'distinct_routes':True})
+    add('flowchart', 'reverse cycle routing', 'flowchart LR\nA[Queued] --> B[Running]\nB -->|retry| A\nB --> C[Finished]', 'Draw independently distinguishable outgoing and return routes with arrowheads at their correct targets; asymmetric branching labels remain separately readable.', {'texts':['retry'], 'edge_count':3, 'distinct_routes':True, 'branch_labels':True})
     for direction in ['TD','BT','LR','RL']:
         add('flowchart', 'self loop '+direction, f'flowchart {direction}\nA[Running] -->|heartbeat| A', 'Draw a visible external loop with target arrow aligned to the final curve tangent, no clipping and readable label clearance. Marker tips meet the actual supported node outline.', {'texts':['Running','heartbeat'], 'self_loop':True, 'shaped_loops':direction=='TD'})
     add('flowchart', 'self loop endpoint markers', 'flowchart LR\nA[Running] o--o A', 'Preserve both circle endpoints on a self-loop, as on an ordinary edge.', {'self_markers':2})
@@ -284,6 +284,38 @@ def validate(case, root):
             paths += [points(e) for e in elements if tag(e)=='polyline']
         canon=[min(tuple(p),tuple(reversed(p))) for p in paths]
         need(len(canon)==len(set(canon)), 'Coincident same/reverse routes: '+str(paths))
+    if checks.get('branch_labels'):
+        pill_elements=[e for e in elements if tag(e)=='rect' and e.attrib.get('stroke-width')=='0.5']
+        pills=[rect(e) for e in pill_elements]
+        need(len(pills)==2,'Expected separate Ready/Revise label pills')
+        if boxes: need(all(e.attrib['fill']==boxes[0].attrib['fill'] for e in pill_elements),'Branch label background does not match the opaque diagram surface')
+        nodes=['Draft','Review','Publish','Improve','Archive']
+        if all(node in textby for node in nodes):
+            relations=[tuple(min(nodes,key=lambda node:math.dist(endpoint,xy(node))) for endpoint in [points(route)[0],points(route)[-1]]) for route in routes]
+            need(Counter(relations)==Counter([('Draft','Review'),('Review','Publish'),('Review','Improve'),('Improve','Review'),('Publish','Archive')]),f'Branch/cycle endpoint semantics changed: {relations}')
+        markers=[points(e) for e in polygons if len(points(e))==3]
+        need(len(markers)==5,'Expected one arrowhead for each branch/cycle relation')
+        for route in routes:
+            ps=points(route); endpoint=ps[-1]
+            previous=next((p for p in reversed(ps[:-1]) if math.dist(p,endpoint)>.1),endpoint)
+            arrow=next((p for p in markers if math.dist(p[0],endpoint)<.1),None)
+            need(arrow is not None,'Branch/cycle route lacks its target arrowhead')
+            if arrow:
+                base=tuple((arrow[1][i]+arrow[2][i])/2 for i in [0,1])
+                need(sum((endpoint[i]-previous[i])*(arrow[0][i]-base[i]) for i in [0,1])>0,'Branch/cycle arrowhead opposes final tangent')
+        for i,pill in enumerate(pills):
+            for other in pills[i+1:]: need(not overlap(pill,other),f'Branch label pills overlap: {pill}, {other}')
+            for node in boxes: need(not overlap(pill,rect(node)),f'Branch label pill overlaps node: {pill}, {rect(node)}')
+            # SVG paint order is observable: a later intersecting stroke covers
+            # the opaque pill and its text even when pill geometry is separate.
+            for route in routes:
+                ps=points(route)
+                intersects=any(overlap(pill,(min(a[0],b[0])-.5,min(a[1],b[1])-.5,abs(a[0]-b[0])+1,abs(a[1]-b[1])+1)) for a,b in zip(ps,ps[1:]))
+                if intersects: need(elements.index(route)<elements.index(pill_elements[i]),'Later route stroke overpaints branch label background/text')
+            for marker in polygons:
+                # Only triangle arrowheads; the Review diamond is the node outline.
+                if len(points(marker))==3:
+                    need(not any(contains(pill,p) for p in points(marker)),'Branch label covers an arrowhead')
     if 'group_count' in checks: need(len(groups)==checks['group_count'],'Wrong flat group count')
     if 'group' in checks and groups and all(t in textby for t in checks['group']):
         a,b,out=checks['group']; need(contains(rect(groups[0]),xy(a)) and contains(rect(groups[0]),xy(b)) and not contains(rect(groups[0]),xy(out)), 'Incorrect spatial group membership')
@@ -301,6 +333,7 @@ def validate(case, root):
             dot=(end[0]-cp2[0])*(ps[0][0]-base[0])+(end[1]-cp2[1])*(ps[0][1]-base[1])
             need(dot>0,f'Self-loop arrow points against final curve tangent: dot={dot}, final={cp2}->{end}, triangle={ps}')
         label_boxes=[e for e in elements if tag(e)=='rect' and e.attrib.get('stroke-width')=='0.5']
+        if label_boxes and boxes: need(all(e.attrib['fill']==boxes[0].attrib['fill'] for e in label_boxes),'Self-loop label background does not match the opaque diagram surface')
         if curves and label_boxes:
             vals=list(map(float,re.findall(r'-?\d+(?:\.\d+)?',curves[0].attrib['d']))); r=rect(label_boxes[0]); hits=0
             for i in range(1,100):
@@ -441,7 +474,7 @@ def validate(case, root):
 
 
 def test(selected, phase):
-    supported=set('activation arrows class_relation control direction distinct_routes edge_count er_cards er_dashed error exact_text_count exports group group_count group_label_clear head italic local_sentinels markdown multiline nested_activation nested_state no_text self_loop self_markers sequence_arrows sequence_note sequence_op sequence_self shape shaped_loops state_arrows state_group state_note state_self stderr style tail text_bounds texts'.split())
+    supported=set('activation arrows branch_labels class_relation control direction distinct_routes edge_count er_cards er_dashed error exact_text_count exports group group_count group_label_clear head italic local_sentinels markdown multiline nested_activation nested_state no_text self_loop self_markers sequence_arrows sequence_note sequence_op sequence_self shape shaped_loops state_arrows state_group state_note state_self stderr style tail text_bounds texts'.split())
     for case in selected:
         unknown=set(case['checks'])-supported
         if unknown: raise ValueError(f'{case["id"]}: unimplemented audit checks {sorted(unknown)}')
@@ -473,11 +506,24 @@ def test(selected, phase):
             try:
                 root=ET.parse(str(stem)+'.fragment.svg').getroot(); width,height=float(root.attrib['width']),float(root.attrib['height'])
                 assert math.isfinite(width) and math.isfinite(height) and width>0 and height>0
-                failures,notes=validate(case,root)
+                failures,notes=validate({'checks':{k:v for k,v in checks.items() if k!='branch_labels'}},root)
                 ET.parse(str(stem)+'.svg')
             except Exception as error: failures.append('SVG validation error: '+repr(error))
             if checks.get('stderr') and checks['stderr'] not in api.stderr: failures.append('Missing expected warning '+checks['stderr'])
             if case['boundary'] and not checks: failures.append('Outside-subset syntax was silently accepted instead of diagnosed')
+        if checks.get('branch_labels'):
+            # Same asymmetric graph as showcase-flow.mmd, retained here so the audit
+            # remains independently reproducible without a generated showcase file.
+            variant=Path(str(stem)+'-branch-labels'); variant_source=variant.with_suffix('.mmd')
+            variant_source.write_text('flowchart LR\nA([Draft]) --> B{Review}\nB -->|Ready| C[Publish]\nB -->|Revise| D[Improve]\nD --> B\nC --> E[(Archive)]\n')
+            result=run_command([str(probe),str(variant_source),str(variant)],Path(str(variant)+'.api.log'))
+            rendered=run_command([str(target/'markie-mermaid'),str(variant_source),'-o',str(variant)+'.svg'],Path(str(variant)+'.cli.log'))
+            if result.returncode or rendered.returncode: failures.append('Branch-label graph API/CLI failed')
+            else:
+                for suffix in ['.fragment.svg','.svg']:
+                    variant_root=ET.parse(str(variant)+suffix).getroot()
+                    extra,_=validate({'checks':{'texts':['Ready','Revise','Draft','Review','Publish','Improve','Archive'],'edge_count':5,'distinct_routes':True,'branch_labels':True}},variant_root)
+                    failures.extend(extra)
         if checks.get('shaped_loops'):
             for direction in ['LR','TD']:
                 for shape,node in [('diamond','A{Running}'),('circle','A((Running))')]:
@@ -547,6 +593,7 @@ def test(selected, phase):
         if status=='passed' and phase=='targeted': status='retesting'
         verdict='failed: ' if failures else ('unsupported: ' if case['boundary'] else ('passed: ' if phase=='full' else phase+': passed '))
         row={'id':ident,'status':status,'test_command':PREFIX+f'python3 tests/audit/mermaid/run.py test --phase {phase} --case {ident}', 'evidence':str(stem.relative_to(ROOT))+'.{mmd,ast.txt,fragment.svg,svg,api.log,cli.log}', 'retest':verdict+'public API + standalone CLI '+stamp}
+        if checks.get('branch_labels'): row['evidence']+='; '+str(stem.relative_to(ROOT))+'-branch-labels.{mmd,ast.txt,fragment.svg,svg,api.log,cli.log}'
         if failures: row['errors']=phase+' '+stamp+'; severity='+('high' if case['area'] in ['class','state','er'] else 'medium')+'; expected='+case['expected']+'; actual='+' | '.join(failures)+'; repro='+row['test_command']
         results.append(dict(case=ident,feature=case['feature'],area=case['area'],status=status,failures=failures,notes=notes,stem=str(stem.relative_to(ROOT))))
         Path(str(stem)+'.result.json').write_text(json.dumps(results[-1],indent=2,ensure_ascii=False)+'\n')

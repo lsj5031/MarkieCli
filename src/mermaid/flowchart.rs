@@ -23,6 +23,12 @@ pub fn render_flowchart(
     let mut svg = String::new();
     let padding = 20.0;
     let mut extents = vec![Rect::new(bbox.x, bbox.y, bbox.width, bbox.height)];
+    let mut occupied_labels = Vec::new();
+    let mut labels = String::new();
+    let node_bounds: Vec<Rect> = positions
+        .values()
+        .map(|pos| Rect::new(pos.x, pos.y, pos.width, pos.height).with_padding(8.0))
+        .collect();
     let group_bounds: Vec<Rect> = flowchart
         .subgraphs
         .iter()
@@ -84,9 +90,14 @@ pub fn render_flowchart(
                 route_total: pair_totals[&key],
                 extents: &mut extents,
                 group_bounds: &group_bounds,
+                occupied_labels: &mut occupied_labels,
+                node_bounds: &node_bounds,
+                labels: &mut labels,
             }));
         }
     }
+    // Label backgrounds must also cover routes belonging to later edges.
+    svg.push_str(&labels);
 
     // Draw nodes on top
     for node in &flowchart.nodes {
@@ -365,6 +376,9 @@ struct RenderEdgeContext<'a, T: TextMeasure> {
     route_total: usize,
     extents: &'a mut Vec<Rect>,
     group_bounds: &'a [Rect],
+    occupied_labels: &'a mut Vec<Rect>,
+    node_bounds: &'a [Rect],
+    labels: &'a mut String,
 }
 
 fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
@@ -479,22 +493,24 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
             } else {
                 from.y - loop_radius * 1.5 - 10.0
             };
-            ctx.extents.push(Rect::new(
+            let label_bounds = Rect::new(
                 label_x - 2.0,
                 label_y - style.font_size * 0.7,
                 label_w + 4.0,
                 style.font_size * 1.1,
-            ));
-            svg.push_str(&format!(
+            );
+            ctx.extents.push(label_bounds);
+            ctx.occupied_labels.push(label_bounds);
+            ctx.labels.push_str(&format!(
                 r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="4" fill="{}" stroke="{}" stroke-width="0.5" />"#,
                 label_x - 2.0,
                 label_y - style.font_size * 0.7,
                 label_w + 4.0,
                 style.font_size * 1.1,
-                style.background,
+                style.node_fill,
                 style.node_stroke
             ));
-            svg.push_str(&format!(
+            ctx.labels.push_str(&format!(
                 r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="start">{}</text>"#,
                 label_x, label_y, style.font_family, style.font_size * 0.82, style.edge_text, escaped
             ));
@@ -702,24 +718,70 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
                 }
             }
         }
-        ctx.extents.push(Rect::new(
+        let mut label_bounds = Rect::new(
             label_x - pill_w / 2.0,
             label_y - pill_h / 2.0,
             pill_w,
             pill_h,
-        ));
+        );
+        if ctx
+            .occupied_labels
+            .iter()
+            .any(|other| label_bounds.with_padding(4.0).overlaps(other))
+        {
+            // Prefer moving along the label's route segment, keeping it nearby.
+            // Expanding the search also lets dense branches escape node/group borders.
+            let horizontal = points.len() < 2 || (points[mid - 1].1 - points[mid].1).abs() < 0.1;
+            let mut radius = 1.0;
+            'search: loop {
+                let dx = (pill_w + 8.0) * radius;
+                let dy = (pill_h + 8.0) * radius;
+                let mut offsets = [(dx, 0.0), (-dx, 0.0), (0.0, dy), (0.0, -dy)];
+                if !horizontal {
+                    offsets.rotate_left(2);
+                }
+                for (dx, dy) in offsets {
+                    let candidate =
+                        Rect::new(label_bounds.x + dx, label_bounds.y + dy, pill_w, pill_h);
+                    let clear = !ctx
+                        .occupied_labels
+                        .iter()
+                        .any(|other| candidate.with_padding(4.0).overlaps(other))
+                        && !ctx.node_bounds.iter().any(|node| candidate.overlaps(node))
+                        && !ctx.group_bounds.iter().any(|group| {
+                            [
+                                Rect::new(group.x, group.y, group.w, 0.0),
+                                Rect::new(group.x, group.y + group.h, group.w, 0.0),
+                                Rect::new(group.x, group.y, 0.0, group.h),
+                                Rect::new(group.x + group.w, group.y, 0.0, group.h),
+                            ]
+                            .iter()
+                            .any(|border| candidate.overlaps(&border.with_padding(4.0)))
+                        });
+                    if clear {
+                        label_x += dx;
+                        label_y += dy;
+                        label_bounds = candidate;
+                        break 'search;
+                    }
+                }
+                radius += 1.0;
+            }
+        }
+        ctx.extents.push(label_bounds);
+        ctx.occupied_labels.push(label_bounds);
 
-        svg.push_str(&format!(
+        ctx.labels.push_str(&format!(
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="4" fill="{}" stroke="{}" stroke-width="0.5" />"#,
             label_x - pill_w / 2.0,
             label_y - pill_h / 2.0,
             pill_w,
             pill_h,
-            style.background,
+            style.node_fill,
             style.node_stroke
         ));
 
-        svg.push_str(&format!(
+        ctx.labels.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" dy="0.35em" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
             label_x,
             label_y,
@@ -975,6 +1037,9 @@ mod tests {
             route_total: 1,
             extents: &mut Vec::new(),
             group_bounds: &[],
+            occupied_labels: &mut Vec::new(),
+            node_bounds: &[],
+            labels: &mut String::new(),
         });
 
         let pts = first_polygon_points(&svg);
