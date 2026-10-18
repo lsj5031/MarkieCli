@@ -34,6 +34,37 @@ pub trait TextMeasure {
 /// - Automatic LRU eviction to manage memory
 static GLOBAL_FONT_SYSTEM: LazyLock<GlobalFontSystem> = LazyLock::new(GlobalFontSystem::new);
 
+/// Resolve the actual generic faces used by measurement, including fallback
+/// when a system's configured generic family is unavailable.
+pub(crate) fn default_font_families() -> (Option<String>, Option<String>) {
+    let mut fonts = GLOBAL_FONT_SYSTEM.font_system.lock();
+    if fonts.db().faces().next().is_none() {
+        return (None, None);
+    }
+    let mut resolve = |family| {
+        let mut buffer = Buffer::new(&mut fonts, Metrics::new(16.0, 19.2));
+        buffer.set_text(
+            &mut fonts,
+            "M",
+            &Attrs::new().family(family),
+            Shaping::Advanced,
+            None,
+        );
+        let id = buffer
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter())
+            .next()?
+            .font_id;
+        fonts
+            .db()
+            .face(id)?
+            .families
+            .first()
+            .map(|(name, _)| name.clone())
+    };
+    (resolve(Family::SansSerif), resolve(Family::Monospace))
+}
+
 struct GlobalFontSystem {
     font_system: Mutex<FontSystem>,
     cache: Mutex<LruCache<MeasureKey, (f32, f32)>>,

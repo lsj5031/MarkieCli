@@ -156,7 +156,7 @@ for area, mode, expected in [
     ('fonts', 'font-size', 'Doubling font size substantially increases measured width and height.'),
     ('fonts', 'font-wrap', 'Public measurement respects max_width and increases wrapped height.'),
     ('fonts', 'font-cache', 'Two measurement instances return equal results for identical queries.'),
-    ('fonts', 'font-styles', 'Code, bold and italic queries return finite positive metrics.'),
+    ('fonts', 'font-styles', 'Code, bold and italic metrics are finite; normal/bold sans and mono PNG glyph widths agree with measured advances in the full host-font environment.'),
     ('xml', 'xml', 'Escape all five XML entities and strip invalid characters while preserving valid Unicode/whitespace.'),
     ('themes', 'theme-errors', 'Library builtin, TOML and YAML failures retain specific parse context.'),
 ]:

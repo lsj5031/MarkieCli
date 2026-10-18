@@ -68,7 +68,7 @@ def dimensions(path):
     return float(root.attrib['width']), float(root.attrib['height'])
 
 
-def visible(path):
+def visible(path, expected_advance=None):
     # PNG visibility check without third-party Python packages. Decode the
     # 8-bit RGB/RGBA scanlines produced by resvg and Poppler, including filters.
     import zlib
@@ -89,6 +89,7 @@ def visible(path):
     decoded = zlib.decompress(compressed)
     previous = bytearray(stride)
     colors = set()
+    ink_columns = set()
     for y in range(height):
         start = y * (stride+1)
         filter_type = decoded[start]
@@ -112,9 +113,19 @@ def visible(path):
                 assert filter_type == 0
             row[i] = (row[i]+predictor) % 256
         colors.update(bytes(row[i:i+channels]) for i in range(0, stride, channels))
-        if len(colors) > 4:
+        if expected_advance is not None:
+            assert channels == 4, 'font advance probe requires transparent RGBA'
+            ink_columns.update(i//channels for i in range(0, stride, channels) if row[i+3])
+        elif len(colors) > 4:
             return
         previous = row
+    if expected_advance is not None:
+        assert ink_columns, 'missing glyph ink'
+        actual = max(ink_columns)-min(ink_columns)+1
+        # Ten capital Ms have little side-bearing; allow half one em for
+        # rasterization/bearings, not the much narrower condensed face.
+        assert abs(actual-expected_advance) < 17.6, (path.name, actual, expected_advance)
+        return
     raise AssertionError(f'{path.name}: only {len(colors)} colors; no visible content')
 
 
@@ -173,6 +184,11 @@ def run(c, d, logs):
         result = invoke([str(public_probe(logs)), c['mode']], d)
         logs.append(result)
         assert result['returncode'] == 0, result
+        if c['mode'] == 'font-styles':
+            probes = [line.split(':') for line in result['stdout'].splitlines() if line.startswith('family-advance:')]
+            assert len(probes) == 4, 'missing host-family advance probes'
+            for _, name, advance in probes:
+                visible(d / (name+'.png'), expected_advance=float(advance))
         if c['mode'] == 'math-escaped-script':
             expressions = {}
             for line in result['stdout'].splitlines():

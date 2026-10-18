@@ -105,28 +105,6 @@ pub fn save_output(svg: &str, output: &Path, png_scale: f32) -> Result<(), Strin
     Ok(())
 }
 
-/// Pick fallback families using names and font metadata.
-fn pick_fallback_families<'a>(
-    families: impl Iterator<Item = &'a (String, String, bool)>,
-) -> (Option<String>, Option<String>, Option<String>) {
-    let mut sans_family: Option<String> = None;
-    let mut serif_family: Option<String> = None;
-    let mut mono_family: Option<String> = None;
-    for (family, lower, is_mono) in families {
-        if sans_family.is_none() && lower.contains("sans") && !*is_mono {
-            sans_family = Some(family.clone());
-        }
-        if serif_family.is_none() && lower.contains("serif") && !*is_mono {
-            serif_family = Some(family.clone());
-        }
-        if mono_family.is_none() && *is_mono {
-            mono_family = Some(family.clone());
-        }
-    }
-
-    (sans_family, serif_family, mono_family)
-}
-
 /// Configure generic-family fallbacks on a font database. The resvg (PNG) and
 /// svg2pdf (PDF) paths pull in different usvg versions, so their
 /// `fontdb::Database` types are unrelated and can't be unified through a shared
@@ -142,7 +120,11 @@ macro_rules! configure_font_fallbacks {
             })
             .collect();
 
-        let (sans_family, serif_family, mono_family) = pick_fallback_families(families.iter());
+        let (sans_family, mono_family) = crate::fonts::default_font_families();
+        let serif_family = families
+            .iter()
+            .find(|(_, lower, mono)| lower.contains("serif") && !mono)
+            .map(|(family, _, _)| family.clone());
         let first_family = families
             .iter()
             .find(|(_, _, mono)| !mono)

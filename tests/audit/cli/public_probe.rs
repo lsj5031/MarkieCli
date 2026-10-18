@@ -106,6 +106,17 @@ fn main() {
                         let styled = measure.measure_text(sample, 16.0, code, bold, italic, None);
                         assert!(styled.0.is_finite() && styled.0 > 0.0 && styled.1 > 0.0);
                     }
+                    for (code, family) in [(false, "sans-serif"), (true, "monospace")] {
+                        for bold in [false, true] {
+                            let text = "MMMMMMMMMM";
+                            let advance = measure.measure_text(text, 35.2, code, bold, false, None).0;
+                            let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="600" height="90"><text x="10" y="60" font-size="35.2" font-family="{family}" font-weight="{}">{text}</text></svg>"#, if bold {700} else {400});
+                            let png = markie::export::svg_to_png(&svg, 1.0).unwrap();
+                            let name = format!("host-{family}-{bold}");
+                            std::fs::write(format!("{name}.png"), png).unwrap();
+                            println!("family-advance:{name}:{advance}");
+                        }
+                    }
                     normal
                 }
             };
