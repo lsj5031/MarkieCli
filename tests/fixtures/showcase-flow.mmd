@@ -1,0 +1,6 @@
+flowchart LR
+    A([Draft]) --> B{Review}
+    B -->|Ready| C[Publish]
+    B -->|Revise| D[Improve]
+    D --> B
+    C --> E[(Archive)]

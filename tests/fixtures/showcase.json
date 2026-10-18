@@ -1,0 +1,51 @@
+[
+  {
+    "id": "MD-031",
+    "title": "A document, ready to share",
+    "description": "Tasks, tables and highlighted code travel together in a single rendered document.",
+    "image": ".amp/in/artifacts/feature-audit/showcase/document.png",
+    "command": "markie tests/fixtures/showcase.md -o document.png --width 1000 --png-scale 1"
+  },
+  {
+    "id": "CLI-144",
+    "title": "Keep the mathematics with the prose",
+    "description": "Scripts, fractions, roots, aligned equations and matrices render inside the document.",
+    "image": ".amp/in/artifacts/feature-audit/showcase/math.png",
+    "command": "markie tests/fixtures/showcase-math.md -o math.png --width 1000 --png-scale 1"
+  },
+  {
+    "id": "MER-095",
+    "title": "Explain a decision and its feedback loop",
+    "description": "Native flowcharts retain shape boundaries, route direction and labeled relationships.",
+    "image": ".amp/in/artifacts/feature-audit/showcase/flow.png",
+    "command": "markie-mermaid tests/fixtures/showcase-flow.mmd -o flow.png --png-scale 2"
+  },
+  {
+    "id": "MER-128",
+    "title": "Make a workflow easy to follow",
+    "description": "Sequence diagrams show participants, requests, replies and explicit activation spans.",
+    "image": ".amp/in/artifacts/feature-audit/showcase/sequence.png",
+    "command": "markie-mermaid tests/fixtures/showcase-sequence.mmd -o sequence.png --png-scale 2"
+  },
+  {
+    "id": "MER-189",
+    "title": "Put relationships in the picture",
+    "description": "Entity diagrams keep attributes and cardinalities beside the model they describe.",
+    "image": ".amp/in/artifacts/feature-audit/showcase/er.png",
+    "command": "markie-mermaid tests/fixtures/showcase-er.mmd -o er.png --png-scale 2"
+  },
+  {
+    "id": "CLI-112",
+    "title": "Change the theme, keep the source",
+    "description": "The same Markdown document can become a dark team update or a light review packet.",
+    "image": ".amp/in/artifacts/feature-audit/showcase/nord.png",
+    "command": "markie tests/fixtures/showcase.md -t nord -o nord.png --width 1000 --png-scale 1"
+  },
+  {
+    "id": "CLI-051",
+    "title": "From source to a review packet",
+    "description": "Export the same content as PDF, alongside vector SVG and high-resolution PNG.",
+    "image": ".amp/in/artifacts/feature-audit/showcase/document-pdf.png",
+    "command": "markie tests/fixtures/showcase.md -o document.pdf --width 1000"
+  }
+]

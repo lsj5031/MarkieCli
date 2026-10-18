@@ -90,6 +90,24 @@ The helpers are `tests/audit/markdown/preview.py ARTIFACT_BATCH_DIRECTORY`,
 `tests/audit/cli/visuals.py fixed`, and
 `tests/audit/mermaid/render_evidence.py --run ARTIFACT_BATCH_DIRECTORY`.
 
+After the selected stories have fresh passed retests, recreate the product tour
+with the same caller build environment and the media dependencies above:
+
+```sh
+.amp/in/media-tools/bin/python -B scripts/make-showcase.py \
+  tests/fixtures/showcase.json .amp/in/artifacts/feature-audit/showcase
+```
+
+The manifest names the seven workflows, committed inputs, commands and output
+images. The generator rejects unverified rows, builds current Cargo binaries,
+rerenders every selected command into fresh outputs, rasterizes the PDF preview,
+and encodes individual clips plus an 80-second 1920×1080/24fps H.264 tour. It
+records actual commands in `showcase/commands.json` and writes a PNG storyboard.
+Inspect frames from the encoded video and exercise browser playback; a storyboard
+alone is not playback verification. This is a captioned tour of actual outputs,
+not a recording of terminal interaction. Regeneration does not append test events
+or select CSV rows; the coordinator owns the final showcase selection.
+
 ```json
 [
   {

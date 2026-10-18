@@ -1,0 +1,11 @@
+sequenceDiagram
+    participant A as Author
+    participant C as Native CLI
+    participant R as Reviewer
+    A->>C: Markdown source
+    activate C
+    C->>C: Layout text and diagrams
+    C-->>A: SVG, PNG or PDF
+    deactivate C
+    A->>R: Share rendered output
+    R-->>A: Review feedback

@@ -1,0 +1,15 @@
+erDiagram
+    AUTHOR ||--o{ DOCUMENT : writes
+    DOCUMENT ||--|{ EXPORT : produces
+    AUTHOR {
+        string name
+        string email
+    }
+    DOCUMENT {
+        string title
+        string source
+    }
+    EXPORT {
+        string format
+        string path
+    }

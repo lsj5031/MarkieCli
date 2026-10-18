@@ -8,14 +8,14 @@ Accepted input is not a guarantee of unclipped text or collision-free routing.
 
 | Area | Intended support | Boundary |
 | --- | --- | --- |
-| Markdown | Headings, paragraphs, emphasis, code, lists/tasks, quotes, links, tables, footnotes, definition lists, images | Links are colored text. Metadata is ignored. Wide tables and long unbroken content need visual review at the intended width. |
+| Markdown | Headings, paragraphs, emphasis, code, lists/tasks, quotes, links, tables, footnotes, definition lists, images | Links are colored text. Metadata is ignored. Width must leave room for padding and four body ems (128px with the default theme). Very dense tables can become intrinsically tiny; inspect at the intended width. |
 | HTML | Basic inline styling, superscript/subscript, underline, mark, font color | HTML blocks display as code; arbitrary CSS and rich HTML layouts are outside scope. |
 | Math | Inline/display LaTeX-style expressions, including roots, fractions, binomials and matrices | A subset translated through MathML, not a TeX engine. Inspect complex expressions. |
-| Flowchart | `flowchart`/`graph`, TD/TB/BT/LR/RL, node shapes, labeled edges, solid/dotted/thick and arrow variants, flat subgraphs | Nested subgraphs are explicitly rejected. `<br>`, `<br/>`, `<br />` are node-label line breaks. Labels do not gain automatic word wrapping just because document width is narrow. |
-| Sequence | Participants, messages/replies, notes, activation/deactivation, `alt`/`opt`/`loop`/`par`/`critical` blocks with `else`/`end` | This names implemented constructs, not full Mermaid compatibility or a layout guarantee for every nesting combination. |
-| Class | Classes, attributes/methods, relationships | Use the examples in the smoke fixture as the minimum exercised subset. |
-| State | States, transitions, composite children and notes | Basic transitions are in the corpus; complex composite layout is not certified by it. |
-| ER | Entities, attributes, cardinality relationships | Basic entity relationships are in the corpus; this is not a schema validator. |
+| Flowchart | `flowchart`/`graph`, TD/TB/BT/LR/RL, node shapes, labeled edges, solid/dotted/thick and arrow variants, flat subgraphs | Nested subgraphs, chained/fanout edges, semicolon-separated statements, style/local-direction directives and asymmetric shapes are rejected. Use one explicit node or edge per line. `<br>`, `<br/>`, `<br />` are node-label line breaks; automatic label wrapping is outside scope. |
+| Sequence | Declared participants, messages/replies, single-participant notes, explicit activation/deactivation, `alt`/`opt`/`loop`/`par`/`critical` blocks with `else`/`end` | Declare every participant. Actors, implicit participants, multi-participant notes, inline activation and standard `and` branches are rejected. Bare `->`/`-->` have no head; `->>`/`-->>` use a filled head, `-)`/`--)` an open async head, and `-x`/`--x` a cross. |
+| Class | Explicit classes, attributes/methods, relationships | Implicit classes, quoted multiplicities, reverse realization, static/abstract member suffixes and trailing return types without `: Type` are rejected. |
+| State | States, aliases, transitions, composite children, local start/end sentinels and positioned notes | Cross-boundary child transitions are rejected; connect the composite state instead. Nested containment and self-transitions have regression coverage, not a guarantee of collision-free arbitrary graphs. |
+| ER | Entities, attributes, all four endpoint cardinalities, solid and dotted relationships | This is not a schema validator. Key annotations beyond the native leading-star convention are outside the supported subset. |
 
 Unknown families (for example `pie`, `gantt`, `journey`) produce an unsupported
 diagram error. An unsupported Mermaid block fails the document render; the CLI
@@ -24,6 +24,15 @@ empty diagram. Rejection of unknown families and nested subgraphs does **not**
 mean every unsupported statement inside a recognized family is rejected:
 parsing remains permissive in places. Do not depend on Mermaid `init` directives
 to configure theme/layout; `%%` comment lines are skipped. Use Markie's theme CLI.
+
+For images, relative local PNG/JPEG/SVG and supported base64 data URLs are the
+intended subset. Remote fetches, unsupported formats/data URLs, and paths outside
+the input directory are not an image-loading feature. Rejected or unavailable
+images preserve meaningful alt text and diagnostics; table images use alt text
+inside the cell. Symlinks are resolved before checking the local path boundary.
+SVG styling values are XML-escaped at emission, including values supplied through
+public `Theme`/`DiagramStyle` APIs. Usable system fonts or valid `./fonts` files
+are required; missing fonts produce an actionable error.
 
 ## Repeatable validation
 
@@ -113,9 +122,10 @@ over committed files merely to make CI green.
 
 ## Bounded feature-trimming assessment
 
-These are recommendations, not removals. No usage telemetry or dependency-size
-benchmark was collected, so there is no evidence here for deleting an entire
-diagram family or export format.
+This initial assessment preceded the full [feature audit](feature-audit-report.md).
+No usage telemetry or dependency-size benchmark was collected, so there is no
+evidence here for deleting an entire diagram family or export format. The feature
+audit records subsequent fixes and deliberate unsupported-syntax diagnostics.
 
 | Recommendation | Evidence and user impact | Compatibility cost |
 | --- | --- | --- |
@@ -124,7 +134,11 @@ diagram family or export format.
 | Qualify "complete Markdown" and "production-ready PDF" advertising | HTML blocks are code, metadata is ignored, and PDF uses text-as-paths. The corpus is a small evidence set, not broad document conformance. | No rendering change. Users needing searchable/selectable PDF text or browser HTML layout should choose another workflow. |
 | Keep existing formats and five families for now | Existing smoke fixtures already exercise them; no evidence establishes that one is unused or disproportionately expensive. | Removing one would invalidate real existing examples and CLI workflows. Require usage and maintenance evidence before proposing deletion. |
 
-## Reviewed findings and observed limits
+## Initial quality-corpus findings and observed limits
+
+This section preserves the original corpus observations before the full feature
+audit. It is historical evidence; use the [audit report](feature-audit-report.md)
+and canonical story ledger for current fix and retest results.
 
 The three source-review findings were checked against the starting revision
 and the parser work accompanying this corpus:
