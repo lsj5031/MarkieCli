@@ -719,6 +719,7 @@ dependencies = [
  "syntect",
  "tiny-skia 0.12.0",
  "toml",
+ "unicode-segmentation",
  "ureq",
 ]
 

@@ -46,6 +46,7 @@ lru = "0.13"
 parking_lot = "0.12"
 svg2pdf = "0.13"
 clap_complete = "4.5"
+unicode-segmentation = "1.12"
 
 [dev-dependencies]
 proptest = "1.5"
