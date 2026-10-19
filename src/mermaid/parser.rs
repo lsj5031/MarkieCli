@@ -154,10 +154,10 @@ fn parse_flowchart(input: &str) -> Result<Flowchart, String> {
                         shape: parsed.shape,
                     });
                 }
-                if let Some(sg) = &mut current_subgraph {
-                    if !sg.nodes.contains(&parsed.id) {
-                        sg.nodes.push(parsed.id);
-                    }
+                if let Some(sg) = &mut current_subgraph
+                    && !sg.nodes.contains(&parsed.id)
+                {
+                    sg.nodes.push(parsed.id);
                 }
             }
             edges.extend(parsed_edges);
