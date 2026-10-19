@@ -1,10 +1,12 @@
 # MarkieCli feature audit
 
-Status: complete.
+Status: complete. Native macOS fixes passed native acceptance; all replacement Linux executions and owner publication are finished.
 
-Native follow-up verification is complete: Windows passed the exercised contracts;
-macOS failed runtime/visual acceptance with four open font/layout defects below.
-The 546 verified stories in the canonical inventory describe the Linux audit.
+The native baseline reproduced four macOS font/layout defects. Their integrated
+fixes now pass the exercised Apple Silicon Mac and Windows contracts, including
+actual PNG/PDF inspection. Baseline failures and diagnostic controls remain below
+as historical evidence. Canonical story counts describe the Linux audit;
+native-platform acceptance has separate receipts.
 
 The canonical story inventory and live status are in
 [`feature-audit.csv`](feature-audit.csv). This report records decisions and final
@@ -321,7 +323,7 @@ snapshot's 1,707 error/fix/retest history fields remain preserved prefixes, and
 all seven showcase values are unchanged. The final CSV and source manifests
 are archived beside that receipt.
 
-## Native macOS and Windows follow-up
+## Native macOS and Windows baseline
 
 Both platforms executed the exact pushed
 [revision 22844b3](https://github.com/lsj5031/MarkieCli/commit/22844b369ccee0b56096da13cc1ac629b946ede2)
@@ -350,7 +352,7 @@ builds and ran ten commands, including six exports, from a spaced working
 directory. A separate Linux source installation also passed ten installed-binary
 commands and six exports from a Unicode/spaced path on Rust 1.98.1.
 
-### Open macOS defects
+### Reproduced macOS baseline defects
 
 1. **CJK code can panic or emit infinite geometry.** A one-cell table containing
    inline code `中文` exits 101 for SVG, PNG and PDF with `line height cannot be
@@ -375,9 +377,10 @@ commands and six exports from a Unicode/spaced path on Rust 1.98.1.
    overflow the table border or image boundary. See
    `macos/baseline/emoji-overflow-contact.png` and its full native outputs.
 
-These are product failures, separate from the 23 deliberately unsupported Linux
+These were product failures, separate from the 23 deliberately unsupported Linux
 stories. The optical-sizing override is a diagnostic control, not an integrated
-fix. No production font/layout changes were made during this verification pass.
+fix in the baseline. No production font/layout changes were made during that
+verification pass.
 Windows reproduces the existing muted code/sequence palette advisory, including
 the gray `github_dark` code background; this remains documented rather than
 being counted as a newly established Windows regression.
@@ -398,6 +401,90 @@ installation evidence is under `cli/native-platforms/linux-source-install`.
 Native results were not imported as replacements for Linux canonical history.
 Coverage is arm64 macOS and x64 MSVC Windows; Intel macOS, Windows ARM64/x86/GNU
 and packaged release installation remain unverified. No release was published.
+
+### Integrated native fixes and replacement verification
+
+The replacement source is frozen in
+`cli/native-platforms/native-fix-source.sha256` and
+`native-fix-source-commit.txt`. Five files changed: shared font initialization,
+both export paths, Markdown and standalone Mermaid SVG emission, and the
+Markdown audit's descendant-text reads. No dependencies, story expectations or
+unsupported boundaries changed.
+
+Measurement and both exporters now exclude fonts with missing/invalid head
+metrics or the OpenType `LAST_RESORT_FONT` flag. This removes the GB18030 Bitmap
+crash and prevents placeholder boxes from hiding a real emoji fallback. Apple
+Color Emoji remains eligible: its sbix glyphs work in both PNG and flattened PDF.
+On macOS, the static Helvetica family supplies matching regular/bold/italic
+faces; generated SVGs disable automatic optical sizing so painted advances agree
+with measurement. Non-ASCII code uses prefix-positioned Unicode word tspans.
+This avoids usvg's failed fallback merge when mixed runs shape to different
+glyph counts, while preserving exact literals, combining/ZWJ graphemes and
+joined Arabic words. No NFC normalization or glyph scaling is used.
+
+The Markdown audit now reads full parent itertext when checking code payload,
+background padding and bounds, including child tspans. Expected payloads and
+limits are unchanged. Targeted checks passed and separately rejected deleted
+Unicode content and displaced code runs rather than treating an empty parent
+text field as an empty line.
+
+| Platform | Fresh build/test gates | Fresh runtime and visual acceptance |
+| --- | --- | --- |
+| Apple Silicon macOS, Rust 1.97.1 | 146 tests including the new native spacing/CJK/colored-emoji regression; fmt, all-target Clippy with warnings denied, release bins/library, locked disposable install passed | Both eight-case smoke matrices, 150 contract commands/224 assertions and 49 additional repro/multilingual/installed commands passed. All four reproduced defects are corrected in the tested scenarios. |
+| Windows x64 MSVC, Rust 1.97.1 | 144 tests; fmt, all-target Clippy with warnings denied, debug/release bins/library, locked disposable install passed | 118 driver commands, four actual confinement probes including symlink escape, and 24 additional baseline/candidate Unicode exports passed. No new Windows regression observed. |
+
+Mac review used actual integrated outputs, separate from successful scratch
+controls. Thirty-two native PNG/PDF geometry inspections found zero missing
+glyphs or painted-cell overflow and 416 correct emoji glyphs; 16 SVGs retained
+exact parent payloads and text-node counts. Sixty-three actual PDF pages were
+rasterized. Default/narrow light/dark MD-065/066, original spacing/bold/italic/CJK,
+multilingual code, installed binaries, math and Mermaid sheets were inspected.
+The coordinator downloaded and inspected the actual spacing/CJK and MD-065/066
+sheets before acceptance. A reduced-sheet matrix concern was dismissed after
+full-size PNG/PDF inspection confirmed the intact matrix and radicals.
+
+All 87 frozen files match on the Mac. Windows matches all 87 Git-clean-content
+hashes; 78 files differ in raw bytes only through its existing CRLF checkout
+conversion. All five transferred changed files match raw hashes exactly. Source
+and binary hashes, commands, receipts and native media are served under
+`cli/native-platforms/macos/integrated` and `windows/candidate`.
+
+All 32 Windows smoke/quality PNG/PDF rasters are pixel-identical to its baseline.
+The focused fixture also exposed a pre-existing `github_light` palette problem:
+inline/table code uses foreground `#24292f` on background `#24292e`, making it
+effectively invisible in both baseline and candidate. Other reviewed themes show
+the actual CJK, accent, joined emoji and Arabic glyphs. This palette issue and
+the previously recorded faint dark code/diagram colors remain open; they are
+separate from the corrected Mac runtime/glyph defects.
+
+Fresh Linux checks and reviewed golden candidates are retained in
+`cli/native-platforms/linux-native-fix`. All seven SVG golden differences are
+exactly the added optical-sizing attribute; payloads and viewBoxes are unchanged.
+The five demo PNGs are byte-identical. The regenerated PDF only reorders two
+equivalent graphics-state dictionary entries and has identical raster pixels.
+Only the five demo SVGs and two smoke SVGs were approved for golden acceptance.
+Both accepted smoke/demo sync checks pass. Linux fmt, 145 tests, Clippy with
+warnings denied, bins/library build and eight-case SVG/PNG/PDF quality checks
+also pass. The actual isolated inventory contains only DejaVu system families;
+the executor HOME was preserved throughout.
+
+All owners finished the replacement full run and publication: Markdown executed
+137 stories/397 variants (128 passed, nine unsupported), Mermaid executed 223
+stories (209 passed, 14 unsupported), and CLI executed all 209 stories with actual
+subprocess evidence (all passed). The aggregate is 569 unique stories, 546
+verified and 23 intentionally unsupported, with zero failures. Prior histories
+and all seven showcase selections are preserved. Each owner checked all 87
+source hashes before/after execution and publication. Markdown reviewed 394 SVG
+previews and 84 native PNG/PDF exports; the previous Linux code ZWJ tofu no
+longer reproduces in table, ordinary inline or fenced code across the three
+reviewed states.
+
+Fresh batches are `markdown/retest/20261019T013411617061Z`,
+`mermaid/20261019T013414031600Z`, and `cli/native-fix-final`, each with its explicit
+publishing-finished receipt and retained commands. The independent final
+canonical/API/history snapshot is under `cli/native-platforms/native-fix-final`.
+Native acceptance remains limited to Apple Silicon macOS and Windows x64 MSVC;
+arbitrary fonts/scripts and other architectures are unverified.
 
 ## Showcase and remaining limitations
 
@@ -442,11 +529,10 @@ Remaining limits are deliberate and visible:
 - Unsupported image/syntax stories stay in the denominator and cannot become
   verified successes merely because rejection/fallback works correctly.
 - Fonts affect metrics and glyph coverage. Real usable fonts are required;
-  repository zero-byte font placeholders are not a font bundle. On this host,
-  monospace ZWJ emoji can render as missing-glyph boxes in both ordinary inline
-  code and table code, while prose uses a shaped emoji. The table extension
-  preserves the payload and matches the existing inline-code font behavior;
-  it does not add emoji coverage to the monospace font.
+  repository zero-byte font placeholders are not a font bundle. The integrated
+  fix renders the tested code ZWJ emoji on native macOS, Windows and the Linux
+  host. The DejaVu-only golden environment lacks that font coverage; arbitrary
+  installed fonts/scripts are not exhaustively certified.
 - Existing muted code/fallback colors and sequence palettes can be hard to read,
   especially Dracula and Solarized Dark. The audit corrected the confirmed
   flowchart pill contrast regression; it does not certify theme accessibility.
@@ -466,4 +552,5 @@ identity. Every published commit's author and committer resolve to that account.
 No merge, release or production installation was performed. The dashboard, CSV
 download, completed report and media remain available through the existing
 read-only service while its server and tunnel are running. The native macOS
-failures above remain open.
+baseline failures above are retained; their integrated fixes passed the tested
+native scenarios. The separate palette advisories remain open.
