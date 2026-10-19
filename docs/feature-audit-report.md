@@ -2,6 +2,10 @@
 
 Status: complete.
 
+Native follow-up verification is complete: Windows passed the exercised contracts;
+macOS failed runtime/visual acceptance with four open font/layout defects below.
+The 546 verified stories in the canonical inventory describe the Linux audit.
+
 The canonical story inventory and live status are in
 [`feature-audit.csv`](feature-audit.csv). This report records decisions and final
 results; it is not a second progress tracker.
@@ -317,6 +321,84 @@ snapshot's 1,707 error/fix/retest history fields remain preserved prefixes, and
 all seven showcase values are unchanged. The final CSV and source manifests
 are archived beside that receipt.
 
+## Native macOS and Windows follow-up
+
+Both platforms executed the exact pushed
+[revision 22844b3](https://github.com/lsj5031/MarkieCli/commit/22844b369ccee0b56096da13cc1ac629b946ede2)
+in disposable checkouts using Rust/Cargo 1.97.1, without changing their default
+toolchains or existing installations. GitHub CI also passed all four jobs for
+that revision, including the pinned Linux smoke/demo environment.
+
+| Platform | Native environment | Build/test gates | Runtime and visual outcome |
+| --- | --- | --- | --- |
+| macOS | Apple M5 Pro, arm64, macOS 27.0.1, Xcode 27.1 | 145 tests, fmt, Clippy with warnings denied, release bins/library passed | 150 direct contract commands and light/dark quality checks passed, but native visual/runtime acceptance **failed** on the reproductions below. |
+| Windows | Windows 11 build 22631, AMD64, native MSVC | 144 tests, fmt, Clippy with warnings denied, debug/release bins/library passed | 118 driver commands plus four image-confinement probes passed; no new Windows-specific defect established. |
+
+Windows has one fewer Rust test because the image-symlink unit test is
+Unix-only. An actual Windows file-symlink escape was separately tested and
+blocked with alt text and a diagnostic, alongside parent traversal, absolute
+outside-base paths and a successful in-base image. Both hosts exercised Unicode
+and spaced paths, public-library probes, both binaries, all five Mermaid
+families and the new compatibility syntax. Each rendered the eight smoke/quality
+cases in light and dark to SVG/PNG/PDF (48 exports per platform). Native PNG and
+PDF raster review was performed; semantic successes did not override visual
+failures. PDF previews used native MuPDF.
+
+Both native source installations passed `cargo install --path . --root
+<disposable-prefix> --locked`. Both installed binaries matched their release
+builds and ran ten commands, including six exports, from a spaced working
+directory. A separate Linux source installation also passed ten installed-binary
+commands and six exports from a Unicode/spaced path on Rust 1.98.1.
+
+### Open macOS defects
+
+1. **CJK code can panic or emit infinite geometry.** A one-cell table containing
+   inline code `中文` exits 101 for SVG, PNG and PDF with `line height cannot be
+   0`. Ordinary inline/fenced code emits `width="inf"`; plain CJK is finite.
+   Measurement selects the GB18030 Bitmap font, which lacks a usable head table
+   and yields infinite glyph advances. Sources, backtrace and command results
+   are in `macos/baseline/cjk-code/`.
+2. **PNG optical sizing consumes word gaps.** A minimal `Alpha beta gamma.`
+   paragraph and table visibly concatenate words. Space measurement is nonzero
+   (3.28125px at 16px), and SVG positions include it. With the same SFNS regular
+   face/file/index, PNG usvg 0.47 enables optical sizing and paints wider words
+   than Cosmic/PDF usvg 0.45 measure. An output-only
+   `font-optical-sizing="none"` control restores matching widths and visible
+   spaces. Full-size PDF regular prose preserves spaces; an earlier reduced-sheet
+   observation suggesting PDF regular-space collapse was corrected.
+3. **Bold face selection disagrees.** Cosmic bold sans falls back to Menlo-Bold;
+   PNG/PDF select the SFNS variable regular face. PNG applies a variable weight,
+   while PDF loses visible bold and leaves an oversized following gap. The
+   minimal style-boundary reproduction is in `macos/baseline/spacing/`.
+4. **Emoji fallback can escape table/image bounds.** The ZWJ sequence 🧑‍💻 is
+   retained in the source/SVG but native outputs show boxed glyphs; narrow cases
+   overflow the table border or image boundary. See
+   `macos/baseline/emoji-overflow-contact.png` and its full native outputs.
+
+These are product failures, separate from the 23 deliberately unsupported Linux
+stories. The optical-sizing override is a diagnostic control, not an integrated
+fix. No production font/layout changes were made during this verification pass.
+Windows reproduces the existing muted code/sequence palette advisory, including
+the gray `github_dark` code background; this remains documented rather than
+being counted as a newly established Windows regression.
+
+A bounded scratch probe retained candidate fix directions. The static Helvetica
+family matched regular/bold/italic/bold-italic faces and advances across Cosmic,
+PNG and PDF. Rejecting unparseable font faces removed GB18030 Bitmap and made all
+four original CJK sources render to finite SVG/PNG/PDF without a table panic.
+Filtering only parsed zero-UPEM faces removed nothing and failed, because this
+font lacks the required head table. These results are in
+`macos/font-init-probe`; they are not production fixes and do not resolve emoji.
+
+Detailed native summaries, exact commands, environment/font inventories,
+reproduction inputs, outputs and inspected sheets are served under
+`cli/native-platforms/{macos/baseline,windows/baseline}`. Windows output batches
+are alongside its baseline under `windows/{light,dark,contracts}`. Linux source
+installation evidence is under `cli/native-platforms/linux-source-install`.
+Native results were not imported as replacements for Linux canonical history.
+Coverage is arm64 macOS and x64 MSVC Windows; Intel macOS, Windows ARM64/x86/GNU
+and packaged release installation remain unverified. No release was published.
+
 ## Showcase and remaining limitations
 
 The showcase uses real native output from `tests/fixtures/showcase*` inputs.
@@ -370,14 +452,18 @@ Remaining limits are deliberate and visible:
   flowchart pill contrast regression; it does not certify theme accessibility.
 - PDF text is exported as paths, so it is not searchable/selectable text.
 - Release/installer checks use static configuration and disposable intercepted
-  download/install sandboxes. Other OS/architecture releases were not built or
-  published; no remote assets or installed production binaries were replaced.
+  download/install sandboxes, supplemented by actual source installation into
+  disposable prefixes on Linux, macOS and Windows. Other release architectures
+  and packaged release installation remain unverified; no remote assets or
+  installed production binaries were replaced.
 - Ignored evidence/media remain on this runner; the public dashboard and media
   URLs require the existing server and tunnel to keep running. Reproduction
   instructions are in [feature-audit/README.md](feature-audit/README.md).
 
-Delivery is local: production corrections, audit sources, reviewed baselines,
-fixtures and documentation are committed under the requested lsj5031 identity.
-No push, merge, release or production installation was performed. The dashboard,
-CSV download, completed report and media remain available through the existing
-read-only service while its server and tunnel are running.
+Production corrections, audit sources, reviewed baselines, fixtures and
+documentation are committed and pushed to `master` under the requested lsj5031
+identity. Every published commit's author and committer resolve to that account.
+No merge, release or production installation was performed. The dashboard, CSV
+download, completed report and media remain available through the existing
+read-only service while its server and tunnel are running. The native macOS
+failures above remain open.
