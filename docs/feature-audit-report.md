@@ -1,6 +1,8 @@
 # MarkieCli feature audit
 
-Status: complete. The canonical story inventory and live status are in
+Status: complete.
+
+The canonical story inventory and live status are in
 [`feature-audit.csv`](feature-audit.csv). This report records decisions and final
 results; it is not a second progress tracker.
 
@@ -162,10 +164,10 @@ after all production owners freeze. Geometry checks using the same text-measure
 API as the renderer establish consistency, not independent visual fit; native
 PNG/PDF inspection remains necessary.
 
-### Final verification
+### Completed reliability-phase verification
 
 The replacement coordinated rerun executed all 569 stories against a frozen
-source and runner manifest. Current canonical results are:
+source and runner manifest. Before the compatibility extensions, its results were:
 
 | Workstream | Executed | Passed | Unsupported | Failed / blocked |
 | --- | ---: | ---: | ---: | ---: |
@@ -222,6 +224,99 @@ The independent final ledger check matched all 569 IDs to source definitions,
 matched every latest event to fresh execution evidence, verified all earlier
 history strings remained intact, and confirmed the public API matches the CSV.
 
+### Compatibility extension phase
+
+The compatibility phase extends existing features rather than adding diagram
+families. It implements ten previously unsupported Mermaid stories and five
+Markdown stories:
+
+| Stories | Added contract |
+| --- | --- |
+| MER-103–105 | Chained edges, Cartesian-product fanout between adjacent node groups, and delimiter-aware semicolon statements. |
+| MER-130/134 | Participants in first-appearance order, later aliases updating the same participant, and inline activation/deactivation shorthand. |
+| MER-155–159 | Implicit classes, quoted endpoint multiplicities, standard trailing method return types, static/abstract classifiers and reverse realization. |
+| MD-052 | Distinct labeled GFM Note, Tip, Important, Warning and Caution alerts. |
+| MD-065–068 | Table emphasis/strike, literal inline code, supported inline HTML styles and breaks, and link styling, with matching measurement and wrapping. |
+
+The previous completed CSV, report, API and showcase metadata were archived
+read-only under `cli/extension-phase/extension-start`. Pending events invalidate
+the previous source's verification without deleting any history. Existing IDs
+remain stable; old rejection/flattening expectations are replaced with real
+positive contracts, not merely relabeled as supported. Pre-extension outputs
+are retained to show the old implementation failing the new expectations.
+
+Upstream Mermaid grammar/tests establish the non-obvious semantics: a message
+precedes its inline activation event; `+` affects the receiver and `-` affects
+the sender. Ordinary activation bars end at the outgoing reply; self-replies
+retain the upstream default 10px gap after the incoming endpoint. The visual
+review caught an extra message-spacing gap, and exact geometry checks replaced
+the earlier permissive tolerance. A grouped chain expands each neighboring pair
+of source/target sets without skipping the intermediate group. Class
+multiplicities stay at their written endpoints even for reverse realization.
+Public API/CLI assertions verify these properties alongside native PNG/PDF review.
+
+`tests/smoke/quality/compatibility.md` adds a mixed document to the existing
+640/1200px SVG/PNG/PDF corpus. It combines alerts and styled tables with chained
+flowcharts, implicit sequence participants/activation and class classifiers.
+
+The first compatibility full run was invalidated when Clippy rejected a nested
+condition in the new flowchart parser. The compiler-suggested equivalent
+let-chain rewrite was applied, then all stories were executed again under a
+replacement 87-file source/runner/fixture manifest. The failed gate and original
+executions remain provisional history rather than being replayed as new passes.
+
+Replacement execution results:
+
+| Workstream | Executed | Passed | Unsupported | Failed / blocked |
+| --- | ---: | ---: | ---: | ---: |
+| Markdown | 137 | 128 | 9 | 0 |
+| Mermaid | 223 | 209 | 14 | 0 |
+| CLI, exports, themes, math, fonts, installation | 209 | 209 | 0 | 0 |
+| **Total** | **569** | **546** | **23** | **0** |
+
+Fifteen former boundaries are now supported; 546/569 is 95.96% of the full
+inventory. The remaining 23 unsupported stories stay outside verified coverage.
+They include additional diagram syntax/families, heading attributes, bare URLs,
+arbitrary inline HTML/CSS and unsupported image-resource forms. Rejection or
+meaningful text fallback does not turn them into implemented features.
+
+Repository gates passed formatting, all 145 unit tests, Clippy with warnings
+denied, fresh builds and all eight quality cases in SVG/PNG/PDF. DejaVu-only
+candidate review confirmed that all five demo SVG differences are table text
+segmentation: nine text nodes become 27 styled-run nodes, preserving complete
+payload and canvas dimensions. The original assets and normalized differences
+remain available for comparison. Eleven reviewed demo assets (five SVGs, five
+PNGs and one PDF) were accepted; both smoke and demo sync checks pass against
+those assets. Smoke goldens did not change.
+
+Markdown visual review covered all 394 rasterized SVG outputs in 20 contact
+sheets and four full-height continuation sheets, plus 33 native PNG and 33 native
+PDF exports across default light, narrow light and narrow dark states. Mermaid
+review covered native outputs for all five families and the newly supported
+syntax, including exact activation
+geometry. CLI review included fresh font, math and local-font native exports.
+Independent asymmetric probes separately checked styled cells, alert scopes,
+diagram topology and explicit rejection contracts. These reviews found no new
+defect; they retain the presentation and platform limitations below.
+
+Replacement execution evidence is available under these dashboard paths:
+
+- Markdown: `markdown/retest/20261019T002412533303Z`.
+- Mermaid: `mermaid/20261019T002417552688Z` and its sibling
+  `mermaid/visual-20261019T002417552688Z`.
+- CLI: `cli/compatibility-final-v2`.
+- Combined checks and baseline review: `cli/extension-phase/combined-final-v2`.
+- Independent positive probes: `cli/extension-phase/independent-md` and
+  `cli/extension-phase/independent-mermaid`, with their original frozen hashes.
+
+All owners finished publication before the independent canonical snapshot.
+`combined-final-v2/canonical-verification.json` confirms all 569 source-defined
+IDs and their fresh execution evidence, matching public API/CSV downloads,
+546 verified successes and 23 excluded unsupported stories. Each earlier
+snapshot's 1,707 error/fix/retest history fields remain preserved prefixes, and
+all seven showcase values are unchanged. The final CSV and source manifests
+are archived beside that receipt.
+
 ## Showcase and remaining limitations
 
 The showcase uses real native output from `tests/fixtures/showcase*` inputs.
@@ -233,13 +328,15 @@ current binaries, rerenders each command and records its output before encoding
 seven individual ten-second clips and an 80-second 1920×1080/24fps H.264 tour.
 Diagrams retain their whole context; documents pan at a readable scale.
 
-All clips and the master decoded without errors. Eleven extracted master frames
-were inspected, including each scene and both title cards. Chromium playback
-reached 80 seconds/ended with no media error and 1920 decoded frames (three
-display frames dropped on this host). Video metadata, command logs, the encoded
-frame sheet and browser observations remain in the showcase artifact directory.
-Selection changed only showcase metadata and timestamps; test histories were
-not replayed or modified.
+The tour was regenerated against the replacement compatibility source after all
+seven selected stories passed fresh retests. All clips and the 1920-frame master
+decoded without errors. Eleven extracted master frames were inspected, including
+each scene and both title cards. Chromium playback reached 80 seconds/ended with
+no media error or corrupted frames (three display frames dropped on this host).
+Fresh video metadata, command logs, encoded frames and browser observations are
+in the showcase directory and `cli/extension-phase/showcase-validation-v2`.
+The previous tours remain archived under `cli/extension-phase`. Existing seven
+showcase selections were retained; regeneration did not append test events.
 
 [Watch the combined tour](https://1cd7530c4b998844.zqk6knxethul.opentunnel.xyz/artifacts/feature-audit/showcase/markie-product-tour.mp4).
 Individual ten-second clips:
@@ -263,7 +360,11 @@ Remaining limits are deliberate and visible:
 - Unsupported image/syntax stories stay in the denominator and cannot become
   verified successes merely because rejection/fallback works correctly.
 - Fonts affect metrics and glyph coverage. Real usable fonts are required;
-  repository zero-byte font placeholders are not a font bundle.
+  repository zero-byte font placeholders are not a font bundle. On this host,
+  monospace ZWJ emoji can render as missing-glyph boxes in both ordinary inline
+  code and table code, while prose uses a shaped emoji. The table extension
+  preserves the payload and matches the existing inline-code font behavior;
+  it does not add emoji coverage to the monospace font.
 - Existing muted code/fallback colors and sequence palettes can be hard to read,
   especially Dracula and Solarized Dark. The audit corrected the confirmed
   flowchart pill contrast regression; it does not certify theme accessibility.
