@@ -312,7 +312,8 @@ fn render_sequence_elements<T: TextMeasure>(ctx: &mut RenderSequenceContext<'_, 
     let extents = &mut *ctx.extents;
 
     let mut svg = String::new();
-    for element in elements {
+    let mut activation_svg = String::new();
+    for (index, element) in elements.iter().enumerate() {
         match element {
             SequenceElement::Message(msg) => {
                 if let (Some(x1), Some(x2)) = (
@@ -443,17 +444,30 @@ fn render_sequence_elements<T: TextMeasure>(ctx: &mut RenderSequenceContext<'_, 
             }
             SequenceElement::Activation(activation) => {
                 if let Some(cx) = participant_centers.get(activation.participant.as_str()) {
+                    let start = if let Some(SequenceElement::Message(message)) =
+                        index.checked_sub(1).and_then(|i| elements.get(i))
+                        && message.to == activation.participant
+                    {
+                        *message_y
+                            - if message.from == message.to {
+                                20.0
+                            } else {
+                                50.0
+                            }
+                    } else {
+                        *message_y - 10.0
+                    };
                     let depth = activation_starts
                         .get(&activation.participant)
                         .map_or(0, Vec::len);
                     activation_starts
                         .entry(activation.participant.clone())
                         .or_default()
-                        .push(*message_y - 10.0);
-                    svg.push_str(&format!(
+                        .push(start);
+                    activation_svg.push_str(&format!(
                         r#"<rect x="{:.2}" y="{:.2}" width="8" height="16" fill="{}" stroke="{}" stroke-width="1" />"#,
                         cx - 4.0 + depth as f32 * 4.0,
-                        *message_y - 10.0,
+                        start,
                         style.node_fill,
                         style.node_stroke
                     ));
@@ -467,11 +481,26 @@ fn render_sequence_elements<T: TextMeasure>(ctx: &mut RenderSequenceContext<'_, 
                         .or_default()
                         .pop()
                 {
-                    svg.push_str(&format!(
+                    let end = if let Some(SequenceElement::Message(message)) =
+                        index.checked_sub(1).and_then(|i| elements.get(i))
+                        && message.from == activation.participant
+                    {
+                        // Ordinary replies finish at the send point. A self-reply
+                        // finishes after its return, retaining Mermaid's 10px gap.
+                        *message_y
+                            - if message.from == message.to {
+                                10.0
+                            } else {
+                                50.0
+                            }
+                    } else {
+                        *message_y
+                    };
+                    activation_svg.push_str(&format!(
                             r#"<rect x="{:.2}" y="{:.2}" width="8" height="{:.2}" fill="{}" fill-opacity="0.35" stroke="{}" stroke-width="1" />"#,
                             cx - 4.0 + activation_starts.get(&activation.participant).map_or(0, Vec::len) as f32 * 4.0,
                             start,
-                            (*message_y - start).max(16.0),
+                            (end - start).max(16.0),
                             style.node_fill,
                             style.node_stroke
                         ));
@@ -625,7 +654,8 @@ fn render_sequence_elements<T: TextMeasure>(ctx: &mut RenderSequenceContext<'_, 
             }
         }
     }
-    svg
+    activation_svg.push_str(&svg);
+    activation_svg
 }
 
 // ============================================
@@ -690,18 +720,39 @@ fn render_class(
         }
     }
 
+    let mut extents = vec![Rect {
+        x: 0.0,
+        y: 0.0,
+        w: bbox.right(),
+        h: bbox.bottom(),
+    }];
     // Draw relations
     for relation in &diagram.relations {
         let from_pos = positions.get(&relation.from);
         let to_pos = positions.get(&relation.to);
 
         if let (Some(from), Some(to)) = (from_pos, to_pos) {
-            svg.push_str(&render_class_relation(relation, from, to, style, measure));
+            svg.push_str(&render_class_relation(
+                relation,
+                from,
+                to,
+                style,
+                measure,
+                &mut extents,
+            ));
         }
     }
 
-    let total_width = bbox.right() + padding;
-    let total_height = bbox.bottom() + padding;
+    let min_x = extents.iter().map(|r| r.x).fold(0.0_f32, f32::min);
+    let min_y = extents.iter().map(|r| r.y).fold(0.0_f32, f32::min);
+    let total_width = extents.iter().map(|r| r.x + r.w).fold(0.0_f32, f32::max) - min_x + padding;
+    let total_height = extents.iter().map(|r| r.y + r.h).fold(0.0_f32, f32::max) - min_y + padding;
+    if min_x < 0.0 || min_y < 0.0 {
+        svg = format!(
+            r#"<g transform="translate({:.2},{:.2})">{svg}</g>"#,
+            -min_x, -min_y
+        );
+    }
 
     Ok((svg, total_width, total_height))
 }
@@ -889,6 +940,7 @@ fn render_class_relation(
     to: &LayoutPos,
     style: &DiagramStyle,
     measure: &mut impl TextMeasure,
+    extents: &mut Vec<Rect>,
 ) -> String {
     let mut svg = String::new();
 
@@ -942,7 +994,12 @@ fn render_class_relation(
         let my = (y1 + y2) / 2.0;
         let cleaned = crate::xml::sanitize_xml_text(label);
         let label_font = style.font_size * 0.8;
-        let label_offset = 18.0;
+        let label_offset =
+            if relation.multiplicity_from.is_some() || relation.multiplicity_to.is_some() {
+                -18.0
+            } else {
+                18.0
+            };
         let label_x = mx + normal_x * label_offset;
         let label_y = my + normal_y * label_offset;
         let text_w = measure
@@ -951,6 +1008,12 @@ fn render_class_relation(
         let pill_pad = 5.0;
         let pill_w = text_w + pill_pad * 2.0;
         let pill_h = label_font + pill_pad * 1.6;
+        extents.push(Rect {
+            x: label_x - pill_w / 2.0,
+            y: label_y - pill_h / 2.0,
+            w: pill_w,
+            h: pill_h,
+        });
 
         svg.push_str(&format!(
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="4" fill="{}" stroke="{}" stroke-width="0.5" />"#,
@@ -973,27 +1036,37 @@ fn render_class_relation(
         ));
     }
 
-    if let Some(m) = &relation.multiplicity_from {
+    for (multiplicity, x, y, sign, marker) in [
+        (&relation.multiplicity_from, x1, y1, 1.0, from_marker),
+        (&relation.multiplicity_to, x2, y2, -1.0, to_marker),
+    ] {
+        let Some(m) = multiplicity else {
+            continue;
+        };
+        let font = style.font_size * 0.75;
+        let (width, measured_height) = measure.measure_text(m, font, false, false, false, None);
+        let height = measured_height.max(font * 1.2);
+        let marker_depth = match marker {
+            Some("filled_diamond" | "hollow_diamond") => 24.0,
+            Some("hollow_triangle") => 14.0,
+            Some("arrow") => 12.0,
+            _ => 0.0,
+        };
+        // Project the measured text box onto the relation and its normal, so
+        // neither long cardinalities nor marker depth can consume its clearance.
+        let along = marker_depth + 8.0 + (unit_x.abs() * width + unit_y.abs() * height) / 2.0;
+        let across = 12.0 + (normal_x.abs() * width + normal_y.abs() * height) / 2.0;
+        let cx = x + sign * unit_x * along + normal_x * across;
+        let cy = y + sign * unit_y * along + normal_y * across;
+        extents.push(Rect {
+            x: cx - width / 2.0 - 2.0,
+            y: cy - height / 2.0 - 2.0,
+            w: width + 4.0,
+            h: height + 4.0,
+        });
         svg.push_str(&format!(
-            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}">{}</text>"#,
-            x1 + unit_x * 12.0 + normal_x * 8.0,
-            y1 + unit_y * 12.0 + normal_y * 8.0,
-            style.font_family,
-            style.font_size * 0.75,
-            style.edge_text,
-            escape_xml(m)
-        ));
-    }
-
-    if let Some(m) = &relation.multiplicity_to {
-        svg.push_str(&format!(
-            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="end">{}</text>"#,
-            x2 - unit_x * 12.0 + normal_x * 8.0,
-            y2 - unit_y * 12.0 + normal_y * 8.0,
-            style.font_family,
-            style.font_size * 0.75,
-            style.edge_text,
-            escape_xml(m)
+            r#"<text x="{cx:.2}" y="{:.2}" font-family="{}" font-size="{font:.1}" fill="{}" text-anchor="middle">{}</text>"#,
+            cy + font*0.35, style.font_family, style.edge_text, escape_xml(m)
         ));
     }
 

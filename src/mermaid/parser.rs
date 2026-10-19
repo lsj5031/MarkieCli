@@ -26,7 +26,10 @@ pub fn parse_mermaid(input: &str) -> Result<MermaidDiagram, String> {
         .map(str::trim)
         .unwrap_or("");
 
-    let family = first_line.split_whitespace().next().unwrap_or("");
+    let family = first_line
+        .split(|c: char| c.is_whitespace() || c == ';')
+        .next()
+        .unwrap_or("");
     if matches!(family, "flowchart" | "graph") {
         let diagram =
             parse_flowchart(input).map_err(|e| format!("Flowchart parse error: {}", e))?;
@@ -65,10 +68,21 @@ pub fn parse_mermaid(input: &str) -> Result<MermaidDiagram, String> {
 // ============================================
 
 fn parse_flowchart(input: &str) -> Result<Flowchart, String> {
-    let mut lines = input
+    let mut statements = Vec::new();
+    for line in input
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with("%%"));
+        .filter(|line| !line.is_empty() && !line.starts_with("%%"))
+    {
+        let syntax = flow_syntax(line)?;
+        let mut start = 0;
+        for (end, _) in syntax.match_indices(';') {
+            statements.push(line[start..end].trim());
+            start = end + 1;
+        }
+        statements.push(line[start..].trim());
+    }
+    let mut lines = statements.into_iter().filter(|line| !line.is_empty());
 
     // Consume the same non-comment header used for diagram type detection.
     let first_line = lines.next().unwrap_or("");
@@ -78,9 +92,6 @@ fn parse_flowchart(input: &str) -> Result<Flowchart, String> {
     let mut edges: Vec<FlowchartEdge> = Vec::new();
     let mut subgraphs: Vec<Subgraph> = Vec::new();
     let mut current_subgraph: Option<Subgraph> = None;
-    let mut node_labels: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-
     for line in lines {
         // Subgraph start
         if line.starts_with("subgraph ") {
@@ -124,110 +135,32 @@ fn parse_flowchart(input: &str) -> Result<Flowchart, String> {
         {
             return Err(format!("Flowchart directives are not supported: {line}"));
         }
-        // Inspect only syntax outside labels/shapes: punctuation inside a label
-        // is user text, not a shorthand operator or statement separator.
-        let mut syntax = String::new();
-        let mut depth = 0_usize;
-        let mut quoted = false;
-        let mut edge_label = false;
-        for c in line.chars() {
-            if c == '"' {
-                quoted = !quoted;
-                continue;
-            }
-            if quoted {
-                continue;
-            }
-            if c == '|' && depth == 0 {
-                edge_label = !edge_label;
-                continue;
-            }
-            if edge_label {
-                continue;
-            }
-            match c {
-                '[' | '(' | '{' => depth += 1,
-                ']' | ')' | '}' if depth > 0 => depth -= 1,
-                _ if depth == 0 => syntax.push(c),
-                _ => {}
-            }
-        }
-        if syntax.contains([';', '&', ']']) {
+        if flow_syntax(line)?.contains(']') {
             return Err(format!(
-                "Flowchart shorthand, semicolons and asymmetric shapes are not supported; use one explicit node or edge per line: {line}"
+                "Asymmetric flowchart shapes are not supported: {line}"
             ));
         }
-        let operators = syntax
-            .split(|c: char| !"-=.<>".contains(c))
-            .filter(|part| {
-                part.contains("--")
-                    || part.contains("->")
-                    || part.contains("==")
-                    || part.contains("-.")
-            })
-            .count();
-        if operators > 1 {
-            return Err(format!(
-                "Chained flowchart edges are not supported; use one edge per line: {line}"
-            ));
-        }
-
-        // Try to parse as edge or node definition
-        if let Some(parsed) = parse_edge_line(line) {
-            // Register nodes if not already present (with full info including label and shape)
-            if !node_labels.contains_key(&parsed.from.id) {
-                nodes.push(FlowchartNode {
-                    id: parsed.from.id.clone(),
-                    label: parsed.from.label.clone(),
-                    shape: parsed.from.shape,
-                });
-                node_labels.insert(parsed.from.id.clone(), parsed.from.label.clone());
-            }
-            if !node_labels.contains_key(&parsed.to.id) {
-                nodes.push(FlowchartNode {
-                    id: parsed.to.id.clone(),
-                    label: parsed.to.label.clone(),
-                    shape: parsed.to.shape,
-                });
-                node_labels.insert(parsed.to.id.clone(), parsed.to.label.clone());
-            }
-
-            // Add edge endpoint nodes to current subgraph if inside one
-            if let Some(ref mut sg) = current_subgraph {
-                if !sg.nodes.contains(&parsed.from.id) {
-                    sg.nodes.push(parsed.from.id.clone());
+        if let Some((parsed_nodes, parsed_edges)) = parse_edge_line(line) {
+            for parsed in parsed_nodes {
+                if let Some(node) = nodes.iter_mut().find(|node| node.id == parsed.id) {
+                    if parsed.explicit {
+                        node.label = parsed.label;
+                        node.shape = parsed.shape;
+                    }
+                } else {
+                    nodes.push(FlowchartNode {
+                        id: parsed.id.clone(),
+                        label: parsed.label,
+                        shape: parsed.shape,
+                    });
                 }
-                if !sg.nodes.contains(&parsed.to.id) {
-                    sg.nodes.push(parsed.to.id.clone());
+                if let Some(sg) = &mut current_subgraph {
+                    if !sg.nodes.contains(&parsed.id) {
+                        sg.nodes.push(parsed.id);
+                    }
                 }
             }
-
-            edges.push(FlowchartEdge {
-                from: parsed.from.id,
-                to: parsed.to.id,
-                label: parsed.label,
-                style: parsed.style,
-                arrow_head: parsed.arrow_head,
-                arrow_tail: parsed.arrow_tail,
-                min_length: 1,
-            });
-        } else if let Some((id, label, shape)) = parse_node_definition(line) {
-            if let Some(node) = nodes.iter_mut().find(|node| node.id == id) {
-                node.label = label.clone();
-                node.shape = shape;
-            } else {
-                nodes.push(FlowchartNode {
-                    id: id.clone(),
-                    label: label.clone(),
-                    shape,
-                });
-            }
-            node_labels.insert(id.clone(), label);
-
-            // Add to current subgraph if in one
-            if let Some(ref mut sg) = current_subgraph {
-                sg.nodes.push(id);
-            }
+            edges.extend(parsed_edges);
         }
     }
 
@@ -258,18 +191,48 @@ struct ParsedNodeInfo {
     id: String,
     label: String,
     shape: NodeShape,
+    explicit: bool,
 }
 
-struct ParsedEdgeLine {
-    from: ParsedNodeInfo,
-    to: ParsedNodeInfo,
-    label: Option<String>,
-    style: EdgeStyle,
-    arrow_head: ArrowType,
-    arrow_tail: ArrowType,
+// Preserve byte offsets while hiding user text from shorthand tokenization.
+fn flow_syntax(line: &str) -> Result<String, String> {
+    let mut syntax = String::new();
+    let mut depth = 0_usize;
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut edge_label = false;
+    for c in line.chars() {
+        let protected = quoted || edge_label || depth > 0;
+        if escaped {
+            escaped = false;
+        } else if c == '\\' && quoted {
+            escaped = true;
+        } else if c == '"' {
+            quoted = !quoted;
+        } else if !quoted {
+            if c == '|' && depth == 0 {
+                edge_label = !edge_label;
+            } else if !edge_label {
+                match c {
+                    '[' | '(' | '{' => depth += 1,
+                    ']' | ')' | '}' if depth > 0 => depth -= 1,
+                    _ => {}
+                }
+            }
+        }
+        if protected || quoted || edge_label || depth > 0 || matches!(c, '"' | '|') {
+            syntax.extend(std::iter::repeat_n(' ', c.len_utf8()));
+        } else {
+            syntax.push(c);
+        }
+    }
+    if quoted || edge_label || depth > 0 {
+        return Err(format!("Unclosed flowchart label or shape: {line}"));
+    }
+    Ok(syntax)
 }
 
-fn parse_edge_line(line: &str) -> Option<ParsedEdgeLine> {
+fn parse_edge_line(line: &str) -> Option<(Vec<ParsedNodeInfo>, Vec<FlowchartEdge>)> {
     // Edge patterns (order matters - longer patterns first)
     let patterns = [
         ("<==>", EdgeStyle::Thick, ArrowType::Arrow, ArrowType::Arrow),
@@ -355,85 +318,119 @@ fn parse_edge_line(line: &str) -> Option<ParsedEdgeLine> {
         ("--", EdgeStyle::Solid, ArrowType::None, ArrowType::None),
     ];
 
-    for (pattern, style, head, tail) in &patterns {
-        if let Some(pos) = line.find(pattern) {
-            let from_part = line[..pos].trim();
-            let rest = &line[pos + pattern.len()..];
-
-            // Parse optional label
-            let (to_part, label) = if let Some(stripped) = rest.strip_prefix('|') {
-                // Label before target: A -->|label| B
-                if let Some(end_label) = stripped.find('|') {
-                    let label_text = stripped[..end_label].trim();
-                    let after_label = stripped[end_label + 1..].trim();
-                    (after_label, Some(label_text.to_string()))
-                } else {
-                    (rest.trim(), None)
+    let syntax = flow_syntax(line).ok()?;
+    let mut operators = Vec::new();
+    let mut cursor = 0;
+    while let Some((pos, index)) = patterns
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (p, ..))| {
+            syntax[cursor..]
+                .match_indices(p)
+                .map(|(n, _)| cursor + n)
+                .find(|pos| {
+                    // A trailing o/x in an unspaced identifier is not a tail marker.
+                    !p.starts_with(['o', 'x'])
+                        || (*pos > 0
+                            && !syntax[..*pos].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
+                })
+                .map(|pos| (pos, i))
+        })
+        .min_by_key(|(n, i)| (*n, std::cmp::Reverse(patterns[*i].0.len())))
+    {
+        operators.push((pos, index));
+        cursor = pos + patterns[index].0.len();
+    }
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut previous: Vec<String> = Vec::new();
+    for segment in 0..=operators.len() {
+        let start = if segment == 0 {
+            0
+        } else {
+            let (p, i) = operators[segment - 1];
+            p + patterns[i].0.len()
+        };
+        let end = operators.get(segment).map_or(line.len(), |(p, _)| *p);
+        let mut part = line[start..end].trim();
+        let mut label = None;
+        if segment > 0
+            && let Some(rest) = part.strip_prefix('|')
+        {
+            // Closing pipes inside quoted edge text are literal.
+            let mut quoted = false;
+            let mut escaped = false;
+            let close = rest.char_indices().find_map(|(i, c)| {
+                if escaped {
+                    escaped = false;
+                    return None;
                 }
-            } else {
-                // No label, just target
-                (rest.trim(), None)
-            };
-
-            // Extract full node info (id, label, shape)
-            let from_info = extract_node_info(from_part)?;
-            let to_info = extract_node_info(to_part)?;
-
-            return Some(ParsedEdgeLine {
-                from: ParsedNodeInfo {
-                    id: from_info.0,
-                    label: from_info.1,
-                    shape: from_info.2,
-                },
-                to: ParsedNodeInfo {
-                    id: to_info.0,
-                    label: to_info.1,
-                    shape: to_info.2,
-                },
+                if c == '\\' && quoted {
+                    escaped = true;
+                } else if c == '"' {
+                    quoted = !quoted;
+                } else if c == '|' && !quoted {
+                    return Some(i);
+                }
+                None
+            })?;
+            label = Some(normalize_flowchart_label(&rest[..close]));
+            part = rest[close + 1..].trim();
+        }
+        let masked = flow_syntax(part).ok()?;
+        let mut group = Vec::new();
+        let mut left = 0;
+        for right in masked
+            .match_indices('&')
+            .map(|(i, _)| i)
+            .chain(std::iter::once(part.len()))
+        {
+            let raw = part[left..right].trim();
+            let (id, label, shape) = extract_node_info(raw)?;
+            group.push(id.clone());
+            nodes.push(ParsedNodeInfo {
+                explicit: raw != id,
+                id,
                 label,
-                style: style.clone(),
-                arrow_head: head.clone(),
-                arrow_tail: tail.clone(),
+                shape,
             });
+            left = right + 1;
         }
-    }
-
-    None
-}
-
-fn extract_node_id(part: &str) -> Option<String> {
-    let part = part.trim();
-
-    // Handle shaped nodes like A[Label], A(Label), A{Label}, etc.
-    // Check multi-char patterns first, then single chars
-    let multi_char_patterns = ["[[", "((", "[/", "[\\"];
-    for pattern in &multi_char_patterns {
-        if part.contains(pattern) {
-            let pos = part.find(pattern)?;
-            return Some(part[..pos].trim().to_string());
+        if segment > 0 {
+            let (_, index) = operators[segment - 1];
+            let (_, style, head, tail) = &patterns[index];
+            for from in &previous {
+                for to in &group {
+                    edges.push(FlowchartEdge {
+                        from: from.clone(),
+                        to: to.clone(),
+                        label: label.clone(),
+                        style: style.clone(),
+                        arrow_head: head.clone(),
+                        arrow_tail: tail.clone(),
+                        min_length: 1,
+                    });
+                }
+            }
         }
+        previous = group;
     }
-
-    let single_char_patterns = ['[', '(', '{', '<'];
-    for bracket in &single_char_patterns {
-        if part.contains(*bracket) {
-            let pos = part.find(*bracket)?;
-            return Some(part[..pos].trim().to_string());
-        }
-    }
-
-    // Simple node id - alphanumeric and underscores
-    let id: String = part
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
-        .collect();
-
-    if id.is_empty() { None } else { Some(id) }
+    Some((nodes, edges))
 }
 
 /// Extract node ID, label, and shape from a part of an edge definition
 fn extract_node_info(part: &str) -> Option<(String, String, NodeShape)> {
     let part = part.trim();
+    let id_end = part
+        .char_indices()
+        .take_while(|(_, c)| c.is_alphanumeric() || *c == '_' || *c == '-')
+        .last()
+        .map(|(i, c)| i + c.len_utf8())?;
+    let id = part[..id_end].to_string();
+    let definition = part[id_end..].trim();
+    if definition.is_empty() {
+        return Some((id.clone(), id, NodeShape::RoundedRect));
+    }
 
     // Check for shaped node definitions inline
     let patterns: &[(&str, &str, NodeShape)] = &[
@@ -453,56 +450,11 @@ fn extract_node_info(part: &str) -> Option<(String, String, NodeShape)> {
     ];
 
     for (open, close, shape) in patterns {
-        if let Some(pos) = part.find(open) {
-            let after_open = &part[pos + open.len()..];
-            if let Some(end_pos) = after_open.find(close) {
-                let id = part[..pos].trim().to_string();
-                let label = normalize_flowchart_label(&after_open[..end_pos]);
-
-                if !id.is_empty() {
-                    return Some((id, label, shape.clone()));
-                }
-            }
-        }
-    }
-
-    // Simple node - just an ID
-    let id = extract_node_id(part)?;
-    Some((id.clone(), id, NodeShape::RoundedRect))
-}
-
-fn parse_node_definition(line: &str) -> Option<(String, String, NodeShape)> {
-    let line = line.trim();
-
-    // Patterns: id[Label], id(Label), id{Label}, etc.
-    // Order matters: check longer patterns first
-    let patterns: &[(&str, &str, NodeShape)] = &[
-        ("(((", ")))", NodeShape::DoubleCircle),
-        ("[[", "]]", NodeShape::Subroutine),
-        ("((", "))", NodeShape::Circle),
-        ("[(", ")]", NodeShape::Cylinder),
-        ("([", "])", NodeShape::Stadium),
-        ("[/", "/]", NodeShape::Parallelogram),
-        ("[\\", "\\]", NodeShape::ParallelogramAlt),
-        ("[/", "\\]", NodeShape::Trapezoid),
-        ("[\\", "/]", NodeShape::TrapezoidAlt),
-        ("{{", "}}", NodeShape::Hexagon),
-        ("[", "]", NodeShape::Rect),
-        ("(", ")", NodeShape::RoundedRect),
-        ("{", "}", NodeShape::Rhombus),
-    ];
-
-    for (open, close, shape) in patterns {
-        if let Some(pos) = line.find(open) {
-            let after_open = &line[pos + open.len()..];
-            if let Some(end_pos) = after_open.find(close) {
-                let id = line[..pos].trim().to_string();
-                let label = normalize_flowchart_label(&after_open[..end_pos]);
-
-                if !id.is_empty() {
-                    return Some((id, label, shape.clone()));
-                }
-            }
+        if let Some(label) = definition
+            .strip_prefix(open)
+            .and_then(|s| s.strip_suffix(close))
+        {
+            return Some((id, normalize_flowchart_label(label), shape.clone()));
         }
     }
 
@@ -543,6 +495,7 @@ fn parse_sequence(input: &str) -> Result<SequenceDiagram, String> {
         .collect();
 
     let mut participants: Vec<Participant> = Vec::new();
+    let mut active: HashMap<String, usize> = HashMap::new();
     for line in &lines {
         // Participant declaration
         if line.starts_with("participant ") {
@@ -550,37 +503,63 @@ fn parse_sequence(input: &str) -> Result<SequenceDiagram, String> {
             // Mermaid syntax: participant A as "Display Name" or participant A
             // The ID comes first, then optional "as Alias"
             let parts: Vec<&str> = rest.splitn(2, " as ").collect();
-            if parts.len() == 2 {
-                participants.push(Participant {
-                    id: parts[0].trim().to_string(),
-                    alias: Some(parts[1].trim().to_string()),
-                });
+            let id = parts[0].trim();
+            let alias = parts.get(1).map(|s| s.trim().trim_matches('"').to_string());
+            if let Some(participant) = participants.iter_mut().find(|p| p.id == id) {
+                if alias.is_some() {
+                    participant.alias = alias;
+                }
             } else {
                 participants.push(Participant {
-                    id: rest.trim().to_string(),
-                    alias: None,
+                    id: id.to_string(),
+                    alias,
                 });
             }
             continue;
         }
-    }
-
-    let mut index = 0;
-    for line in &lines {
         if line.starts_with("actor ") || line.starts_with("and ") {
             return Err(format!(
                 "Sequence actors and and-branches are not supported: {line}"
             ));
         }
-        if let Some(message) = parse_sequence_message(line) {
+        if let Some((message, activation)) = parse_sequence_message(line) {
             for endpoint in [&message.from, &message.to] {
                 if !participants.iter().any(|p| &p.id == endpoint) {
-                    return Err(format!(
-                        "Implicit participants and inline activations are not supported; declare participant {endpoint} and use explicit activate/deactivate statements"
-                    ));
+                    participants.push(Participant {
+                        id: endpoint.clone(),
+                        alias: None,
+                    });
                 }
             }
+            if activation == Some('+') {
+                *active.entry(message.to).or_default() += 1;
+            }
+            if activation == Some('-') {
+                let count = active.entry(message.from.clone()).or_default();
+                if *count == 0 {
+                    return Err(format!(
+                        "Cannot deactivate inactive participant {}: {line}",
+                        message.from
+                    ));
+                }
+                *count -= 1;
+            }
         }
+        if let Some(id) = line.strip_prefix("activate ") {
+            *active.entry(id.trim().to_string()).or_default() += 1;
+        }
+        if let Some(id) = line.strip_prefix("deactivate ") {
+            let count = active.entry(id.trim().to_string()).or_default();
+            if *count == 0 {
+                return Err(format!(
+                    "Cannot deactivate inactive participant {}: {line}",
+                    id.trim()
+                ));
+            }
+            *count -= 1;
+        }
+    }
+    for line in &lines {
         if let Some(SequenceElement::Note { participant, .. }) = parse_sequence_note(line)
             && !participants.iter().any(|p| p.id == participant)
         {
@@ -589,6 +568,7 @@ fn parse_sequence(input: &str) -> Result<SequenceDiagram, String> {
             ));
         }
     }
+    let mut index = 0;
     let elements = parse_sequence_elements(&lines, &mut index, true);
 
     Ok(SequenceDiagram {
@@ -616,8 +596,20 @@ fn parse_sequence_elements(
             continue;
         }
 
-        if let Some(msg) = parse_sequence_message(line) {
+        if let Some((msg, activation)) = parse_sequence_message(line) {
+            let participant = if activation == Some('+') {
+                msg.to.clone()
+            } else {
+                msg.from.clone()
+            };
             elements.push(SequenceElement::Message(msg));
+            match activation {
+                Some('+') => elements.push(SequenceElement::Activation(Activation { participant })),
+                Some('-') => {
+                    elements.push(SequenceElement::Deactivation(Activation { participant }))
+                }
+                _ => {}
+            }
             *index += 1;
             continue;
         }
@@ -739,7 +731,10 @@ fn parse_sequence_note(line: &str) -> Option<SequenceElement> {
     })
 }
 
-fn parse_sequence_message(line: &str) -> Option<SequenceMessage> {
+fn parse_sequence_message(line: &str) -> Option<(SequenceMessage, Option<char>)> {
+    if parse_sequence_block_type(line).is_some() {
+        return None;
+    }
     // Order matters: longer patterns first to avoid partial matches
     let patterns = [
         ("-->>", MessageType::Dotted, MessageKind::Reply),
@@ -754,10 +749,15 @@ fn parse_sequence_message(line: &str) -> Option<SequenceMessage> {
         ("-)", MessageType::Solid, MessageKind::Async),
     ];
 
+    let endpoints = line.split_once(':').map_or(line, |(head, _)| head);
     for (pattern, msg_type, kind) in &patterns {
-        if let Some(pos) = line.find(pattern) {
+        if let Some(pos) = endpoints.find(pattern) {
             let from = line[..pos].trim().to_string();
-            let rest = &line[pos + pattern.len()..];
+            let mut rest = line[pos + pattern.len()..].trim();
+            let activation = rest.chars().next().filter(|c| matches!(c, '+' | '-'));
+            if activation.is_some() {
+                rest = rest[1..].trim_start();
+            }
 
             // Parse "To: Label" or just "To"
             let (to, label) = if let Some(colon_pos) = rest.find(':') {
@@ -768,13 +768,16 @@ fn parse_sequence_message(line: &str) -> Option<SequenceMessage> {
                 (rest.trim().to_string(), None)
             };
 
-            return Some(SequenceMessage {
-                from,
-                to,
-                label: label.unwrap_or_default(),
-                msg_type: msg_type.clone(),
-                kind: kind.clone(),
-            });
+            return Some((
+                SequenceMessage {
+                    from,
+                    to,
+                    label: label.unwrap_or_default(),
+                    msg_type: msg_type.clone(),
+                    kind: kind.clone(),
+                },
+                activation,
+            ));
         }
     }
 
@@ -790,7 +793,7 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
 
     let mut classes: Vec<ClassDefinition> = Vec::new();
     let mut relations: Vec<ClassRelation> = Vec::new();
-    let mut current_class: Option<ClassDefinition> = None;
+    let mut current_class: Option<usize> = None;
 
     for (line_idx, line) in (&mut lines).enumerate() {
         let line_num = line_idx + 2; // +2: skip first line + 1-indexed
@@ -801,9 +804,7 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
 
         // Class definition end
         if line == "}" {
-            if let Some(cls) = current_class.take() {
-                classes.push(cls);
-            }
+            current_class = None;
             continue;
         }
 
@@ -823,31 +824,22 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
                 (rest.trim().to_string(), None)
             };
 
-            // Check if it's a one-liner or has body
+            let index = ensure_class(&mut classes, name.trim_end_matches('{').trim());
+            let class = &mut classes[index];
+            if stereotype.is_some() {
+                class.is_abstract = stereotype.as_deref() == Some("abstract");
+                class.is_interface = stereotype.as_deref() == Some("interface");
+                class.stereotype = stereotype;
+            }
             if name.ends_with('{') {
-                current_class = Some(ClassDefinition {
-                    name: name.trim_end_matches('{').trim().to_string(),
-                    is_abstract: stereotype.as_deref() == Some("abstract"),
-                    is_interface: stereotype.as_deref() == Some("interface"),
-                    stereotype,
-                    attributes: Vec::new(),
-                    methods: Vec::new(),
-                });
-            } else {
-                classes.push(ClassDefinition {
-                    name,
-                    is_abstract: stereotype.as_deref() == Some("abstract"),
-                    is_interface: stereotype.as_deref() == Some("interface"),
-                    stereotype,
-                    attributes: Vec::new(),
-                    methods: Vec::new(),
-                });
+                current_class = Some(index);
             }
             continue;
         }
 
         // If inside a class body
-        if let Some(ref mut cls) = current_class {
+        if let Some(index) = current_class {
+            let cls = &mut classes[index];
             // Stereotype annotation inside body (e.g. <<abstract>>, <<interface>>)
             if line.starts_with("<<") {
                 if let Some(end) = line.find(">>") {
@@ -877,19 +869,6 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
                 };
 
                 let member = &line[1..].trim();
-                if member.ends_with(['$', '*']) {
-                    return Err(format!(
-                        "Static and abstract class member suffixes are not supported at line {line_num}: {line}"
-                    ));
-                }
-                if let Some((_, suffix)) = member.rsplit_once(')')
-                    && !suffix.trim().is_empty()
-                    && !suffix.trim().starts_with(':')
-                {
-                    return Err(format!(
-                        "Trailing class return types are not supported; use ': Type' at line {line_num}: {line}"
-                    ));
-                }
 
                 // Check if method (has parentheses)
                 if member.contains('(') {
@@ -904,28 +883,13 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
         }
 
         // Relation
-        if line.contains("<|..")
-            || line
-                .split(':')
-                .next()
-                .is_some_and(|endpoints| endpoints.contains('"'))
-        {
-            return Err(format!(
-                "Reverse realization and quoted class multiplicities are not supported at line {line_num}: {line}"
-            ));
-        }
         if let Some(rel) = parse_class_relation(line) {
+            ensure_class(&mut classes, &rel.from);
+            ensure_class(&mut classes, &rel.to);
             relations.push(rel);
-        }
-    }
-
-    for relation in &relations {
-        if !classes.iter().any(|c| c.name == relation.from)
-            || !classes.iter().any(|c| c.name == relation.to)
-        {
+        } else if line.contains('"') {
             return Err(format!(
-                "Implicit classes are not supported; declare class {} and class {} before rendering their relation",
-                relation.from, relation.to
+                "Invalid quoted class relation at line {line_num}: {line}"
             ));
         }
     }
@@ -933,7 +897,25 @@ fn parse_class(input: &str) -> Result<ClassDiagram, String> {
     Ok(ClassDiagram { classes, relations })
 }
 
+fn ensure_class(classes: &mut Vec<ClassDefinition>, name: &str) -> usize {
+    if let Some(index) = classes.iter().position(|class| class.name == name) {
+        return index;
+    }
+    classes.push(ClassDefinition {
+        name: name.to_string(),
+        stereotype: None,
+        is_abstract: false,
+        is_interface: false,
+        attributes: Vec::new(),
+        methods: Vec::new(),
+    });
+    classes.len() - 1
+}
+
 fn parse_class_attribute(vis: Visibility, member: &str) -> Option<ClassAttribute> {
+    let is_static = member.ends_with('$');
+    let is_abstract = member.ends_with('*');
+    let member = member.trim_end_matches(['$', '*']).trim();
     let parts: Vec<&str> = member.splitn(2, ':').collect();
     let name = parts[0].trim();
     let type_ann = parts.get(1).map(|s| s.trim().to_string());
@@ -942,28 +924,29 @@ fn parse_class_attribute(vis: Visibility, member: &str) -> Option<ClassAttribute
         member: ClassMember {
             visibility: vis,
             name: name.to_string(),
-            is_static: false,
-            is_abstract: false,
+            is_static,
+            is_abstract,
         },
         type_annotation: type_ann,
     })
 }
 
 fn parse_class_method(vis: Visibility, member: &str) -> Option<ClassMethod> {
+    let trailing_static = member.ends_with('$');
+    let trailing_abstract = member.ends_with('*');
+    let member = member.trim_end_matches(['$', '*']).trim();
     let paren_pos = member.find('(')?;
     let name = member[..paren_pos].trim();
 
     let close_paren = member.find(')')?;
     let params_str = &member[paren_pos + 1..close_paren];
 
-    let return_type = if close_paren + 1 < member.len() {
-        let after = member[close_paren + 1..].trim();
-        after
-            .strip_prefix(':')
-            .map(|stripped| stripped.trim().to_string())
-    } else {
-        None
-    };
+    let after = member[close_paren + 1..].trim();
+    let is_static = trailing_static || after.starts_with('$');
+    let is_abstract = trailing_abstract || after.starts_with('*');
+    let after = after.trim_start_matches(['$', '*']).trim();
+    let after = after.strip_prefix(':').unwrap_or(after).trim();
+    let return_type = (!after.is_empty()).then(|| after.to_string());
 
     let parameters = if params_str.is_empty() {
         Vec::new()
@@ -988,8 +971,8 @@ fn parse_class_method(vis: Visibility, member: &str) -> Option<ClassMethod> {
         member: ClassMember {
             visibility: vis,
             name: name.to_string(),
-            is_static: false,
-            is_abstract: false,
+            is_static,
+            is_abstract,
         },
         parameters,
         return_type,
@@ -999,6 +982,7 @@ fn parse_class_method(vis: Visibility, member: &str) -> Option<ClassMethod> {
 fn parse_class_relation(line: &str) -> Option<ClassRelation> {
     let patterns = [
         ("<|--", ClassRelationType::Inheritance),
+        ("<|..", ClassRelationType::Realization),
         ("*--", ClassRelationType::Composition),
         ("o--", ClassRelationType::Aggregation),
         ("-->", ClassRelationType::Association),
@@ -1008,19 +992,44 @@ fn parse_class_relation(line: &str) -> Option<ClassRelation> {
         ("..", ClassRelationType::Dependency),
     ];
 
+    let mut syntax = String::new();
+    let mut quoted = false;
+    let mut escaped = false;
+    for c in line.chars() {
+        let protected = quoted || c == '"';
+        if escaped {
+            escaped = false;
+        } else if c == '\\' && quoted {
+            escaped = true;
+        } else if c == '"' {
+            quoted = !quoted;
+        }
+        if protected {
+            syntax.extend(std::iter::repeat_n(' ', c.len_utf8()));
+        } else {
+            syntax.push(c);
+        }
+    }
+    if quoted {
+        return None;
+    }
+    let end = syntax.find(':').unwrap_or(line.len());
+    let label = (end < line.len())
+        .then(|| line[end + 1..].trim().trim_matches('"').to_string())
+        .filter(|s| !s.is_empty());
     for (pattern, rel_type) in &patterns {
-        if let Some(pos) = line.find(pattern) {
-            let from = line[..pos].trim().to_string();
-            let rest = line[pos + pattern.len()..].trim();
-
-            let (to, label) = if let Some((to_part, label_part)) = rest.split_once(':') {
-                let to = to_part.trim().to_string();
-                let label = label_part.trim().trim_matches('"').trim().to_string();
-                let label = if label.is_empty() { None } else { Some(label) };
-                (to, label)
-            } else {
-                (rest.to_string(), None)
-            };
+        if let Some((pos, _)) = syntax[..end].match_indices(pattern).find(|(pos, _)| {
+            !pattern.starts_with('o')
+                || (*pos > 0
+                    && !syntax[..*pos].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
+        }) {
+            let (mut from, mut multiplicity_from) = parse_class_endpoint(&line[..pos], true)?;
+            let (mut to, mut multiplicity_to) =
+                parse_class_endpoint(&line[pos + pattern.len()..end], false)?;
+            if *pattern == "<|.." {
+                std::mem::swap(&mut from, &mut to);
+                std::mem::swap(&mut multiplicity_from, &mut multiplicity_to);
+            }
 
             return Some(ClassRelation {
                 from,
@@ -1028,13 +1037,41 @@ fn parse_class_relation(line: &str) -> Option<ClassRelation> {
                 relation_type: rel_type.clone(),
                 directed: !matches!(*pattern, "--" | ".."),
                 label,
-                multiplicity_from: None,
-                multiplicity_to: None,
+                multiplicity_from,
+                multiplicity_to,
             });
         }
     }
 
     None
+}
+
+fn parse_class_endpoint(part: &str, source: bool) -> Option<(String, Option<String>)> {
+    let part = part.trim();
+    let (name, multiplicity) = if let Some(first) = part.find('"') {
+        let last = part.rfind('"')?;
+        if last <= first {
+            return None;
+        }
+        let name = if source {
+            if !part[last + 1..].trim().is_empty() {
+                return None;
+            }
+            part[..first].trim()
+        } else {
+            if !part[..first].trim().is_empty() {
+                return None;
+            }
+            part[last + 1..].trim()
+        };
+        (name, Some(part[first + 1..last].replace("\\\"", "\"")))
+    } else {
+        (part, None)
+    };
+    if name.is_empty() || name.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some((name.to_string(), multiplicity))
 }
 
 // ============================================
@@ -1999,6 +2036,53 @@ sequenceDiagram
         } else {
             panic!("Expected sequence diagram");
         }
+    }
+
+    #[test]
+    fn implicit_participants_and_inline_activations_preserve_event_order() {
+        let MermaidDiagram::Sequence(sequence) = parse_mermaid("sequenceDiagram\nZ->>+A: request\nparticipant A as Alpha\nA->>+A: nested\nA-->>-A: inner reply\nA-->>-Z: reply\nparticipant Z as Zed\nparticipant M as Em").unwrap() else { panic!("Expected sequence"); };
+        assert_eq!(
+            sequence
+                .participants
+                .iter()
+                .map(|p| (p.id.as_str(), p.alias.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![("Z", Some("Zed")), ("A", Some("Alpha")), ("M", Some("Em"))]
+        );
+        let events = sequence
+            .elements
+            .iter()
+            .map(|event| match event {
+                SequenceElement::Message(message) => {
+                    ("message", message.from.as_str(), message.to.as_str())
+                }
+                SequenceElement::Activation(activation) => {
+                    ("activate", activation.participant.as_str(), "")
+                }
+                SequenceElement::Deactivation(activation) => {
+                    ("deactivate", activation.participant.as_str(), "")
+                }
+                _ => panic!("Unexpected sequence event"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            events,
+            vec![
+                ("message", "Z", "A"),
+                ("activate", "A", ""),
+                ("message", "A", "A"),
+                ("activate", "A", ""),
+                ("message", "A", "A"),
+                ("deactivate", "A", ""),
+                ("message", "A", "Z"),
+                ("deactivate", "A", "")
+            ]
+        );
+        assert!(
+            parse_mermaid("sequenceDiagram\nA-->>-Z: inactive")
+                .unwrap_err()
+                .contains("Cannot deactivate inactive participant A")
+        );
     }
 
     #[test]

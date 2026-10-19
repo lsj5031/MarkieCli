@@ -37,6 +37,9 @@ groups={
     'sequence-self':['118-sequence-self-'+name for name in ['bare-solid','bare-dotted','closed-solid','closed-dotted','async-solid','async-dotted','cross-solid','cross-dotted']],
     'sequence-controls':['119','120','121','122','126','127','129','135'],
     'class':['138','142','145','146','147','150','151','152'],
+    'compatibility-flow':['103','103-variant-1','103-variant-2','104','104-variant-1','105','105-variant-1'],
+    'compatibility-sequence':['130','130-variant-1','130-variant-2','134','134-variant-1'],
+    'compatibility-class':['155','155-variant-1','155-variant-2','156','156-variant-1','156-variant-2','157-variant-1','158','158-variant-1','159','159-variant-1'],
     'state':['161','166','167','170','171','172','173','174'],
     'state-notes':['175','176','177','182'],
     'er':['183','184','185','186','187','191','193','200','201','205','209','215'],
@@ -79,7 +82,7 @@ for group,ids in groups.items():
     sheet.save(OUT/(group+'.png'))
     print(group,flush=True)
 
-for ident in ['MER-094','MER-109','MER-138','MER-171','MER-184','MER-223']:
+for ident in ['MER-094','MER-109','MER-138','MER-171','MER-184','MER-223','MER-104','MER-134-variant-1','MER-156-variant-1','MER-158-variant-1','MER-159-variant-1']:
     if not (BASE/(ident+'.svg')).exists(): continue
     pdf=OUT/(ident+'.pdf')
     run([str(BINARY),str(BASE/(ident+'.mmd')),'-o',str(pdf)])

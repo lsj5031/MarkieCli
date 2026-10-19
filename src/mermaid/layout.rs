@@ -433,6 +433,26 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
             node_sizes.insert(class.name.clone(), self.calculate_class_size(class));
         }
 
+        for relation in &diagram.relations {
+            let mut clearance = 24.0;
+            for text in [&relation.multiplicity_from, &relation.multiplicity_to]
+                .into_iter()
+                .flatten()
+            {
+                let (w, h) = self.measure.measure_text(
+                    text,
+                    self.font_size * 0.75,
+                    false,
+                    false,
+                    false,
+                    None,
+                );
+                clearance += w.hypot(h.max(self.font_size * 0.9)) + 24.0;
+                self.node_spacing_x = self.node_spacing_x.max(w + 24.0);
+            }
+            self.node_spacing_y = self.node_spacing_y.max(clearance);
+        }
+
         let nodes: Vec<String> = diagram.classes.iter().map(|c| c.name.clone()).collect();
         let edges: Vec<(String, String, usize)> = diagram
             .relations

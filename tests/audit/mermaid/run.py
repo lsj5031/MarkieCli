@@ -26,10 +26,10 @@ FIELDS = 'id area feature user_story expected_behavior source owner status test_
 CASES = []
 
 
-def add(area, feature, source, expected, checks=None, boundary=False, mapping=None):
+def add(area, feature, source, expected, checks=None, boundary=False, mapping=None, variants=None):
     ident = f'MER-{len(CASES)+1:03}'
     CASES.append(dict(id=ident, area=area, feature=feature, input=source,
-                      expected=expected, checks=checks or {}, boundary=boundary,
+                      expected=expected, checks=checks or {}, boundary=boundary, variants=variants or [],
                       mapping=mapping or {
                           'flowchart': 'src/mermaid/parser.rs:79-476; src/mermaid/flowchart.rs:10-739; src/mermaid/layout.rs:152-236',
                           'sequence': 'src/mermaid/parser.rs:482-734; src/mermaid/render.rs:180-629; src/mermaid/layout.rs:239-417',
@@ -74,10 +74,11 @@ def cases():
     add('flowchart', 'self loop endpoint markers', 'flowchart LR\nA[Running] o--o A', 'Preserve both circle endpoints on a self-loop, as on an ordinary edge.', {'self_markers':2})
     add('flowchart', 'parallel edges', 'flowchart LR\nA[Source] -->|first| B[Target]\nA -->|second| B', 'Keep both relations separately readable rather than superimposing their routes and labels.', {'texts':['first','second'], 'edge_count':2, 'distinct_routes':True})
     add('flowchart', 'later explicit node label', 'flowchart LR\nA --> B\nB[Final label]', 'Use one B node with its explicit Final label, retaining the A→B relation.', {'texts':['Final label'], 'no_text':['B'], 'edge_count':1})
+    add('flowchart','chain edges','flowchart LR\nA[Origin] -->|first| B{Decision} -.->|second| C((Finish))','Preserve each successive directed relation, label, shape and edge style in a chain.',{'texts':['Origin','Decision','Finish','first','second'],'flow_relations':[['Origin','Decision'],['Decision','Finish']],'edge_count':2},variants=[{'input':'flowchart LR\nA["literal --> ; & ] text"] -->|"edge ; & -->"| B([Middle]) ==> C["last [nested] label"]','checks':{'texts':['literal --> ; & ] text','edge ; & -->','Middle','last [nested] label'],'flow_relations':[['literal --> ; & ] text','Middle'],['Middle','last [nested] label']],'edge_count':2}}])
+    CASES[-1]['variants'].append({'input':'flowchart LR\nFoo-->Bar-->Box','checks':{'texts':['Foo','Bar','Box'],'flow_relations':[['Foo','Bar'],['Bar','Box']],'edge_count':2,'arrows':[2,0,0]}})
+    add('flowchart','fanout shorthand','flowchart TD\nA[First] & B[Second] --> C[Third] & D[Fourth] --> E[Final]','Expand each adjacent source/target set as a Cartesian product without losing node definitions, labels or directed relations.',{'texts':['First','Second','Third','Fourth','Final'],'flow_relations':[['First','Third'],['First','Fourth'],['Second','Third'],['Second','Fourth'],['Third','Final'],['Fourth','Final']],'edge_count':6},variants=[{'input':'flowchart LR\nA["salt & pepper"] & B((Other)) -->|"one & two"| C{Result}','checks':{'texts':['salt & pepper','Other','Result','one & two'],'flow_relations':[['salt & pepper','Result'],['Other','Result']],'edge_count':2}}])
+    add('flowchart','semicolon statements','flowchart LR; A[One]; B[Two]; A --> B; B[Final label] --> C[Three];','Split only top-level statement separators, preserve declarations and their later updates, and render all relations.',{'texts':['One','Final label','Three'],'no_text':['Two'],'flow_relations':[['One','Final label'],['Final label','Three']],'edge_count':2},variants=[{'input':'flowchart TD\nsubgraph Group; A["semi; colon & arrow -->"]; B[(Store)]; A -->|"a; b"| B; end; B --> C[Done]','checks':{'texts':['Group','semi; colon & arrow -->','Store','a; b','Done'],'group_count':1,'flow_relations':[['semi; colon & arrow -->','Store'],['Store','Done']],'edge_count':2}}])
     for feat, src, expected in [
-        ('chain edges','A --> B --> C','Preserve both relations and all three endpoints or explicitly diagnose this unsupported chain.'),
-        ('fanout shorthand','A & B --> C','Preserve both A→C and B→C or explicitly diagnose the unsupported shorthand.'),
-        ('semicolon statements','A[One]; B[Two]; A --> B','Preserve both declarations and relation or explicitly diagnose unsupported separators.'),
         ('style directive','A[One]\nstyle A fill:#ff0000','Styling directives are outside native syntax; never advertise configurable Mermaid init/style support.'),
         ('subgraph direction','subgraph G\ndirection LR\nA[One] --> B[Two]\nend','Local direction is outside the flat-group contract; it must not be mistaken for implemented direction control.'),
         ('asymmetric shape','A>Flag] --> B[Target]','Asymmetric shape is present in complex fixture but absent from native NodeShape; flag as unsupported rather than certify the fallback.')]:
@@ -95,13 +96,15 @@ def cases():
     add('sequence','nested control',pre+'alt outer\nloop inner\nA->>B: primary\nend\nelse denied\nB-->>A: fallback\nend','Retain nested frames and branch membership; messages connect the correct lifelines.', {'texts':['alt outer','loop inner','primary','denied','fallback'],'control':True,'sequence_arrows':True})
     add('sequence','activation span',pre+'activate B\nA->>B: work\ndeactivate B','Draw the activation along Server from activate to deactivate; retain message direction.', {'texts':['work'],'activation':True})
     add('sequence','nested activation',pre+'activate B\nactivate B\nA->>B: nested\ndeactivate B\ndeactivate B','Nested activations remain distinguishable and span their matching deactivate events.', {'texts':['nested'],'nested_activation':True})
+    add('sequence','implicit participants','sequenceDiagram\nZ->>A: request\nA-->>Z: reply\nA->>M: delegate','Create each participant once in first-appearance order; later explicit aliases update that participant without duplicating/reordering lifelines.',{'texts':['Z','A','M','request','reply','delegate'],'participant_order':['Z','A','M'],'sequence_relations':[['Z','A'],['A','Z'],['A','M']]},variants=[{'input':'sequenceDiagram\nparticipant Y as Declared\nZ->>A: first\nparticipant Z as Caller\nA-->>Z: return\nA->>Y: notify','checks':{'texts':['Declared','Caller','A','first','return','notify'],'participant_order':['Declared','Caller','A'],'sequence_relations':[['Caller','A'],['A','Caller'],['A','Declared']]}}])
+    CASES[-1]['variants'].append({'input':'sequenceDiagram\nloop compare ->> endpoints\nZ->>A: label --> stays literal\nend\nparticipant A as Alpha\nparticipant Z as Zed\nparticipant M as Em','checks':{'texts':['loop compare ->> endpoints','label --> stays literal'],'participant_order':['Zed','Alpha','Em'],'sequence_relations':[['Zed','Alpha']]}})
     for feat, src, expected in [
-        ('implicit participants','A->>B: request','Implicit lifeline declarations are not implemented; record missing message rather than passing empty output.'),
         ('actor declaration','actor A\nparticipant B\nA->>B: request','Actor glyph/declaration is outside current participant model; record the unsupported construct.'),
         ('multi participant note',pre+'Note over A,B: shared note','Multi-participant note span is absent from native note lookup; preserve as unsupported contract.'),
-        ('parallel and branch',pre+'par first\nA->>B: first work\nand second\nB->>A: second work\nend','Standard par/and branches appear in complex fixture but native parser supports else only; do not certify flattened branches.'),
-        ('inline activation',pre+'A->>+B: work\nB-->>-A: done','Inline activation signs are outside the declared activate/deactivate subset; do not certify missing messages.')]:
+        ('parallel and branch',pre+'par first\nA->>B: first work\nand second\nB->>A: second work\nend','Standard par/and branches appear in complex fixture but native parser supports else only; do not certify flattened branches.')]:
         add('sequence',feat,src if src.startswith('sequence') else 'sequenceDiagram\n'+src,expected,{},True)
+    add('sequence','inline activation',pre+'A->>+B: work\nB-->>-A: done','Emit the message before activating its receiver (+) or deactivating its sender (-). Preserve stacked activations and message endpoints; align the visual activation with its incoming message.',{'texts':['Caller','Server','work','done'],'participant_order':['Caller','Server'],'sequence_relations':[['Caller','Server'],['Server','Caller']],'activation_spans':[['Server',0,1]]},variants=[{'input':pre+'A->>+B: outer\nB->>+B: inner\nB-->>-B: inner done\nB-->>-A: outer done','checks':{'texts':['outer','inner','inner done','outer done'],'participant_order':['Caller','Server'],'sequence_relations':[['Caller','Server'],['Server','Server'],['Server','Server'],['Server','Caller']],'activation_spans':[['Server',0,3],['Server',1,2]],'nested_activation':True}},{'input':pre+'B-->>-A: invalid','checks':{'error':'Cannot deactivate inactive participant'}}])
+    CASES[-1]['variants'].append({'input':pre+'deactivate B','checks':{'error':'Cannot deactivate inactive participant'}})
     add('sequence','long note bounds',pre+'Note right of B: This is a deliberately very long note that must stay readable inside the exported diagram canvas', 'Preserve note text within the note and exported canvas; wrap or expand rather than clipping.', {'texts':['This is a deliberately very long note that must stay readable inside the exported diagram canvas'],'text_bounds':True})
     add('sequence','unclosed control',pre+'alt condition\nA->>B: work','Unclosed controls must remain panic-free; native parser is permissive and may close at EOF.', {'texts':['work']})
     add('class','class declarations','classDiagram\nclass Alpha\nclass Beta','Show distinct class boxes with their names, without inventing relations.', {'texts':['Alpha','Beta']})
@@ -113,13 +116,12 @@ def cases():
     for op, marker, endpoint, dashed in [('<|--','triangle','from',False),('*--','diamond','from',False),('o--','hollow diamond','from',False),('-->','arrow','to',False),('--','none','none',False),('..>','arrow','to',True),('..|>','triangle','to',True),('..','none','none',True)]:
         add('class','relation '+op,f'classDiagram\nclass Source\nclass Target\nSource {op} Target : relation',f'Connect declared classes with {"dashed" if dashed else "solid"} relation and {marker} at {endpoint}; marker direction must preserve UML meaning.', {'texts':['relation'],'class_relation':[marker,endpoint,dashed]})
     add('class','malformed stereotype','classDiagram\nclass <<abstract Account','Return a class parse error identifying missing >> and source line.', {'error':"missing '>>'"})
-    for feat, src, expected in [
-        ('implicit classes','Source --> Target','Relationship-only classes are not auto-created by current parser; treat as unsupported subset.'),
-        ('multiplicity','class Source\nclass Target\nSource "1" --> "*" Target : contains','Multiplicities exist in AST/render but are never parsed; standard quoted endpoint cardinality must not be reported as supported.'),
-        ('standard return type','class Account {\n+update(value: String) bool\n}','Trailing return types occur in complex fixture; bool must not silently disappear.'),
-        ('static and abstract members','class Account {\n+count$\n+run()*\n}','Static/abstract member flags have drawing paths but parser never sets them; do not certify literal punctuation as styling.'),
-        ('reverse realization','class Source\nclass Target\nSource <|.. Target : implements','Reverse realization in complex fixture is absent from parser operator table; record unsupported contract.')]:
-        add('class',feat,'classDiagram\n'+src,expected,{},True)
+    add('class','implicit classes','classDiagram\nSource --> Target : relation','Create each endpoint class once and retain its relation; later definitions enrich the same class.',{'texts':['Source','Target','relation'],'class_relation':['arrow','to',False]},variants=[{'input':'classDiagram\nSource --> Target : relation\nclass Source {\n+id: String\n}\nSource --> Other : second','checks':{'texts':['Source','Target','Other','+ id: String','relation','second'],'class_names':['Source','Target','Other']}}])
+    CASES[-1]['variants'].append({'input':'classDiagram\nFoo-->Bar : direct','checks':{'texts':['Foo','Bar','direct'],'class_names':['Foo','Bar'],'class_relation':['arrow','to',False]}})
+    add('class','multiplicity','classDiagram\nclass Source\nclass Target\nSource "1" --> "0..*" Target : contains','Preserve both quoted endpoint multiplicities near their actual endpoints, with measured text/marker/node/canvas clearance.',{'texts':['Source','Target','1','0..*','contains'],'class_relation':['arrow','to',False],'multiplicities':[['1','Source'],['0..*','Target']]},variants=[{'input':'classDiagram\nSource "zero or one items" *-- "many selected records" Target : owns','checks':{'texts':['Source','Target','zero or one items','many selected records','owns'],'class_relation':['diamond','from',False],'multiplicities':[['zero or one items','Source'],['many selected records','Target']]}},{'input':'classDiagram\nSource "0..1" .. "1..9" Target : undirected','checks':{'texts':['0..1','1..9'],'class_relation':['none','none',True],'multiplicities':[['0..1','Source'],['1..9','Target']]}}])
+    add('class','standard return type','classDiagram\nclass Account {\n+update(value: String) bool\n}','Preserve a standard trailing return type as the method return type, using existing measured member rendering.',{'texts':['+ update(value: String): bool']},variants=[{'input':'classDiagram\nclass Account {\n+first(x: int): Result~String~\n#second(name: String, count: int) Map~String,Value~\n+plain()\n}','checks':{'texts':['+ first(x: int): Result~String~','# second(name: String, count: int): Map~String,Value~','+ plain()'],'text_bounds':True}}])
+    add('class','static and abstract members','classDiagram\nclass Account {\n+count$\n+run()*\n}','Remove classifier suffixes from visible names and apply existing static underline/abstract italic semantics to the corresponding member only.',{'texts':['+ count','+ run()'],'member_styles':[['+ count',True,False],['+ run()',False,True]]},variants=[{'input':'classDiagram\nclass Account {\n-total: int$\n+create() Account$\n+alternate()$ Account\n#fetch(value: String) Result~String~*\n+normal() bool\n}','checks':{'texts':['- total: int','+ create(): Account','+ alternate(): Account','# fetch(value: String): Result~String~','+ normal(): bool'],'member_styles':[['- total: int',True,False],['+ create(): Account',True,False],['+ alternate(): Account',True,False],['# fetch(value: String): Result~String~',False,True],['+ normal(): bool',False,False]],'text_bounds':True}}])
+    add('class','reverse realization','classDiagram\nclass Source\nclass Target\nSource <|.. Target : implements','A reverse realization has a dashed line and hollow triangle at Source, preserving Target realizing Source.',{'texts':['Source','Target','implements'],'realization_target':'Source'},variants=[{'input':'classDiagram\nContract "1" <|.. "0..*" Adapter : implements','checks':{'texts':['Contract','Adapter','1','0..*','implements'],'realization_target':'Contract','multiplicities':[['1','Contract'],['0..*','Adapter']]}},{'input':'classDiagram\nAdapter ..|> Contract : implements','checks':{'texts':['Adapter','Contract','implements'],'realization_target':'Contract'}}])
     add('class','long member fit','classDiagram\nclass Account {\n+extraordinarilyLongAttributeName: Map~String,Value~\n+performLengthyOperation(argument: String): Result~String~\n}','All member text fits within the measured class box.', {'texts':['+ extraordinarilyLongAttributeName: Map~String,Value~'],'text_bounds':True})
     for header in ['stateDiagram','stateDiagram-v2','state']:
         add('state','header '+header,header+'\n[*] --> Idle\nIdle --> Active: begin\nActive --> [*]','Show start, two states and terminal ring; transition arrows point to target.', {'texts':['Idle','Active','begin'],'state_arrows':True})
@@ -212,6 +214,76 @@ def validate(case, root):
         el=textby[label]; return float(el.attrib['x']),float(el.attrib['y'])
     for label in checks.get('texts',[]): need(label in labels,f'Missing exact visible text {label!r}; actual={labels}')
     for label in checks.get('no_text',[]): need(not any(label in x for x in labels),f'Unexpected visible text {label!r}')
+    if 'flow_relations' in checks:
+        names=set(n for pair in checks['flow_relations'] for n in pair)
+        if names <= textby.keys():
+            actual=[tuple(min(names,key=lambda n:math.dist(p,xy(n))) for p in (points(r)[0],points(r)[-1])) for r in routes]
+            need(Counter(actual)==Counter(map(tuple,checks['flow_relations'])),f'Wrong directed flow relations: {actual}')
+            for route in routes:
+                ps=points(route); end=ps[-1]; previous=next((p for p in reversed(ps[:-1]) if math.dist(p,end)>.1),end)
+                marker=next((points(p) for p in polygons if len(points(p))==3 and math.dist(points(p)[0],end)<.1),None)
+                need(marker is not None,'Chained/fanout relation lost its target arrowhead')
+                if marker:
+                    base=tuple((marker[1][i]+marker[2][i])/2 for i in [0,1])
+                    need(sum((end[i]-previous[i])*(end[i]-base[i]) for i in [0,1])>0,'Chained/fanout arrow opposes final tangent')
+        else: need(False,'Missing flow endpoint labels')
+    if 'participant_order' in checks:
+        names=checks['participant_order']
+        header=[t for t in texts if ''.join(t.itertext()) in names]
+        top=min((float(t.attrib['y']) for t in header),default=0)
+        actual=[''.join(t.itertext()) for t in sorted((t for t in header if float(t.attrib['y'])==top),key=lambda t:float(t.attrib['x']))]
+        need(actual==names,f'Wrong participant order/duplicates: {actual}')
+    if 'sequence_relations' in checks:
+        names=checks['participant_order']; message_routes=[]
+        for e in elements:
+            if tag(e)=='line' and e.attrib.get('stroke-width')=='0.75' and e.attrib.get('y1')==e.attrib.get('y2'):
+                message_routes.append([(float(e.attrib['x1']),float(e.attrib['y1'])),(float(e.attrib['x2']),float(e.attrib['y2']))])
+            elif tag(e)=='polyline' and len(points(e))==4: message_routes.append(points(e))
+        message_routes.sort(key=lambda ps:ps[0][1])
+        if set(names)<=textby.keys():
+            actual=[tuple(min(names,key=lambda n:abs(p[0]-xy(n)[0])) for p in (ps[0],ps[-1])) for ps in message_routes]
+            need(actual==list(map(tuple,checks['sequence_relations'])),f'Wrong temporal sequence endpoints: {actual}')
+            active=[rect(e) for e in boxes if float(e.attrib['width'])==8]
+            for name,first,last in checks.get('activation_spans',[]):
+                if len(message_routes)>last:
+                    start=message_routes[first][-1][1]
+                    # Mermaid deactivates after the self return plus its 10px
+                    # cursor clearance; an ordinary reply closes at its send y.
+                    end=message_routes[last][-1][1]+(10 if len(message_routes[last])==4 else 0)
+                    need(any(abs(r[0]+4-xy(name)[0])<=5 and abs(r[1]-start)<1 and abs(r[1]+r[3]-end)<1 for r in active),f'Wrong activation span for {name} messages {first}..{last}: expected {start}..{end}, actual={active}')
+            if 'activation_spans' in checks:
+                for bar in [e for e in boxes if float(e.attrib['width'])==8]:
+                    for marker in polygons:
+                        if contains(rect(bar),points(marker)[0]): need(elements.index(bar)<elements.index(marker),'Activation overpaints message endpoint marker')
+        else: need(False,'Missing sequence participants')
+    if 'class_names' in checks:
+        for name in checks['class_names']: need(labels.count(name)==1,f'Class {name} missing/duplicated')
+        need(len(boxes)==len(checks['class_names']),'Unexpected implicit class boxes')
+    for name,static,abstract in checks.get('member_styles',[]):
+        t=textby.get(name)
+        need(t is not None and (t.attrib.get('text-decoration')=='underline')==static and (t.attrib.get('font-style')=='italic')==abstract,f'Wrong member styling for {name}')
+    if 'realization_target' in checks:
+        name=checks['realization_target']; markers=[p for p in polygons if len(points(p))==3 and 'stroke' in p.attrib]
+        relations=[e for e in lines if e.attrib.get('stroke-width')=='0.75' and e.attrib.get('y1')!=e.attrib.get('y2')]
+        need(len(markers)==1 and len(relations)==1,'Missing hollow realization marker/line')
+        if markers and relations and name in textby:
+            tip=points(markers[0])[0]; line=relations[0]; endpoints=[(float(line.attrib['x'+str(i)]),float(line.attrib['y'+str(i)])) for i in [1,2]]
+            need(math.dist(tip,xy(name))<math.dist(endpoints[0] if math.dist(tip,endpoints[1])<1 else endpoints[1],xy(name)),'Realization triangle at wrong named class')
+            need('stroke-dasharray' in line.attrib,'Realization is not dotted')
+    if 'multiplicities' in checks:
+        cards=[]
+        for label,name in checks['multiplicities']:
+            if label not in textby or name not in textby: need(False,f'Missing multiplicity {label} at {name}'); continue
+            t=textby[label]; x,y=xy(label); size=float(t.attrib['font-size']); w=len(label)*size*.55
+            left=x-w/2 if t.attrib.get('text-anchor')=='middle' else (x-w if t.attrib.get('text-anchor')=='end' else x)
+            card=(left,y-size*.85,w,size); cards.append(card)
+            need(not any(overlap(card,rect(b)) for b in boxes),f'Multiplicity {label} overlaps class box')
+            for p in polygons:
+                xs,ys=zip(*points(p)); need(not overlap(card,(min(xs),min(ys),max(xs)-min(xs),max(ys)-min(ys))),f'Multiplicity {label} overlaps marker')
+            names=[n for _,n in checks['multiplicities']]
+            need(min(names,key=lambda n:math.dist((x,y),xy(n)))==name,f'Multiplicity {label} belongs to wrong endpoint')
+        for i,card in enumerate(cards):
+            for other in cards[i+1:]: need(not overlap(card,other),'Endpoint multiplicities overlap')
     if 'exact_text_count' in checks: need(len(texts)==checks['exact_text_count'],f'Expected {checks["exact_text_count"]} text nodes, got {len(texts)}')
     if 'direction' in checks and all(l in textby for l in ['Origin','Destination']):
         a,b=xy('Origin'),xy('Destination'); d=checks['direction']
@@ -475,9 +547,11 @@ def validate(case, root):
 
 def test(selected, phase):
     supported=set('activation arrows branch_labels class_relation control direction distinct_routes edge_count er_cards er_dashed error exact_text_count exports group group_count group_label_clear head italic local_sentinels markdown multiline nested_activation nested_state no_text self_loop self_markers sequence_arrows sequence_note sequence_op sequence_self shape shaped_loops state_arrows state_group state_note state_self stderr style tail text_bounds texts'.split())
+    supported.update('flow_relations participant_order sequence_relations activation_spans class_names multiplicities member_styles realization_target'.split())
     for case in selected:
-        unknown=set(case['checks'])-supported
-        if unknown: raise ValueError(f'{case["id"]}: unimplemented audit checks {sorted(unknown)}')
+        for item in [case]+case['variants']:
+            unknown=set(item['checks'])-supported
+            if unknown: raise ValueError(f'{case["id"]}: unimplemented audit checks {sorted(unknown)}')
     stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'); run_dir=ART/stamp; run_dir.mkdir()
     metadata=subprocess.run(['cargo','metadata','--no-deps','--format-version','1'],cwd=ROOT,text=True,capture_output=True,check=True)
     target=Path(json.loads(metadata.stdout)['target_directory'])/'debug'
@@ -507,10 +581,23 @@ def test(selected, phase):
                 root=ET.parse(str(stem)+'.fragment.svg').getroot(); width,height=float(root.attrib['width']),float(root.attrib['height'])
                 assert math.isfinite(width) and math.isfinite(height) and width>0 and height>0
                 failures,notes=validate({'checks':{k:v for k,v in checks.items() if k!='branch_labels'}},root)
-                ET.parse(str(stem)+'.svg')
+                cli_failures,_=validate({'checks':{k:v for k,v in checks.items() if k!='branch_labels'}},ET.parse(str(stem)+'.svg').getroot())
+                failures.extend('CLI: '+error for error in cli_failures)
             except Exception as error: failures.append('SVG validation error: '+repr(error))
             if checks.get('stderr') and checks['stderr'] not in api.stderr: failures.append('Missing expected warning '+checks['stderr'])
             if case['boundary'] and not checks: failures.append('Outside-subset syntax was silently accepted instead of diagnosed')
+        for index,item in enumerate(case['variants'],1):
+            variant=Path(str(stem)+f'-variant-{index}'); variant_source=variant.with_suffix('.mmd'); variant_source.write_text(item['input'])
+            outputs=[('API',run_command([str(probe),str(variant_source),str(variant)],Path(str(variant)+'.api.log')),'.fragment.svg'),('CLI',run_command([str(target/'markie-mermaid'),str(variant_source),'-o',str(variant)+'.svg'],Path(str(variant)+'.cli.log')),'.svg')]
+            for name,result,suffix in outputs:
+                expected_error=item['checks'].get('error')
+                if expected_error:
+                    if result.returncode==0 or expected_error not in result.stderr: failures.append(f'Variant {index} {name}: expected {expected_error!r}; got {result.returncode}: {result.stderr}')
+                elif result.returncode: failures.append(f'Variant {index} {name}: {result.stderr}')
+                else:
+                    try:
+                        extra,_=validate(item,ET.parse(str(variant)+suffix).getroot()); failures.extend(f'Variant {index} {name}: {error}' for error in extra)
+                    except Exception as error: failures.append(f'Variant {index} {name}: SVG validation error {error!r}')
         if checks.get('branch_labels'):
             # Same asymmetric graph as showcase-flow.mmd, retained here so the audit
             # remains independently reproducible without a generated showcase file.
@@ -593,6 +680,7 @@ def test(selected, phase):
         if status=='passed' and phase=='targeted': status='retesting'
         verdict='failed: ' if failures else ('unsupported: ' if case['boundary'] else ('passed: ' if phase=='full' else phase+': passed '))
         row={'id':ident,'status':status,'test_command':PREFIX+f'python3 tests/audit/mermaid/run.py test --phase {phase} --case {ident}', 'evidence':str(stem.relative_to(ROOT))+'.{mmd,ast.txt,fragment.svg,svg,api.log,cli.log}', 'retest':verdict+'public API + standalone CLI '+stamp}
+        if case['variants']: row['evidence']+='; '+str(stem.relative_to(ROOT))+'-variant-*.{mmd,ast.txt,fragment.svg,svg,api.log,cli.log}'
         if checks.get('branch_labels'): row['evidence']+='; '+str(stem.relative_to(ROOT))+'-branch-labels.{mmd,ast.txt,fragment.svg,svg,api.log,cli.log}'
         if failures: row['errors']=phase+' '+stamp+'; severity='+('high' if case['area'] in ['class','state','er'] else 'medium')+'; expected='+case['expected']+'; actual='+' | '.join(failures)+'; repro='+row['test_command']
         results.append(dict(case=ident,feature=case['feature'],area=case['area'],status=status,failures=failures,notes=notes,stem=str(stem.relative_to(ROOT))))
