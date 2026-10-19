@@ -87,7 +87,7 @@ case('tasks', 'Task wrapping', '- [x] Alpha ' + 'task continuation words ' * 20,
 case('quotes', 'Basic quote', '> Alpha\n> Beta\n\nOmega', 'Quote has a vertical border and tint; following prose resets indent.', 'renderer.rs:659-662,739-744,2446-2495', [('contains', 'Alpha'), ('quote_border', 1), ('x_gt', 'Alpha', 'Omega'), ('quote_clearance',)])
 case('quotes', 'Nested quotes', '> Alpha\n>\n> > Beta\n>\n> Gamma\n\nOmega', 'Nested quotes draw two borders and indent Beta farther than Alpha.', 'renderer.rs:2446-2495', [('quote_border', 2), ('x_gt', 'Beta', 'Alpha'), ('quote_clearance',)])
 case('quotes', 'Quote list and code containers', '> - Alpha\n> - Beta\n>\n> ```\n> Gamma\n> ```', 'Quote preserves list markers, code background and container indentation.', 'renderer.rs:643-662,1372-1546,2446-2495', [('marker_count', '•', 2), ('contains', 'Gamma')])
-case('quotes', 'GFM alert kind', '> [!WARNING]\n> Alpha', 'GFM alert text remains visible with generic quote styling; no special alert styling is implemented.', 'renderer.rs:472,659-662', [('contains', 'Alpha'), ('quote_border', 1)], True)
+case('quotes', 'GFM alert kinds', '\n\n'.join(f'> [!{kind.upper()}]\n> {kind}Body **bold** and *italic* with `code`.\n>\n> - First\n> - Second' for kind in ['Note', 'Tip', 'Important', 'Warning', 'Caution']) + '\n\n> [!UNKNOWN]\n> OrdinaryQuote\n\nOmega', 'All five GFM alert kinds have a visible bold kind label and distinct theme-aware border/title colors; body formatting, lists, ordinary quotes and following prose retain their semantics.', 'renderer.rs:472,659-662', [('alerts',), ('marker_count', '•', 10), ('quote_border', 6), ('quote_clearance',), ('contains', '[!UNKNOWN]'), ('noattr', 'Omega', 'font-weight'), ('bounds',)])
 case('rules', 'Thematic rule and spacing', 'Alpha\n\n---\n\nBeta', 'Rule spans content width and separates surrounding paragraphs.', 'renderer.rs:1677-1709', [('rule',)])
 case('links', 'Inline link styling', '[Alpha Beta](https://example.invalid/a "Title") Omega', 'Link label is colored and underlined; destination/title are not exported as clickable anchors.', 'renderer.rs:663,745,928-932,2633-2650', [('line_count', 3), ('no_element', 'a'), ('contains', 'Alpha')])
 case('links', 'Reference links', '[Alpha][ref]\n\n[ref]: https://example.invalid', 'Resolved reference uses link styling without printing definition.', 'renderer.rs:663,745', [('line_count', 1), ('absent', 'example.invalid')])
@@ -100,10 +100,10 @@ case('tables', 'Left center right alignment', '| LongLeft | LongCenter | LongRig
 case('tables', 'Long prose cell wrapping', '| A | B |\n|---|---|\n| short | ' + 'long words ' * 45 + '|', 'Rows grow to fit wrapped prose within the canvas.', 'renderer.rs:1859-1878,2001-2080', [('bounds',), ('wrap',)])
 case('tables', 'Unbroken cell splitting', '| A | B |\n|---|---|\n| short | ' + 'x' * 240 + '|', 'Unbroken table words split without dropping characters.', 'renderer.rs:2001-2080', [('table_x_count', 240), ('bounds',)])
 case('tables', 'Many narrow columns', '|' + '|'.join('Header' + str(n) for n in range(20)) + '|\n|' + '|'.join('---' for _ in range(20)) + '|\n|' + '|'.join('Value' for _ in range(20)) + '|', 'Many columns fit the canvas without text escaping cells.', 'renderer.rs:1834-1875,2001-2080', [('cell_bounds',), ('contains', ''.join('Header' + str(n) for n in range(20))), ('payload_count', 'Value', 20)])
-case('tables', 'Inline emphasis flattened', '| A | B |\n|---|---|\n| **Alpha** | *Beta* ~~Gamma~~ |', 'Table body flattens emphasis and strike styling while preserving text; no warning is emitted.', 'renderer.rs:533-541,667-669,1969-1982', [('contains', 'Alpha'), ('noattr', 'Alpha', 'font-weight'), ('noattr', 'Beta Gamma', 'font-style')], True)
-case('tables', 'Inline code flattened', '| A |\n|---|\n| `Alpha <Beta>` |', 'Inline code is retained as plain table text without a code box or monospace.', 'renderer.rs:542-549', [('contains', 'Alpha <Beta>'), ('table_plain',)], True)
-case('tables', 'Inline HTML ignored', '| A |\n|---|\n| <span style="color:red">Alpha</span><br>Beta |', 'HTML tags and styling are ignored in tables, inner text retained without a forced break.', 'renderer.rs:552-568', [('contains', 'AlphaBeta'), ('fill_not', 'AlphaBeta', 'red')], True)
-case('tables', 'Table link destination and style flattened', '| A |\n|---|\n| [Alpha](https://example.invalid) |', 'Link text remains plain in table cells without anchor or underline.', 'renderer.rs:533-541,663,1969-1982', [('contains', 'Alpha'), ('line_count', 0), ('no_element', 'a')], True)
+case('tables', 'Inline emphasis and strike', '| A | B |\n|---|---|\n| **Alpha *Both* Tail** Plain | *Beta* ~~Gamma~~ Reset |\n| **' + 'e\u0301' * 40 + '** | *' + '🧑‍💻' * 30 + '* |', 'Table cells preserve nested strong/emphasis and strike, reset subsequent styles, wrap long styled content at grapheme boundaries, and retain all text inside cells.', 'renderer.rs:533-541,667-669,1969-1982', [('attr', 'Alpha', 'font-weight', '700'), ('attr', 'Both', 'font-weight', '700'), ('attr', 'Both', 'font-style', 'italic'), ('attr', 'Tail', 'font-weight', '700'), ('noattr', 'Tail', 'font-style'), ('noattr', 'Plain', 'font-weight'), ('attr', 'Beta', 'font-style', 'italic'), ('noattr', 'Reset', 'font-style'), ('decorated', 'Gamma', 'strike'), ('cluster_runs', 'e\u0301', '\u0301'), ('cluster_runs', '🧑‍💻', '\u200d'), ('payload_count', 'e\u0301', 40), ('payload_count', '🧑‍💻', 30), ('cell_bounds',)])
+case('tables', 'Inline code font and box', '| A |\n|---|\n| Before `Alpha <Beta>` After |\n| `' + 'code  e\u0301🧑‍💻 ' * 20 + '` |', 'Table inline code uses monospace and a padded background, preserves literal content and spaces while wrapping at grapheme boundaries, and leaves surrounding prose unstyled.', 'renderer.rs:542-549', [('code_payload', 'Alpha <Beta>' + 'code  e\u0301🧑‍💻 ' * 20), ('attr', 'Before', 'font-family', 'sans-serif'), ('attr', 'After', 'font-family', 'sans-serif'), ('code_boxes',), ('cell_bounds',)])
+case('tables', 'Supported inline HTML styles and breaks', '| A | B |\n|---|---|\n| <span style="color:red">Alpha <span style="color:blue">Inner</span> Tail</span><br>Beta<br/><br>End | <b>Bold</b> Plain |\n| Base<sup>Raised</sup><sub>Lowered</sub> <mark>Mark</mark> <u>Under</u> | <span style="font-size:2em">Large</span> Normal |\n| <span style="color:red">Scoped | Clear |', 'Table cells support the existing inline HTML subset, including nested colors, baseline/size/background/underline, explicit and blank line breaks; cell boundaries contain unclosed style scopes.', 'renderer.rs:552-568', [('attr', 'Alpha', 'fill', 'red'), ('attr', 'Inner', 'fill', 'blue'), ('attr', 'Tail', 'fill', 'red'), ('fill_not', 'Beta', 'red'), ('below', 'Beta', 'Alpha'), ('blank_break', 'End', 'Beta'), ('row_growth', 'Large', 'Scoped'), ('attr', 'Bold', 'font-weight', '700'), ('noattr', 'Plain', 'font-weight'), ('sup', 'Raised', 'Base'), ('sub', 'Lowered', 'Base'), ('mark',), ('decorated', 'Under', 'underline'), ('scale', 'Large', 'Normal', 2.0), ('fill_not', 'Clear', 'red'), ('cell_bounds',)])
+case('tables', 'Table link styling', '| A | B |\n|---|---|\n| [Alpha **Bold** *Italic*](https://example.invalid) Plain | R |\n| [' + 'linked words ' * 20 + 'Omega](https://example.invalid) | End |', 'Table links retain theme link color and underline across wrapped lines and nested formatting, reset outside the link, and remain visual labels without clickable SVG anchors.', 'renderer.rs:533-541,663,1969-1982', [('attr', 'Bold', 'font-weight', '700'), ('attr', 'Italic', 'font-style', 'italic'), ('decorated', 'Alpha', 'underline'), ('decorated', 'Omega', 'underline'), ('link_scope',), ('no_element', 'a'), ('payload_count', 'linked', 20), ('payload_count', 'words', 20), ('cell_bounds',)])
 case('tables', 'Image in table semantic preservation', '| A |\n|---|\n| ![AltText](pixel.png) |', 'Table image is embedded or reduced to readable alt text inside its cell, without corrupting table position.', 'renderer.rs:664-670,746-748,2186-2248', [('contains', 'AltText'), ('no_element', 'image')])
 case('tables', 'Escaped pipe', '| A | B |\n|---|---|\n| Alpha\\|Beta | Gamma |', 'Escaped pipe stays inside one cell.', 'renderer.rs:1780-1788', [('contains', 'Alpha|Beta'), ('contains', 'Gamma')])
 case('tables', 'Missing and extra cells', '| A | B |\n|---|---|\n| Alpha |\n| Beta | Gamma | Extra |', 'Missing cell is empty; parser discards surplus cell per table grammar.', 'renderer.rs:1746-1788', [('contains', 'Alpha'), ('contains', 'Gamma'), ('absent', 'Extra')])
@@ -190,10 +190,10 @@ def source_for(c):
         'code': ['render_inline_code', 'render_code_block_with_language', 'wrap_styled_line'],
         'lists': ['handle_start_tag', 'start_list_item', 'render_text_content_token', 'end_list_item', 'next_list_marker'],
         'tasks': ['render_task_marker', 'start_list_item'],
-        'quotes': ['handle_start_tag', 'start_blockquote', 'end_blockquote'],
+        'quotes': ['handle_start_tag', 'alert_presentation', 'start_blockquote', 'end_blockquote'],
         'rules': ['render_horizontal_rule'],
         'links': ['render', 'handle_start_tag', 'current_fill', 'render_text_content_token'],
-        'tables': ['render', 'finish_table', 'wrap_table_text', 'finish_image'],
+        'tables': ['render', 'render_table_text', 'finish_table', 'table_run_width', 'wrap_table_text', 'paint_table_run', 'finish_image'],
         'footnotes': ['handle_start_tag', 'handle_end_tag', 'render_footnote_reference', 'render_text_content_token'],
         'definitions': ['handle_start_tag', 'handle_end_tag', 'line_start_x'],
         'metadata': ['render', 'handle_start_tag'],
@@ -225,12 +225,12 @@ def inventory():
     print(f'Inventoried {len(rows)} stories: {dict(collections.Counter(r["area"] for r in rows))}')
 
 
-def publish(rows, updates=None):
+def publish(rows, updates):
     REPORT.write_text(json.dumps(rows, indent=2) + '\n')
     importer = ROOT / 'scripts/feature-audit.py'
     if importer.exists():
         update_path = REPORT.with_name('markdown-update.json')
-        update_path.write_text(json.dumps(updates if updates is not None else [{k: v for k, v in r.items() if k != 'retest'} for r in rows], indent=2))
+        update_path.write_text(json.dumps([{k: v for k, v in update.items() if k != 'showcase'} for update in updates], indent=2))
         result = subprocess.run(['python3', str(importer), 'import', str(update_path)], cwd=ROOT, capture_output=True, text=True)
         if result.returncode:
             print('CSV import failed:', result.stderr, flush=True)
@@ -280,7 +280,29 @@ def check(spec, tree, raw, stderr, result, width, variant):
     elif kind == 'line_count': assert len(nodes(tree, 'line')) == args[0], f'Line count={len(nodes(tree, "line"))}, expected={args[0]}'
     elif kind == 'rect_min': assert len(nodes(tree, 'rect')) >= args[0], 'Missing code background'
     elif kind == 'code_count': assert len([t for t in texts if t.get('font-family') == 'monospace']) >= args[0], 'Missing monospace code'
-    elif kind == 'table_plain': assert all(t.get('font-family') != 'monospace' for t in texts), 'Unexpected monospace in flattened table'
+    elif kind == 'code_boxes':
+        boxes = [r for r in nodes(tree, 'rect') if r.get('rx') and not r.get('stroke')]
+        code = [t for t in texts if t.get('font-family') == 'monospace']
+        assert code, 'No monospace table code'
+        for t in code:
+            x, y = float(t.get('x')), float(t.get('y'))
+            advance = measured_width(t.text or '', t.get('font-size'), True, False, False)
+            assert any(float(r.get('x')) < x and x + advance < float(r.get('x')) + float(r.get('width')) + .1 and float(r.get('y')) < y < float(r.get('y')) + float(r.get('height')) for r in boxes), f'Code has no padded background: {t.attrib}'
+    elif kind == 'decorated':
+        t = node(args[0]); x, y, size = float(t.get('x')), float(t.get('y')), float(t.get('font-size'))
+        line_y = y + size * (-.32 if args[1] == 'strike' else .12)
+        advance = measured_width(t.text or '', t.get('font-size'), False, t.get('font-weight') == '700', t.get('font-style') == 'italic')
+        assert any(abs(float(n.get('y1')) - line_y) < .1 and abs(float(n.get('x1')) - x) < .1 and abs(float(n.get('x2')) - x - advance) < .1 and n.get('stroke') == t.get('fill') and n.get('stroke-width') == '1' for n in nodes(tree, 'line')), f'Missing {args[1]} covering {args[0]}'
+    elif kind == 'blank_break': assert num(args[0], 'y') - num(args[1], 'y') >= num(args[1], 'font-size') * 2.6, 'Explicit blank table line collapsed'
+    elif kind == 'row_growth':
+        cells = [r for r in nodes(tree, 'rect') if r.get('stroke')][1:]
+        def row_height(label):
+            t = node(label); x, y = float(t.get('x')), float(t.get('y'))
+            return min(float(r.get('height')) for r in cells if float(r.get('x')) <= x <= float(r.get('x')) + float(r.get('width')) and float(r.get('y')) <= y <= float(r.get('y')) + float(r.get('height')))
+        assert row_height(args[0]) > row_height(args[1]), 'Large inline text did not grow its row'
+    elif kind == 'link_scope':
+        assert node('Alpha').get('fill') == node('Omega').get('fill') == node('Bold').get('fill') == node('Italic').get('fill'), 'Link color lost across runs'
+        assert node('Alpha').get('fill') != node('Plain').get('fill') == node('R').get('fill'), 'Link color leaks outside link'
     elif kind == 'highlight': assert len({t.get('fill') for t in texts}) >= 3, 'Syntax colors are not distinct'
     elif kind == 'code_payload': assert ''.join((t.text or '').replace('\u00a0', ' ') for t in texts if t.get('font-family') == 'monospace') == args[0], 'Code characters lost during wrapping'
     elif kind == 'cluster_runs':
@@ -311,6 +333,15 @@ def check(spec, tree, raw, stderr, result, width, variant):
         assert len([r for r in nodes(tree, 'rect') if r.get('ry') == '2']) == args[0]
         assert len(nodes(tree, 'polyline')) == args[1]
     elif kind == 'quote_border': assert len([n for n in nodes(tree, 'line') if n.get('stroke-width') == '3']) == args[0], 'Missing quote border'
+    elif kind == 'alerts':
+        colors = []
+        for label in ['Note', 'Tip', 'Important', 'Warning', 'Caution']:
+            t = node(label); colors.append(t.get('fill'))
+            assert t.get('font-weight') == '700', f'{label} title not bold'
+            assert num(label + 'Body', 'y') > float(t.get('y')), f'{label} body overlaps title'
+            assert any(n.get('stroke-width') == '3' and n.get('stroke') == t.get('fill') for n in nodes(tree, 'line')), f'{label} border missing kind color'
+        assert len(set(colors)) == 5, 'Alert kinds not visually distinguished'
+        assert node('Omega').get('fill') not in colors, 'Alert title style leaked'
     elif kind == 'quote_clearance':
         border_end = max(float(n.get('y2')) for n in nodes(tree, 'line') if n.get('stroke-width') == '3')
         assert num('Omega', 'y') - num('Omega', 'font-size') * 0.8 >= border_end, 'Following prose overlaps quote border'
@@ -322,11 +353,17 @@ def check(spec, tree, raw, stderr, result, width, variant):
         for label, header in [('a', 'LongLeft'), ('b', 'LongCenter'), ('c', 'LongRight')]:
             assert num(label, 'x') >= num(header, 'x'), f'{label} alignment falls left of header'
     elif kind == 'cell_bounds':
-        cells = [r for r in nodes(tree, 'rect') if r.get('stroke') and float(r.get('width', 0)) < width / 2]
+        cells = [r for r in nodes(tree, 'rect') if r.get('stroke')][1:]
         for t in texts:
             x, y, size = float(t.get('x')), float(t.get('y')), float(t.get('font-size'))
-            advance = measured_width(t.text or '', t.get('font-size'), False, t.get('font-weight') == '700', False)
-            assert any(float(r.get('x')) <= x and x + advance <= float(r.get('x')) + float(r.get('width')) + 0.1 and float(r.get('y')) <= y <= float(r.get('y')) + float(r.get('height')) for r in cells), f'Text outside cell: {t.attrib}, measured advance={advance:.2f}, text={t.text}'
+            advance = measured_width(t.text or '', t.get('font-size'), t.get('font-family') == 'monospace', t.get('font-weight') == '700', t.get('font-style') == 'italic')
+            assert any(float(r.get('x')) <= x + .1 and x + advance <= float(r.get('x')) + float(r.get('width')) + .1 and float(r.get('y')) <= y - size * .7 + .1 and y + size * .2 <= float(r.get('y')) + float(r.get('height')) + .1 for r in cells), f'Text outside cell: {t.attrib}, measured advance={advance:.2f}, text={t.text}'
+        for box in [r for r in nodes(tree, 'rect') if r.get('rx') and not r.get('stroke')]:
+            x, y, w, h = (float(box.get(a)) for a in ['x', 'y', 'width', 'height'])
+            assert any(float(r.get('x')) <= x + .1 and x + w <= float(r.get('x')) + float(r.get('width')) + .1 and float(r.get('y')) <= y + .1 and y + h <= float(r.get('y')) + float(r.get('height')) + .1 for r in cells), f'Inline box outside cell: {box.attrib}'
+        for line in nodes(tree, 'line'):
+            x, end, y = (float(line.get(a)) for a in ['x1', 'x2', 'y1'])
+            assert any(float(r.get('x')) <= x + .1 and end <= float(r.get('x')) + float(r.get('width')) + .1 and float(r.get('y')) <= y <= float(r.get('y')) + float(r.get('height')) for r in cells), f'Decoration outside cell: {line.attrib}'
     elif kind == 'image_count': assert len(nodes(tree, 'image')) == args[0], f'Image count={len(nodes(tree, "image"))}, expected={args[0]}'
     elif kind == 'image_fit':
         image = nodes(tree, 'image')[0]
@@ -400,6 +437,9 @@ def fixtures():
 
 def run(ids, phase):
     global OUT, BIN
+    unknown = set(ids) - {c['id'] for c in CASES}
+    if unknown:
+        raise ValueError('Unknown Markdown story IDs: ' + ', '.join(sorted(unknown)))
     if phase != 'baseline':
         OUT = OUT / phase / datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     OUT.mkdir(parents=True, exist_ok=True)
@@ -418,6 +458,7 @@ def run(ids, phase):
     fixtures()
     rows = json.loads(REPORT.read_text())
     by_id = {r['id']: r for r in rows}
+    executed = []
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f'http://127.0.0.1:{server.server_port}'
@@ -427,12 +468,13 @@ def run(ids, phase):
             row = by_id[c['id']]
             row['status'] = 'retesting' if phase == 'retest' else ('fixing' if phase == 'targeted' else 'testing')
             row['updated_at'] = now()
-            if phase != 'targeted': publish(rows, [{k: v for k, v in row.items() if k != 'retest'}])
+            if phase != 'targeted': publish(rows, [{k: row[k] for k in ['id', 'status', 'updated_at']}])
             folder = OUT / c['id']
             folder.mkdir(exist_ok=True)
             source = c['markdown'].replace('{PNG}', base64.b64encode(PNG).decode()).replace('{SVG}', base64.b64encode(SVG).decode()).replace('{SERVER}', url)
             path = INPUTS / (c['id'] + '.md')
             path.write_text(source)
+            (folder / 'input.md').write_text(source)
             failures, outcomes = [], []
             variants = c.get('variants', ['light-default', 'light-narrow', 'dark-narrow'])
             for variant in variants:
@@ -468,6 +510,7 @@ def run(ids, phase):
             row['test_command'] = f"python3 tests/audit/markdown/run.py {c['id']}"
             row['evidence'] = str(folder.relative_to(ROOT)) + '/checks.json; SVG + stdout/stderr + exact commands alongside'
             row['status'] = 'failed' if failures else ('unsupported' if c['unsupported'] else 'passed')
+            incident = None
             if failures:
                 incident = dict(phase=phase, at=now(), severity='high' if c['feature'] == 'Symlink outside base rejected' else 'medium', reproduction=row['test_command'], expected=c['expected'], actual=failures)
                 prior = json.loads(row['errors']) if row['errors'] else []
@@ -476,12 +519,17 @@ def run(ids, phase):
             row['updated_at'] = now()
             if phase == 'retest':
                 row['retest'] = ('failed: ' + '; '.join(failures)) if failures else ('passed: all ' + str(len(variants)) + ' public CLI/renderer variants meet the story contract; ' + row['evidence'])
-            if phase != 'targeted': publish(rows, [dict(row)])
+            if phase != 'targeted':
+                update = {k: row[k] for k in ['id', 'status', 'test_command', 'evidence', 'updated_at']}
+                if incident: update['errors'] = json.dumps(incident, ensure_ascii=False)
+                if phase == 'retest': update['retest'] = row['retest']
+                publish(rows, [update])
+            executed.append(dict(row))
             print(c['id'], row['status'], '; '.join(failures)[:200], flush=True)
     finally:
         server.shutdown()
-    print(dict(collections.Counter(r['status'] for r in rows)))
-    (OUT / 'results.json').write_text(json.dumps(rows, indent=2) + '\n')
+    print(dict(collections.Counter(r['status'] for r in executed)))
+    (OUT / 'results.json').write_text(json.dumps(executed, indent=2) + '\n')
     print('Evidence:', OUT, flush=True)
 
 

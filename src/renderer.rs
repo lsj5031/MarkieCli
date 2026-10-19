@@ -2,7 +2,9 @@ use crate::fonts::TextMeasure;
 use crate::theme::Theme;
 use base64::Engine;
 use imagesize;
-use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    Alignment, BlockQuoteKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+};
 use resvg::usvg;
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -31,6 +33,7 @@ struct PendingListMarker {
 struct QuoteState {
     border_x: f32,
     start_y: f32,
+    alert: Option<BlockQuoteKind>,
 }
 
 struct ImageState {
@@ -45,7 +48,28 @@ struct ImagePayload {
 }
 
 struct TableCellData {
+    runs: Vec<TableRun>,
+    html_depth: usize,
+}
+
+#[derive(Clone)]
+struct TableRun {
     text: String,
+    code: bool,
+    bold: bool,
+    italic: bool,
+    strike: bool,
+    underline: bool,
+    fill: String,
+    style: InlineHtmlStyle,
+}
+
+#[derive(Default)]
+struct TableLine {
+    runs: Vec<TableRun>,
+    width: f32,
+    above: f32,
+    below: f32,
 }
 
 struct TableRowData {
@@ -579,7 +603,7 @@ impl<T: TextMeasure> Renderer<T> {
                 Event::End(tag_end) => self.handle_end_tag(tag_end)?,
                 Event::Text(text) => {
                     if self.in_table {
-                        self.render_table_text(&text);
+                        self.render_table_text(&text, false);
                     } else if self.in_display_math {
                         self.append_math_text(&text);
                     } else {
@@ -590,37 +614,26 @@ impl<T: TextMeasure> Renderer<T> {
                     if self.current_image.is_some() {
                         self.render_text(&code)?;
                     } else if self.in_table {
-                        self.render_table_text(&code);
+                        self.render_table_text(&code, true);
                     } else {
                         self.render_inline_code(&code)?;
                     }
                 }
                 Event::InlineMath(math) => self.render_inline_math(&math)?,
                 Event::DisplayMath(math) => self.render_display_math(&math)?,
-                Event::Html(html) => {
-                    if self.in_table {
-                        // Ignore HTML inside tables
-                    } else {
-                        self.render_inline_html(&html)?;
-                    }
-                }
-                Event::InlineHtml(html) => {
-                    if self.in_table {
-                        // Ignore inline HTML inside tables
-                    } else {
-                        self.render_inline_html(&html)?;
-                    }
+                Event::Html(html) | Event::InlineHtml(html) => {
+                    self.render_inline_html(&html)?;
                 }
                 Event::SoftBreak => {
                     if self.in_table {
-                        self.render_table_text(" ");
+                        self.render_table_text("\n", false);
                     } else {
                         self.render_soft_break()?;
                     }
                 }
                 Event::HardBreak => {
                     if self.in_table {
-                        self.render_table_text(" ");
+                        self.render_table_text("\n", false);
                     } else {
                         self.render_newline()?;
                     }
@@ -689,14 +702,14 @@ impl<T: TextMeasure> Renderer<T> {
                 });
             }
             Tag::Item => self.start_list_item()?,
-            Tag::BlockQuote(_) => {
+            Tag::BlockQuote(kind) => {
                 self.start_block(self.theme.margin_top, false);
-                self.start_blockquote();
+                self.start_blockquote(kind)?;
             }
             Tag::Link { .. } => self.link_depth += 1,
             Tag::Image { dest_url, .. } => {
-                // Tables intentionally flatten inline content to text, including
-                // image alt text; never emit a separate image above the table.
+                // Table images retain alt text inside their cell rather than
+                // emitting a separate image above the table.
                 if !self.in_table {
                     self.current_image = Some(ImageState {
                         src: dest_url.to_string(),
@@ -1207,6 +1220,10 @@ impl<T: TextMeasure> Renderer<T> {
             return Ok(());
         };
         if parsed.name == "br" && !parsed.closing {
+            if self.in_table {
+                self.render_table_text("\n", false);
+                return Ok(());
+            }
             return self.render_newline();
         }
         if parsed.self_closing {
@@ -1840,7 +1857,8 @@ impl<T: TextMeasure> Renderer<T> {
     fn start_table_cell(&mut self) {
         if let Some(state) = self.table_state.as_mut() {
             state.current_cell = Some(TableCellData {
-                text: String::new(),
+                runs: Vec::new(),
+                html_depth: self.html_style_stack.len(),
             });
         }
     }
@@ -1850,15 +1868,40 @@ impl<T: TextMeasure> Renderer<T> {
             && let Some(cell) = state.current_cell.take()
             && let Some(row) = state.current_row.as_mut()
         {
+            self.html_style_stack.truncate(cell.html_depth);
             row.cells.push(cell);
         }
     }
 
-    fn render_table_text(&mut self, text: &str) {
+    fn render_table_text(&mut self, text: &str, code: bool) {
+        let header = self.table_state.as_ref().is_some_and(|state| state.in_head);
+        let run = TableRun {
+            text: text.to_string(),
+            code,
+            bold: !code && (header || self.is_bold()),
+            italic: !code && self.is_italic(),
+            strike: !code
+                && (self.in_strikethrough
+                    || self
+                        .html_style_stack
+                        .iter()
+                        .any(|(name, _)| matches!(name.as_str(), "s" | "del"))),
+            underline: !code && (self.link_depth > 0 || self.effective_inline_style().underline),
+            fill: if code {
+                self.theme.code_text_color.clone()
+            } else {
+                self.current_fill()
+            },
+            style: if code {
+                InlineHtmlStyle::default()
+            } else {
+                self.effective_inline_style()
+            },
+        };
         if let Some(state) = self.table_state.as_mut()
             && let Some(cell) = state.current_cell.as_mut()
         {
-            cell.text.push_str(text);
+            cell.runs.push(run);
         }
     }
 
@@ -1899,26 +1942,18 @@ impl<T: TextMeasure> Renderer<T> {
         let mut minimum_widths = vec![cell_padding_x * 2.0; column_count];
         for row in &state.rows {
             for (idx, cell) in row.cells.iter().enumerate() {
-                let (width, _) = self.measure.measure_text(
-                    cell.text.trim(),
-                    self.theme.font_size_base,
-                    false,
-                    row.is_header,
-                    false,
-                    None,
-                );
-                natural_widths[idx] = natural_widths[idx].max(width + cell_padding_x * 2.0);
-                for grapheme in cell.text.graphemes(true) {
-                    let (glyph_width, _) = self.measure.measure_text(
-                        grapheme,
-                        self.theme.font_size_base,
-                        false,
-                        row.is_header,
-                        false,
-                        None,
-                    );
-                    minimum_widths[idx] =
-                        minimum_widths[idx].max(glyph_width + cell_padding_x * 2.0);
+                let lines = self.wrap_table_text(cell, f32::MAX, 1.0);
+                for line in lines {
+                    natural_widths[idx] =
+                        natural_widths[idx].max(line.width + cell_padding_x * 2.0);
+                }
+                for run in &cell.runs {
+                    for grapheme in run.text.graphemes(true).filter(|g| *g != "\n") {
+                        let mut glyph = run.clone();
+                        glyph.text = grapheme.to_string();
+                        let width = self.table_run_width(&glyph, 1.0);
+                        minimum_widths[idx] = minimum_widths[idx].max(width + cell_padding_x * 2.0);
+                    }
                 }
             }
         }
@@ -1928,10 +1963,8 @@ impl<T: TextMeasure> Renderer<T> {
         // together; measurement, wrapping and drawing use the same font size.
         let minimum_total: f32 = minimum_widths.iter().sum();
         let font_scale = (available_width / minimum_total).min(1.0);
-        let font_size = self.theme.font_size_base * font_scale;
         cell_padding_x *= font_scale;
         cell_padding_y *= font_scale;
-        let line_height = font_size * self.theme.line_height.max(1.3);
         for width in natural_widths.iter_mut().chain(minimum_widths.iter_mut()) {
             *width *= font_scale;
         }
@@ -1953,23 +1986,23 @@ impl<T: TextMeasure> Renderer<T> {
             })
             .collect();
 
-        // Wrap every cell to its column width; track per-row line counts so row
-        // heights grow to fit the tallest cell in the row.
-        let mut wrapped_rows: Vec<Vec<Vec<String>>> = Vec::with_capacity(state.rows.len());
+        // The same styled runs determine column widths, wrapping and painting.
+        // Variable line extents include large text, baseline shifts and code boxes.
+        let mut wrapped_rows = Vec::with_capacity(state.rows.len());
         let mut row_heights: Vec<f32> = Vec::with_capacity(state.rows.len());
         for row in &state.rows {
-            let mut cell_lines: Vec<Vec<String>> = Vec::with_capacity(row.cells.len());
-            let mut max_lines = 1usize;
+            let mut cell_lines = Vec::with_capacity(row.cells.len());
+            let mut content_height = 0.0f32;
             for (idx, cell) in row.cells.iter().enumerate() {
                 let col_width = column_widths.get(idx).copied().unwrap_or(0.0);
-                let content_width = (col_width - cell_padding_x * 2.0).max(1.0);
-                let lines =
-                    self.wrap_table_text(cell.text.trim(), content_width, row.is_header, font_size);
-                max_lines = max_lines.max(lines.len());
+                let content_width = (col_width - cell_padding_x * 2.0).max(f32::EPSILON);
+                let lines = self.wrap_table_text(cell, content_width, font_scale);
+                content_height =
+                    content_height.max(lines.iter().map(|line| line.above + line.below).sum());
                 cell_lines.push(lines);
             }
             wrapped_rows.push(cell_lines);
-            row_heights.push(max_lines as f32 * line_height + cell_padding_y * 2.0);
+            row_heights.push(content_height + cell_padding_y * 2.0);
         }
 
         // column_widths already include horizontal padding.
@@ -2024,38 +2057,19 @@ impl<T: TextMeasure> Renderer<T> {
                 )
                 .unwrap();
 
-                let fill = self.current_fill();
                 let lines = &wrapped_rows[row_idx][idx];
-                for (line_idx, line) in lines.iter().enumerate() {
-                    let (text_width, _) = self.measure.measure_text(
-                        line,
-                        font_size,
-                        false,
-                        row.is_header,
-                        false,
-                        None,
-                    );
-
-                    let text_x = match align {
+                let mut line_top = current_y + cell_padding_y;
+                for line in lines {
+                    let mut text_x = match align {
                         Alignment::Left | Alignment::None => cell_x + cell_padding_x,
-                        Alignment::Center => cell_x + (cell_width - text_width) / 2.0,
-                        Alignment::Right => cell_x + cell_width - cell_padding_x - text_width,
+                        Alignment::Center => cell_x + (cell_width - line.width) / 2.0,
+                        Alignment::Right => cell_x + cell_width - cell_padding_x - line.width,
                     };
-
-                    let text_y = current_y
-                        + cell_padding_y
-                        + font_size * 0.8
-                        + line_idx as f32 * line_height;
-                    self.draw_text_at(
-                        text_x,
-                        text_y,
-                        line,
-                        "sans-serif",
-                        font_size,
-                        &fill,
-                        row.is_header,
-                        false,
-                    );
+                    for run in &line.runs {
+                        self.paint_table_run(run, text_x, line_top + line.above, font_scale)?;
+                        text_x += self.table_run_width(run, font_scale);
+                    }
+                    line_top += line.above + line.below;
                 }
 
                 cell_x += cell_width;
@@ -2071,78 +2085,197 @@ impl<T: TextMeasure> Renderer<T> {
         Ok(())
     }
 
-    /// Greedy word-wrap for table cells. Words wider than the column are
-    /// hard-split so cell content never overflows the table.
+    fn table_run_size(&self, run: &TableRun, scale: f32) -> f32 {
+        if run.code {
+            self.theme.font_size_code * scale
+        } else {
+            self.theme.font_size_base * run.style.scale * scale
+        }
+    }
+
+    fn table_run_width(&mut self, run: &TableRun, scale: f32) -> f32 {
+        let size = self.table_run_size(run, scale);
+        if !run.code && run.text == " " {
+            return self.space_width(size, run.bold, run.italic);
+        }
+        let (width, _) = self
+            .measure
+            .measure_text(&run.text, size, run.code, run.bold, run.italic, None);
+        width
+            + if run.code {
+                self.theme.code_padding_x * 2.0 * scale
+            } else {
+                0.0
+            }
+    }
+
+    fn push_table_run(&mut self, line: &mut TableLine, run: TableRun, scale: f32) {
+        let size = self.table_run_size(&run, scale);
+        let rise = run.style.rise_ratio * self.theme.font_size_base * scale;
+        let (above, below) = if run.code {
+            (
+                size * 0.75 + self.theme.code_padding_y * scale * 0.5,
+                size * 0.5 + self.theme.code_padding_y * scale * 0.5,
+            )
+        } else {
+            (size * 0.8 - rise, size * 0.3 + rise)
+        };
+        line.above = line.above.max(above);
+        line.below = line.below.max(below);
+        line.width += self.table_run_width(&run, scale);
+        line.runs.push(run);
+    }
+
+    /// Greedy wrapping retains each run's style and splits oversized tokens
+    /// only at grapheme boundaries. Code whitespace is literal; prose collapses
+    /// ordinary whitespace and keeps nonbreaking spaces inside words.
     fn wrap_table_text(
         &mut self,
-        text: &str,
+        cell: &TableCellData,
         max_width: f32,
-        bold: bool,
-        font_size: f32,
-    ) -> Vec<String> {
-        if text.is_empty() {
-            return vec![String::new()];
+        scale: f32,
+    ) -> Vec<TableLine> {
+        let mut tokens = Vec::new();
+        for run in &cell.runs {
+            if run.code || run.text == "\n" {
+                tokens.push(run.clone());
+                continue;
+            }
+            let mut token = run.clone();
+            token.text.clear();
+            let mut whitespace = false;
+            for ch in run.text.chars() {
+                let ws = ch.is_whitespace() && !matches!(ch, '\u{00a0}' | '\u{202f}');
+                if ws != whitespace && !token.text.is_empty() {
+                    tokens.push(token.clone());
+                    token.text.clear();
+                }
+                if !ws || token.text.is_empty() {
+                    token.text.push(if ws { ' ' } else { ch });
+                }
+                whitespace = ws;
+            }
+            if !token.text.is_empty() {
+                tokens.push(token);
+            }
         }
-        if max_width <= 0.0 {
-            return vec![text.to_string()];
-        }
-
-        let space_w = self.space_width(font_size, bold, false);
-
-        let mut lines: Vec<String> = Vec::new();
-        let mut line = String::new();
-        let mut line_w = 0.0f32;
-
-        for word in text.split_whitespace() {
-            let (word_w, _) = self
-                .measure
-                .measure_text(word, font_size, false, bold, false, None);
-            let separator_w = if line.is_empty() { 0.0 } else { space_w };
-
-            if line_w + separator_w + word_w > max_width && !line.is_empty() {
+        let mut lines = Vec::new();
+        let mut line = TableLine::default();
+        let mut space = None;
+        for token in tokens {
+            if !token.code && token.text == "\n" {
                 lines.push(std::mem::take(&mut line));
-                line_w = 0.0;
+                space = None;
+                continue;
             }
-
-            if word_w > max_width {
-                // Hard-split words wider than the column.
-                if !line.is_empty() {
-                    lines.push(std::mem::take(&mut line));
-                    line_w = 0.0;
-                }
-                let mut chunk = String::new();
-                let mut chunk_w = 0.0f32;
-                for grapheme in word.graphemes(true) {
-                    let (cw, _) = self
-                        .measure
-                        .measure_text(grapheme, font_size, false, bold, false, None);
-                    if chunk_w + cw > max_width && !chunk.is_empty() {
-                        lines.push(std::mem::take(&mut chunk));
-                        chunk_w = 0.0;
-                    }
-                    chunk.push_str(grapheme);
-                    chunk_w += cw;
-                }
-                if !chunk.is_empty() {
-                    line = chunk;
-                    line_w = chunk_w;
-                }
+            if !token.code && token.text == " " {
+                space = Some(token);
+                continue;
+            }
+            let token_width = self.table_run_width(&token, scale);
+            let space_width = space
+                .as_ref()
+                .map(|r| self.table_run_width(r, scale))
+                .unwrap_or(0.0);
+            if !line.runs.is_empty() && line.width + space_width + token_width > max_width + 0.01 {
+                lines.push(std::mem::take(&mut line));
+            }
+            if let Some(separator) = space.take()
+                && !line.runs.is_empty()
+            {
+                self.push_table_run(&mut line, separator, scale);
+            }
+            let size = self.table_run_size(&token, scale);
+            let padding = if token.code {
+                self.theme.code_padding_x * 2.0 * scale
             } else {
-                if !line.is_empty() {
-                    line.push(' ');
+                0.0
+            };
+            let chunks = if token_width > max_width + 0.01 {
+                self.split_text_run(
+                    &token.text,
+                    size,
+                    (max_width - padding).max(f32::EPSILON),
+                    token.code,
+                    token.bold,
+                    token.italic,
+                )
+            } else {
+                vec![token.text.clone()]
+            };
+            for (index, text) in chunks.into_iter().enumerate() {
+                if index > 0 {
+                    lines.push(std::mem::take(&mut line));
                 }
-                line.push_str(word);
-                line_w += separator_w + word_w;
+                let mut run = token.clone();
+                run.text = text;
+                self.push_table_run(&mut line, run, scale);
             }
         }
-
-        if !line.is_empty() {
-            lines.push(line);
-        }
-        if lines.is_empty() {
-            lines.push(String::new());
+        lines.push(line);
+        for line in &mut lines {
+            let size = self.theme.font_size_base * scale;
+            line.above = line.above.max(size * 0.8);
+            line.below = line
+                .below
+                .max(size * (self.theme.line_height.max(1.3) - 0.8));
         }
         lines
+    }
+
+    fn paint_table_run(
+        &mut self,
+        run: &TableRun,
+        x: f32,
+        baseline: f32,
+        scale: f32,
+    ) -> Result<(), String> {
+        let size = self.table_run_size(run, scale);
+        let width = self.table_run_width(run, scale);
+        let y = baseline + run.style.rise_ratio * self.theme.font_size_base * scale;
+        let padding = if run.code {
+            self.theme.code_padding_x * scale
+        } else {
+            0.0
+        };
+        if run.code || run.style.background.is_some() {
+            let (top, height, radius, fill) = if run.code {
+                (
+                    y - size * 0.75 - self.theme.code_padding_y * scale * 0.5,
+                    size * 1.25 + self.theme.code_padding_y * scale,
+                    self.theme.code_radius * scale,
+                    &self.theme.code_bg_color,
+                )
+            } else {
+                (
+                    y - size * 0.8,
+                    size * 1.1,
+                    2.0 * scale,
+                    run.style.background.as_ref().unwrap(),
+                )
+            };
+            write!(self.svg_content, r#"<rect x="{x:.2}" y="{top:.2}" width="{width:.2}" height="{height:.2}" rx="{radius:.2}" fill="{}" />"#, crate::xml::escape_xml(fill)).unwrap();
+        }
+        self.draw_text_at(
+            x + padding,
+            y,
+            &run.text,
+            if run.code { "monospace" } else { "sans-serif" },
+            size,
+            &run.fill,
+            run.bold,
+            run.italic,
+        );
+        // Decoration painting uses explicit cell coordinates and never mutates
+        // the document cursor or inherits scopes from a later cell.
+        for offset in [run.strike.then_some(-0.32), run.underline.then_some(0.12)]
+            .into_iter()
+            .flatten()
+        {
+            let line_y = y + size * offset;
+            write!(self.svg_content, r#"<line x1="{x:.2}" y1="{line_y:.2}" x2="{:.2}" y2="{line_y:.2}" stroke="{}" stroke-width="1" />"#, x + width, crate::xml::escape_xml(&run.fill)).unwrap();
+        }
+        Ok(())
     }
 
     fn render_task_marker(&mut self, checked: bool) -> Result<(), String> {
@@ -2540,7 +2673,18 @@ impl<T: TextMeasure> Renderer<T> {
         self.item_continuation_indent = None;
     }
 
-    fn start_blockquote(&mut self) {
+    fn alert_presentation(&self, kind: BlockQuoteKind) -> (&'static str, &'static str) {
+        let dark = theme_is_dark(&self.theme.background_color);
+        match kind {
+            BlockQuoteKind::Note => ("Note", if dark { "#79c0ff" } else { "#0969da" }),
+            BlockQuoteKind::Tip => ("Tip", if dark { "#7ee787" } else { "#1a7f37" }),
+            BlockQuoteKind::Important => ("Important", if dark { "#d2a8ff" } else { "#8250df" }),
+            BlockQuoteKind::Warning => ("Warning", if dark { "#e3b341" } else { "#9a6700" }),
+            BlockQuoteKind::Caution => ("Caution", if dark { "#ff7b72" } else { "#cf222e" }),
+        }
+    }
+
+    fn start_blockquote(&mut self, alert: Option<BlockQuoteKind>) -> Result<(), String> {
         let depth = self.blockquotes.len() as f32;
         let border_x = self.theme.padding_x
             + depth * self.theme.font_size_base * QUOTE_INDENT_RATIO
@@ -2548,9 +2692,28 @@ impl<T: TextMeasure> Renderer<T> {
         let quote_pad_y = self.theme.font_size_base * 0.4;
         let start_y = self.cursor_y - self.theme.font_size_base * 0.8 - quote_pad_y;
 
-        self.blockquotes.push(QuoteState { border_x, start_y });
+        self.blockquotes.push(QuoteState {
+            border_x,
+            start_y,
+            alert,
+        });
         self.cursor_x = self.line_start_x();
         self.at_line_start = true;
+        if let Some(kind) = alert {
+            let (label, color) = self.alert_presentation(kind);
+            self.cursor_y += self.theme.font_size_base * 0.8;
+            self.html_style_stack.push((
+                "strong".to_string(),
+                InlineHtmlStyle {
+                    color: Some(color.to_string()),
+                    ..InlineHtmlStyle::default()
+                },
+            ));
+            self.render_text(label)?;
+            self.html_style_stack.pop();
+            self.new_line();
+        }
+        Ok(())
     }
 
     fn end_blockquote(&mut self) {
@@ -2559,6 +2722,10 @@ impl<T: TextMeasure> Renderer<T> {
         }
 
         if let Some(quote) = self.blockquotes.pop() {
+            let border_color = quote
+                .alert
+                .map(|kind| self.alert_presentation(kind).1.to_string())
+                .unwrap_or_else(|| self.theme.quote_border_color.clone());
             let bg_x = quote.border_x - 2.0;
             let bg_width = self.right_edge() - bg_x;
             let quote_pad_y = self.theme.font_size_base * 0.4;
@@ -2570,7 +2737,7 @@ impl<T: TextMeasure> Renderer<T> {
                 quote.start_y,
                 bg_width,
                 end_y - quote.start_y,
-                crate::xml::escape_xml(&self.theme.quote_border_color),
+                crate::xml::escape_xml(&border_color),
             )
             .unwrap();
             write!(
@@ -2580,7 +2747,7 @@ impl<T: TextMeasure> Renderer<T> {
                 quote.start_y,
                 quote.border_x,
                 end_y,
-                crate::xml::escape_xml(&self.theme.quote_border_color),
+                crate::xml::escape_xml(&border_color),
             )
             .unwrap();
             self.cursor_y = end_y;
@@ -4550,6 +4717,54 @@ Cherry
             !svg.contains(&format!(">{}</text>", single_run)),
             "Long cell content should be wrapped, not emitted as one huge text node"
         );
+    }
+
+    #[test]
+    fn table_inline_styles_and_breaks_survive_layout() {
+        for width in [128.0, 360.0, 1200.0] {
+            let mut renderer = Renderer::new(Theme::default(), MockMeasure, width).unwrap();
+            let svg = renderer.render("| H |\n|---|\n| **B** *I* ~~S~~ `C` [L](https://example.invalid) <span style=\"color:red;font-size:2em\">R</span><br><br>N |\n\nZ").unwrap();
+            let tag = |label: &str| {
+                let end = svg.find(&format!(">{label}</text>")).unwrap();
+                &svg[svg[..end].rfind("<text ").unwrap()..end]
+            };
+            assert!(tag("B").contains("font-weight=\"700\""));
+            assert!(tag("I").contains("font-style=\"italic\""));
+            assert!(tag("C").contains("font-family=\"monospace\""));
+            assert!(!tag("Z").contains("font-weight"));
+            let (r_size, r_y, r_color) = text_metrics(&svg, "R").unwrap();
+            let (n_size, n_y, n_color) = text_metrics(&svg, "N").unwrap();
+            assert!((r_size / n_size - 2.0).abs() < 0.01);
+            assert_eq!(r_color, "red");
+            assert_ne!(n_color, "red");
+            assert!(n_y - r_y >= n_size * 2.0, "explicit blank line lost");
+            assert!(text_metrics(&svg, "Z").unwrap().1 > n_y);
+        }
+    }
+
+    #[test]
+    fn all_gfm_alert_kinds_have_labels_and_distinct_borders() {
+        for theme in [Theme::default(), Theme::from_builtin("nord").unwrap()] {
+            let normal_color = theme.text_color.clone();
+            let mut renderer = Renderer::new(theme, MockMeasure, 360.0).unwrap();
+            let markdown = ["Note", "Tip", "Important", "Warning", "Caution"]
+                .map(|kind| format!("> [!{}]\n> Body", kind.to_uppercase()))
+                .join("\n\n")
+                + "\n\nPlain";
+            let svg = renderer.render(&markdown).unwrap();
+            let mut colors = std::collections::HashSet::new();
+            for label in ["Note", "Tip", "Important", "Warning", "Caution"] {
+                let (_, _, color) = text_metrics(&svg, label).expect("visible alert label");
+                assert!(svg.contains(&format!("stroke=\"{color}\" stroke-width=\"3\"")));
+                colors.insert(color);
+            }
+            assert_eq!(colors.len(), 5);
+            assert_eq!(text_metrics(&svg, "Plain").unwrap().2, normal_color);
+            assert!(
+                !svg.contains("[!"),
+                "recognized alert syntax should not leak"
+            );
+        }
     }
 
     #[test]
