@@ -1,115 +1,159 @@
 # Markie
 
-![Example Output](demo-all-features.png)
+Render Markdown and Mermaid diagrams to SVG, PNG, and PDF with a native Rust CLI.
+No browser, Node.js, or Python runtime is required.
 
-Rendered from [`demo-all-features.md`](demo-all-features.md) — also available as [SVG](demo-all-features.svg) and [PDF](demo-all-features.pdf).
+![Markdown with code, tables, diagrams, and math](demo-all-features.png)
 
-A pure Rust Markdown to SVG/PNG/PDF renderer that converts Markdown documents into beautiful, shareable images.
+From [demo-all-features.md](demo-all-features.md): [SVG](demo-all-features.svg) ·
+[PNG](demo-all-features.png) · [PDF](demo-all-features.pdf).
 
-## Features
+## Install
 
-- **Pure Rust**: Built entirely with Rust for performance and reliability
-- **Native CLI**: No Node.js or Python runtime required; text rendering uses installed system fonts or valid fonts in `./fonts`
-- **Multiple Output Formats**: Export to SVG, PNG, or PDF
-- **High-Resolution PNG Output**: Use `--png-scale` for sharper raster output
-- **Native Mermaid Rendering**: A subset of flowchart, sequence, class, state, and ER syntax; see the [support boundary](docs/engine-quality.md)
-- **Improved Mermaid Layout**: Sparser node spacing and collision-aware edge label placement
-- **Enhanced Math Rendering**: LaTeX-style math including nth roots, binomials, and matrices
-- **Customizable Themes**: Supports Alacritty theme files (`.yaml`/`.toml`)
-- **13 Built-in Themes**: Dracula, Nord, Tokyo Night, Everforest, Catppuccin, Gruvbox, and more — or use any Alacritty theme file
-- **Smart Defaults**: `markie input.md` → `input.png` at 2× retina scale, no flags needed
-- **Shell Completions**: `--completions bash/zsh/fish/powershell/elvish`
-- **Flexible Input**: Read from file or stdin
-- **Adjustable Width**: Control output image width (default: 1200px; minimum 128px with the default spacing)
-- **Font Support**: Loads system fonts or valid fonts from `./fonts`, with shared text-measurement caching
-- **XML-Safe Output**: Invalid XML control characters are stripped during rendering
+Download a prebuilt archive from [GitHub Releases](https://github.com/lsj5031/MarkieCli/releases).
+Archives include `markie` and `markie-mermaid` for:
 
-## Why Markie?
+| Platform | Architectures |
+| --- | --- |
+| Linux (GNU) | x86_64, aarch64 |
+| macOS | Intel, Apple Silicon |
+| Windows (MSVC) | x86_64 |
 
-- **All-in-one renderer** - Markdown text, highlighted code, tables, supported Mermaid diagrams and LaTeX-style math in one document
-- **Export choices** - Vector SVG, high-resolution PNG and PDF from the same input
-- **PDF export** - Text-as-paths for viewer compatibility; text is not searchable/selectable
-- **Direct deployment** - Install the native CLI and provide fonts, without a JavaScript package or runtime setup
-- **Native diagram and math engines** - Rendering stays within the Rust application
+On Linux and macOS, the installer selects the matching release:
 
-## Markdown Support
+```sh
+curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/install.sh | sh
+```
 
-Supported today:
+It installs into `~/.local/bin`. To choose a version or directory:
 
-- Headings, paragraphs, emphasis/strong, inline code
-- Fenced code blocks with syntax highlighting
-- Lists (ordered/unordered) and task lists
-- Blockquotes and horizontal rules
-- Links (colored text)
-- Strikethrough
-- Tables
-- Images (local files, data URLs, and remote HTTP/S sources)
-- Inline and display math (LaTeX-style; supports nth roots, binomials, and matrices)
-- Footnotes
-- Definition lists
-- **Mermaid diagrams** (flowchart, sequence, class, state, ER)
-- Inline HTML with basic styling (`<span style="color: ...">`, `<sup>`, `<sub>`, `<u>`, `<mark>`, `<font color="...">`); HTML blocks rendered as code
-- **Improved typography and spacing** for better visual consistency
+```sh
+curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/install.sh | MARKIE_VERSION=0.6.0 INSTALL_DIR="$HOME/.local/bin" sh
+```
 
-See [demo-all-features.md](demo-all-features.md) for comprehensive examples of all supported features.
+To build the current source with Rust and a native linker:
 
-Not yet supported:
+```sh
+git clone https://github.com/lsj5031/MarkieCli.git
+cd MarkieCli
+cargo install --path . --locked
+```
 
-- Metadata blocks are parsed but ignored
-- Rich HTML layouts (tables, grids, CSS classes) — basic inline tags are styled, but HTML blocks render as code
+`cargo install markie` and `cargo binstall markie` use the version published on
+crates.io; check its version if you need the latest GitHub fixes.
 
-### Mermaid Diagram Support
+## Render a document
 
-Markie supports Mermaid diagrams natively in Rust. Use `mermaid` code blocks:
+```sh
+markie document.md                         # document.png, 1200px layout at 2× scale
+markie document.md -o document.svg         # vector output
+markie document.md -o document.pdf         # text rendered as paths
+markie document.md -w 640 -t nord          # narrower layout, dark theme
+markie document.md --png-scale 3           # higher-resolution PNG
+cat document.md | markie - -o output.svg   # stdin
+```
+
+The output extension selects the format. Width controls layout in pixels;
+`--png-scale` changes raster resolution without changing wrapping. The default
+theme needs a width of at least 128px. PDF text is not searchable or selectable.
+
+### Themes
+
+```sh
+markie --list-themes
+markie document.md --theme dracula
+markie document.md --theme ~/themes/custom.toml
+```
+
+The 13 built-in themes are `catppuccin_latte`, `catppuccin_mocha`, `dracula`,
+`everforest`, `github_dark`, `github_light`, `gruvbox_dark`, `gruvbox_light`,
+`monokai_pro`, `nord`, `solarized_dark`, `solarized_light` (default), and `tokyo_night`.
+Custom themes use Alacritty YAML or TOML color files.
+
+Some code colors have low contrast, particularly inline/table code in
+`github_light`; use `solarized_light` for a more readable light-theme starting point.
+
+### Standalone Mermaid
+
+```sh
+markie-mermaid diagram.mmd -o diagram.svg
+markie-mermaid diagram.mmd -o diagram.png --png-scale 2
+cat diagram.mmd | markie-mermaid - -o diagram.pdf
+```
+
+`markie-mermaid` also accepts `--padding` and `--theme PATH` for an Alacritty theme
+file. Its default PNG scale is 1×; `markie` defaults to 2×.
+
+Run either command with `--help` for all options. Generate shell completions with
+`markie --completions bash` (also zsh, fish, powershell, and elvish).
+
+## Supported input
+
+- Headings, paragraphs, emphasis, strikethrough, inline and highlighted fenced code.
+- Ordered/unordered lists, tasks, blockquotes, GFM alerts, and horizontal rules.
+- Tables with styled cell content, footnotes, and definition lists.
+- Links as styled text; local or HTTP/S PNG/JPEG/SVG images and supported base64 data URLs.
+- Inline HTML colors, highlights, underline, superscript, and subscript. HTML blocks display as code.
+- Inline/display LaTeX-style math, including fractions, roots, binomials, and matrices.
+- Native Mermaid flowchart, sequence, class, state, and ER diagrams.
+
+For example:
 
 ````markdown
+# Build notes
+
+> [!TIP]
+> Render this file with `markie notes.md`.
+
+| Step | Result |
+| --- | --- |
+| **Compile** | `cargo build` |
+| Check | $\sqrt{x^2 + y^2}$ |
+
 ```mermaid
-flowchart TD
-    A[Start] --> B{Decision}
-    B -->|Yes| C[Continue]
-    B -->|No| D[Retry]
+flowchart LR
+    A[Source] --> B{Checks pass?}
+    B -->|Yes| C[Release]
+    B -->|No| A
 ```
 ````
 
-Supported diagram types:
-- **Flowchart**: `flowchart TD/LR` with nodes (rect, rounded, diamond, circle), labels, and arrow variants (circle/cross/open, bidirectional, thick, dotted)
-- **Sequence**: `sequenceDiagram` with participants, messages, notes, and control blocks (`alt`, `opt`, `loop`, `par`, `critical` + `else`/`end`)
-- **Class**: `classDiagram` with classes, attributes, methods, and relationships
-- **State**: `stateDiagram` with states, transitions, composite state children, and notes
-- **ER**: `erDiagram` with entities and relationships
+Mermaid and math implement subsets of their languages. Unsupported Mermaid
+families such as pie and Gantt fail with a diagnostic; not every unsupported
+statement inside a recognized family is diagnosed. Rich HTML/CSS layouts and
+metadata rendering are outside scope.
 
-Rendering notes:
-- Diagram layout is intentionally sparse for readability.
-- Edge labels are offset and collision-checked against nodes and nearby labels; complex routing still needs visual review.
-- Flat flowchart subgraphs are supported; nested subgraphs are rejected explicitly.
-- Unknown diagram families fail the document render with the Mermaid fence line. Not every unsupported statement inside a recognized family is diagnosed.
-- See [engine support and quality evidence](docs/engine-quality.md) for syntax boundaries, font requirements, observed limitations, and review instructions.
+Local image paths must stay within the input document's directory, including
+after resolving symlinks. HTTP/S image downloads have a 10-second timeout and
+10 MiB size limit. Unavailable images retain alt text and diagnostics; images in
+tables use alt text.
 
-### Enhanced Math Support
+See the [support and quality guide](docs/engine-quality.md) for precise syntax
+boundaries, image handling, and known layout limitations. Inspect dense tables,
+large diagrams, and complex math at the intended output width.
 
-Math is rendered natively from LaTeX-style input, including:
-- nth roots (`\sqrt[3]{x}`)
-- binomials (`\binom{n}{k}`)
-- matrices (`\begin{bmatrix} ... \end{bmatrix}`)
+## Fonts and native exports
 
-Example:
+Markie uses installed system fonts and valid font files in `./fonts` relative to
+the working directory. Install fonts covering the scripts and emoji you render.
+On a minimal Debian/Ubuntu system, a useful starting point is:
 
-```markdown
-Inline: $\sqrt[3]{x^3 + y^3}$ and $\binom{n}{k}$
-
-$$
-\begin{bmatrix}
-a & b \\
-c & d
-\end{bmatrix}
-$$
+```sh
+sudo apt-get install fonts-dejavu-core fonts-noto-cjk fonts-noto-color-emoji
 ```
 
-## Screenshots
+PNG and PDF resolve fonts during export. SVG retains text, so its appearance can
+change with the viewer's installed fonts. Outputs are not guaranteed to look
+identical across machines.
 
-The demo document [`demo-all-features.md`](demo-all-features.md) is committed in every output format — [SVG](demo-all-features.svg), [PNG](demo-all-features.png) (2× retina), and [PDF](demo-all-features.pdf) — rendered with the default `solarized_light` theme.
+The native macOS fixes preserve prose spacing, bold text, CJK code, and mixed
+accent/emoji code in PNG/PDF, and exclude unusable and last-resort fonts from
+fallback. Verification covered Apple Silicon macOS, x86_64 Windows, and Linux;
+the Intel Mac binary has not received the same native visual verification.
 
-The same document under the built-in dark themes (click a preview for the vector SVG):
+## Examples
+
+The same demo in four dark themes; click a preview for its SVG:
 
 <p align="center">
   <a href="demo-dracula.svg"><img src="demo-dracula.png" alt="Dracula" width="48%"></a>
@@ -119,208 +163,32 @@ The same document under the built-in dark themes (click a preview for the vector
   <a href="demo-solarized-dark.svg"><img src="demo-solarized-dark.png" alt="Solarized Dark" width="48%"></a>
 </p>
 
-All assets are generated from [`demo-all-features.md`](demo-all-features.md) by [`scripts/make-demo.sh`](scripts/make-demo.sh) — see [Regenerating demo assets](#regenerating-demo-assets). For an interactive, filterable view of every asset, open [`docs/gallery.html`](docs/gallery.html).
+Browse all committed demo formats in [the gallery](docs/gallery.html).
 
-## Installation
+## Development
 
-### From crates.io
-
-```bash
-cargo install markie
+```sh
+cargo test --locked
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo build --release --locked --bins --lib
+bash scripts/smoke-test.sh target/engine-quality
 ```
 
-### Fast install with cargo-binstall
+The smoke script renders math, all five diagram families, and mixed quality
+fixtures to SVG/PNG/PDF. If Poppler is installed it also produces PDF previews.
+Review the images for missing glyphs, clipping, and diagram routing; structural
+checks alone do not establish visual correctness.
 
-```bash
-cargo binstall markie
-```
+Regenerate demos with `bash scripts/make-demo.sh /tmp/markie-demos`. Follow the
+[validation guide](docs/engine-quality.md#repeatable-validation) before replacing
+committed assets: font environments affect geometry. CI checks tests, formatting,
+Clippy, and smoke/demo synchronization on Rust 1.97.1.
 
-### From source
-
-```bash
-cargo install --path .
-```
-
-### Prebuilt binaries
-
-Download from [GitHub Releases](https://github.com/lsj5031/markiecli/releases) for Linux (x86_64, aarch64), macOS (x86_64, Apple Silicon), and Windows.
-
-### One-line installer (Linux/macOS)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/install.sh | sh
-```
-
-Optional environment overrides:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/install.sh | MARKIE_VERSION=0.4.0 INSTALL_DIR="$HOME/.local/bin" sh
-```
-
-## Usage
-
-### Quick Examples
-
-```bash
-# Render markdown to image (auto-detects format from output extension)
-markie readme.md                    # → readme.png (2× scale)
-markie readme.md -o doc.svg         # → SVG vector
-markie readme.md -o doc.pdf         # → PDF document
-
-# Change theme
-markie readme.md -t dracula         # Use Dracula dark theme
-markie readme.md -t nord            # Use Nord cool theme
-
-# Adjust output
-markie readme.md -w 800             # Narrower width
-markie readme.md --png-scale 3      # Higher resolution PNG
-
-# Use custom theme file
-markie readme.md -t ~/themes/my-theme.toml
-
-# Read from stdin (great for pipelines)
-cat readme.md | markie - -o out.svg
-
-# List all available themes
-markie --list-themes
-```
-
-### Basic usage
-
-```bash
-# Render to PNG (default output format, 2× retina scale)
-markie input.md
-
-# Explicit output format
-markie input.md -o output.svg
-markie input.md -o output.png
-markie input.md -o output.pdf
-```
-
-### From stdin
-
-```bash
-cat README.md | markie - -o output.svg
-```
-
-### Custom width
-
-```bash
-markie input.md -o output.png --width 1200
-```
-
-### Built-in themes
-
-13 built-in themes from [alacritty-theme](https://github.com/alacritty/alacritty-theme) are bundled:
-
-```bash
-markie input.md --theme dracula
-markie input.md --theme nord
-markie input.md --theme tokyo_night
-markie --list-themes   # Show all available themes
-```
-
-Available: `catppuccin_latte`, `catppuccin_mocha`, `dracula`, `everforest`, `github_dark`, `github_light`, `gruvbox_dark`, `gruvbox_light`, `monokai_pro`, `nord`, `solarized_dark`, `solarized_light` (default), `tokyo_night`
-
-See [Screenshots](#screenshots) for rendered examples of the built-in themes.
-
-You can also pass a path to any Alacritty theme file (YAML or TOML):
-
-```bash
-markie input.md --theme ~/my-custom-theme.toml
-```
-
-### Smoke test script
-
-A local smoke-test helper runs tests and renders math, all five Mermaid families,
-and a small quality corpus to SVG/PNG/PDF. It checks representative content and
-export dimensions; inspect the outputs for geometry and missing glyphs.
-
-```bash
-./scripts/smoke-test.sh ./smoke-test-output
-```
-
-Optional overrides:
-
-```bash
-THEME_FILE=tests/fixtures/solarized_light.toml PNG_SCALE=2 ./scripts/smoke-test.sh ./smoke-test-output
-```
-
-The quality corpus includes long/CJK labels, multiline flowchart nodes, cycles,
-self-loops, wide tables, and mixed documents at 640px and 1200px. CI retains the
-full outputs as review artifacts instead of adding binary baselines. See the
-[validation guide](docs/engine-quality.md#repeatable-validation) for the font
-environment and what a passing check does and does not prove.
-
-### Regenerating demo assets
-
-The committed demo files (`demo-all-features.svg/png/pdf` and the themed SVG+PNG pairs) are generated from [`demo-all-features.md`](demo-all-features.md). Regenerate them whenever that file or the renderer changes:
-
-```bash
-./scripts/make-demo.sh          # writes to the repo root
-./scripts/make-demo.sh /tmp/out # or write somewhere else
-```
-
-Optional overrides:
-
-```bash
-BIN=./target/release/markie PNG_SCALE=2 WIDTH=1200 ./scripts/make-demo.sh
-```
-
-CI checks committed asset content after every push/PR in a pinned font environment.
-SVG comparisons strip most geometry, PNG checks compare dimensions, and PDF checks
-inspect a signature. These checks detect drift but do not prove visual correctness:
-
-```bash
-bash scripts/check-demos.sh /tmp/out
-```
-
-## Theme Format
-
-Themes can be passed as a path to an Alacritty theme file (YAML or TOML).
-
-Example of Alacritty TOML theme:
-
-```toml
-[colors.primary]
-background = '#fdf6e3'
-foreground = '#586e75'
-
-[colors.normal]
-black   = '#073642'
-red     = '#dc322f'
-green   = '#859900'
-# ... other colors
-```
-
-## Building
-
-```bash
-cargo build --release
-```
-
-The binary will be available at `target/release/markie`.
-
-## Dependencies
-
-- `cosmic-text`: Text shaping and layout
-- `pulldown-cmark`: Markdown parsing
-- `resvg` + `tiny-skia`: SVG/PNG rendering
-- `svg2pdf`: PDF export
-- `syntect`: Syntax highlighting
-- `clap`: Command-line argument parsing
-- `serde`: Serialization/Deserialization (JSON, YAML, TOML)
-- `latex2mathml` + `quick-xml`: Math rendering
-- `lru` + `parking_lot`: Global font measurement cache
-
-## Status
-
-This is an early experiment. The renderer works well for common use cases, but there's plenty of room for improvement in layout, styling, and feature completeness. PRs welcome to make it better!
+Contributions are welcome. Include a small reproducing document and your OS,
+font setup, theme, width, and output format when reporting a rendering problem.
+See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+[MIT](LICENSE).

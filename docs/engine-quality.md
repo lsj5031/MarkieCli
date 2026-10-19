@@ -25,9 +25,10 @@ mean every unsupported statement inside a recognized family is rejected:
 parsing remains permissive in places. Do not depend on Mermaid `init` directives
 to configure theme/layout; `%%` comment lines are skipped. Use Markie's theme CLI.
 
-For images, relative local PNG/JPEG/SVG and supported base64 data URLs are the
-intended subset. Remote fetches, unsupported formats/data URLs, and paths outside
-the input directory are not an image-loading feature. Rejected or unavailable
+For images, relative local PNG/JPEG/SVG, HTTP/S images in those formats, and
+supported base64 data URLs are the intended subset. Remote downloads have a
+10-second timeout and 10 MiB size limit. Unsupported formats/data URLs and paths
+outside the input directory are not supported. Rejected or unavailable
 images preserve meaningful alt text and diagnostics; table images use alt text
 inside the cell. Symlinks are resolved before checking the local path boundary.
 SVG styling values are XML-escaped at emission, including values supplied through

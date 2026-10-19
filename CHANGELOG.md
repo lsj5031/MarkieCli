@@ -2,6 +2,29 @@
 
 All notable changes to MarkieCli will be documented in this file.
 
+## [0.6.0] - 2026-10-19
+
+### Added
+
+- Preserve emphasis, links, inline code, and supported inline HTML styling in table cells; label GitHub-style alerts.
+- Support common Mermaid flowchart chains, grouped edges and semicolon-separated statements; implicit sequence participants and inline activation; class multiplicities, implicit classes and static/abstract member markers.
+
+### Fixed
+
+- Fix native macOS prose spacing and bold text across PNG/PDF by aligning font selection and optical sizing with text measurement.
+- Exclude unusable fonts and semantic last-resort fonts from shared measurement/export fallback, preventing CJK code failures while preserving Apple Color Emoji.
+- Preserve mixed combining accents, CJK, joined Arabic, and ZWJ emoji in monospace exports using measured word spans without altering source text.
+- Preserve document content and bounds across tables, lists, math, and embedded diagrams; correct Mermaid relationship semantics, branch labels, and layout bounds.
+- Keep local images within the input document's directory after resolving symlinks. Unsupported or unavailable images retain alt text and diagnostics.
+- Reject unsupported Mermaid families and nested flowchart subgraphs explicitly, and sanitize unsupported inline HTML color expressions.
+
+### Documentation and verification
+
+- Rewrite the README around installation, both CLIs, supported input, fonts, and known limitations.
+- Document the native Markdown/Mermaid support boundary and repeatable visual review workflow.
+- Complete a fresh 569-story audit: 546 verified, 23 intentionally unsupported, and zero failures. Native verification passed on Linux, Apple Silicon macOS, and x86_64 Windows; Intel Mac visual verification remains outstanding.
+- Retain reviewed demo/smoke SVG baselines and pin CI to Rust 1.97.1. Existing low-contrast theme colors remain a known limitation.
+
 ## [0.5.0] - 2026-08-15
 
 ### Features
