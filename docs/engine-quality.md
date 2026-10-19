@@ -8,12 +8,12 @@ Accepted input is not a guarantee of unclipped text or collision-free routing.
 
 | Area | Intended support | Boundary |
 | --- | --- | --- |
-| Markdown | Headings, paragraphs, emphasis, code, lists/tasks, quotes, links, tables, footnotes, definition lists, images | Links are colored text. Metadata is ignored. Width must leave room for padding and four body ems (128px with the default theme). Very dense tables can become intrinsically tiny; inspect at the intended width. |
+| Markdown | Headings, paragraphs, emphasis, code, lists/tasks, quotes and GFM alerts, links, formatted tables, footnotes, definition lists, images | Links are styled text, not clickable destinations. Table cells retain emphasis, strike, inline code, links and the supported inline HTML subset. Metadata is ignored. Width must leave room for padding and four body ems (128px with the default theme). Very dense tables can become intrinsically tiny; inspect at the intended width. |
 | HTML | Basic inline styling, superscript/subscript, underline, mark, font color | HTML blocks display as code; arbitrary CSS and rich HTML layouts are outside scope. |
 | Math | Inline/display LaTeX-style expressions, including roots, fractions, binomials and matrices | A subset translated through MathML, not a TeX engine. Inspect complex expressions. |
-| Flowchart | `flowchart`/`graph`, TD/TB/BT/LR/RL, node shapes, labeled edges, solid/dotted/thick and arrow variants, flat subgraphs | Nested subgraphs, chained/fanout edges, semicolon-separated statements, style/local-direction directives and asymmetric shapes are rejected. Use one explicit node or edge per line. `<br>`, `<br/>`, `<br />` are node-label line breaks; automatic label wrapping is outside scope. |
-| Sequence | Declared participants, messages/replies, single-participant notes, explicit activation/deactivation, `alt`/`opt`/`loop`/`par`/`critical` blocks with `else`/`end` | Declare every participant. Actors, implicit participants, multi-participant notes, inline activation and standard `and` branches are rejected. Bare `->`/`-->` have no head; `->>`/`-->>` use a filled head, `-)`/`--)` an open async head, and `-x`/`--x` a cross. |
-| Class | Explicit classes, attributes/methods, relationships | Implicit classes, quoted multiplicities, reverse realization, static/abstract member suffixes and trailing return types without `: Type` are rejected. |
+| Flowchart | `flowchart`/`graph`, TD/TB/BT/LR/RL, node shapes, labeled edges, chains, grouped fanout, semicolon-separated statements, solid/dotted/thick and arrow variants, flat subgraphs | Nested subgraphs, style/local-direction directives and asymmetric shapes are rejected. Grouped edges expand between adjacent source/target sets. `<br>`, `<br/>`, `<br />` are node-label line breaks; automatic label wrapping is outside scope. |
+| Sequence | Declared or implicit participants, messages/replies, single-participant notes, explicit or inline activation/deactivation, `alt`/`opt`/`loop`/`par`/`critical` blocks with `else`/`end` | Actors, multi-participant notes and standard `and` branches are rejected. First appearance determines participant order; later aliases update the same participant. Inline `+` activates the receiver; `-` deactivates the sender. Bare `->`/`-->` have no head; `->>`/`-->>` use a filled head, `-)`/`--)` an open async head, and `-x`/`--x` a cross. |
+| Class | Declared or implicit classes, attributes/methods, relationships with quoted endpoint multiplicities, forward/reverse realization, static/abstract member suffixes, colon or standard trailing return types | `$` marks static members and `*` marks abstract methods; suffixes are styling instructions rather than literal name text. This remains a native subset rather than a complete UML language implementation. |
 | State | States, aliases, transitions, composite children, local start/end sentinels and positioned notes | Cross-boundary child transitions are rejected; connect the composite state instead. Nested containment and self-transitions have regression coverage, not a guarantee of collision-free arbitrary graphs. |
 | ER | Entities, attributes, all four endpoint cardinalities, solid and dotted relationships | This is not a schema validator. Key annotations beyond the native leading-star convention are outside the supported subset. |
 
@@ -43,7 +43,7 @@ bash scripts/smoke-test.sh target/engine-quality
 ```
 
 This reuses the existing smoke renderer: it runs `cargo test`, builds the current
-binary, renders the original math/five-family fixtures and the two quality
+binary, renders the original math/five-family fixtures and the three quality
 documents to SVG, PNG and PDF. Quality documents render at **640px and 1200px**;
 PNG defaults to 2× scale. `THEME_FILE` and `PNG_SCALE` retain their existing
 overrides. It never updates committed baselines. Use a fresh output directory
@@ -55,6 +55,7 @@ when comparing revisions, to avoid confusing old artifacts with the current run.
 | `tests/smoke/smoke_math.md` | Roots, binomials, matrices and mixed expression |
 | `tests/smoke/quality/flowchart.md` | Leading comment + LR; all three HTML break spellings; long/CJK labels; flat group; cycle and self-loop; surrounding paragraphs |
 | `tests/smoke/quality/document.md` | Wide four-column table; CJK prose; inline/display math; highlighted code; long LR graph; surrounding document width |
+| `tests/smoke/quality/compatibility.md` | GFM alerts and styled table cells; chained/grouped flowchart edges; implicit sequence participants and inline activation; class multiplicities, implicit classes and member classifiers |
 | `tests/smoke/quality/unsupported/*.md` | Nested subgraph and unknown-family rejection with source location |
 
 `scripts/check-quality.py` checks parseable SVG, representative visible text

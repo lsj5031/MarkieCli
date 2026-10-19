@@ -26,6 +26,14 @@ def check(directory, png_scale):
                              "Collect customer events",
                              "Reconcile expected and observed state",
                              "Publish delivery receipt", "After content:"],
+        "quality_compatibility": ["Note", "Warning", "Review item", "Document",
+                                  "diagrams", "Draft", "Reviewed", "markie --help",
+                                  "Review packet", "Signed", "Ready", "Red notice",
+                                  "then plain text", "Legal", "Security", "Publish",
+                                  "Author", "Renderer", "Render source", "Deliver preview",
+                                  "Renderable", "Export", "produces", "0..*", "render()",
+                                  "fromSource()", "validate()", "bool",
+                                  "After compatibility content:"],
     }
     stems = [("smoke_math", 1200), ("smoke_mermaid", 1200)]
     stems += [(f"{stem}_{width}", width) for stem in labels if stem.startswith("quality_")
