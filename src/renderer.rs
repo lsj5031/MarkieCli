@@ -2949,7 +2949,7 @@ impl<T: TextMeasure> Renderer<T> {
 
         write!(
             self.svg_content,
-            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.2}" fill="{}"{}{}>{}</text>"#,
+            r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.2}" fill="{}"{}{}>"#,
             x,
             y,
             font_family,
@@ -2957,9 +2957,35 @@ impl<T: TextMeasure> Renderer<T> {
             crate::xml::escape_xml(fill),
             weight_attr,
             style_attr,
-            crate::xml::escape_xml(&text).replace(' ', "&#160;"),
         )
         .unwrap();
+        if is_code && !text.is_ascii() {
+            // usvg cannot merge fallback shaping when the entire mixed run
+            // changes glyph count (e.g. combining accents beside ZWJ emoji).
+            // Word boundaries isolate fallback without splitting graphemes or
+            // joined scripts, normalizing literals, or changing measured layout.
+            for (start, word) in text.split_word_bound_indices() {
+                let (advance, _) = self.measure.measure_text(
+                    &text[..start],
+                    font_size,
+                    is_code,
+                    bold,
+                    italic,
+                    None,
+                );
+                write!(
+                    self.svg_content,
+                    r#"<tspan x="{:.2}">{}</tspan>"#,
+                    x + advance,
+                    crate::xml::escape_xml(word).replace(' ', "&#160;"),
+                )
+                .unwrap();
+            }
+        } else {
+            self.svg_content
+                .push_str(&crate::xml::escape_xml(&text).replace(' ', "&#160;"));
+        }
+        self.svg_content.push_str("</text>");
 
         width
     }
@@ -2968,7 +2994,7 @@ impl<T: TextMeasure> Renderer<T> {
         let mut svg = String::with_capacity(self.svg_content.len() + 256);
         write!(
             svg,
-            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {} {}" width="{}" height="{}"><rect width="100%" height="100%" fill="{}" />{}</svg>"#,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" font-optical-sizing="none" viewBox="0 0 {} {}" width="{}" height="{}"><rect width="100%" height="100%" fill="{}" />{}</svg>"#,
             self.width,
             height,
             self.width,

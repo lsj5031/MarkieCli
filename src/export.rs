@@ -111,6 +111,7 @@ pub fn save_output(svg: &str, output: &Path, png_scale: f32) -> Result<(), Strin
 /// function or trait — hence a macro.
 macro_rules! configure_font_fallbacks {
     ($fontdb:expr) => {{
+        crate::fonts::remove_unusable_fonts($fontdb);
         let families: Vec<(String, String, bool)> = $fontdb
             .faces()
             .flat_map(|face| {
@@ -178,5 +179,67 @@ mod tests {
                 .unwrap_err()
                 .contains("Unsupported output format: .txt")
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_text_preserves_spacing_and_glyph_fallback() {
+        use crate::{fonts::CosmicTextMeasure, renderer::Renderer, theme::Theme};
+
+        let render = |markdown| {
+            let theme = Theme {
+                background_color: "#ffffff".into(),
+                text_color: "#000000".into(),
+                ..Theme::default()
+            };
+            Renderer::new(theme, CosmicTextMeasure::new().unwrap(), 640.0)
+                .unwrap()
+                .render(markdown)
+                .unwrap()
+        };
+        let ink_right = |svg: &str| {
+            let image = Pixmap::decode_png(&svg_to_png(svg, 1.0).unwrap()).unwrap();
+            let background = &image.data()[..4];
+            image
+                .data()
+                .chunks_exact(4)
+                .enumerate()
+                .filter(|(_, pixel)| *pixel != background)
+                .map(|(index, _)| index % image.width() as usize)
+                .max()
+                .unwrap()
+        };
+        // NBSP keeps the line in one text run; ordinary spaces split words.
+        // Both forms must paint with the same advances, including on SFNS hosts.
+        let words = ink_right(&render("Alpha beta gamma."));
+        let whole_run = ink_right(&render("Alpha\u{a0}beta\u{a0}gamma."));
+        assert!(words.abs_diff(whole_run) <= 2, "{words} vs {whole_run}");
+
+        for markdown in [
+            "Before `中文` after.",
+            "| Code |\n|---|\n| `中文` |",
+            "```text\n中文\n```",
+        ] {
+            let svg = render(markdown);
+            assert!(!svg.contains("inf") && !svg.contains("NaN"), "{svg}");
+            svg_to_png(&svg, 1.0).unwrap();
+            svg_to_pdf(&svg).unwrap();
+        }
+
+        // LastResort boxes have the prose color; a real Apple emoji contains
+        // colored pixels distinct from the text and page background.
+        // The mixed code case also catches failed fallback merges caused by
+        // different glyph counts for combining accents and ZWJ sequences.
+        for markdown in ["🧑‍💻", "`🧑‍💻`", "`code  e\u{301}🧑‍💻`"] {
+            let svg = render(markdown);
+            let image = Pixmap::decode_png(&svg_to_png(&svg, 1.0).unwrap()).unwrap();
+            assert!(
+                image.data().chunks_exact(4).any(|pixel| {
+                    pixel[..3].iter().max().unwrap() - pixel[..3].iter().min().unwrap() > 80
+                }),
+                "missing color emoji: {markdown}"
+            );
+            svg_to_pdf(&svg).unwrap();
+        }
     }
 }

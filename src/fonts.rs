@@ -1,7 +1,8 @@
 use std::num::NonZeroUsize;
 use std::sync::LazyLock;
 
-use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, Weight};
+use cosmic_text::skrifa::{FontRef, raw::TableProvider, raw::tables::head::Flags};
+use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, Weight, fontdb};
 use lru::LruCache;
 use parking_lot::Mutex;
 
@@ -65,6 +66,29 @@ pub(crate) fn default_font_families() -> (Option<String>, Option<String>) {
     (resolve(Family::SansSerif), resolve(Family::Monospace))
 }
 
+/// Exclude invalid metrics and last-resort faces that mask real glyph fallbacks.
+pub(crate) fn remove_unusable_fonts(db: &mut fontdb::Database) {
+    let unusable: Vec<_> = db
+        .faces()
+        .filter_map(|face| {
+            let usable = db
+                .with_face_data(face.id, |data, index| {
+                    FontRef::from_index(data, index).is_ok_and(|font| {
+                        font.head().is_ok_and(|head| {
+                            head.units_per_em() > 0
+                                && !head.flags().contains(Flags::LAST_RESORT_FONT)
+                        })
+                    })
+                })
+                .unwrap_or(false);
+            (!usable).then_some(face.id)
+        })
+        .collect();
+    for id in unusable {
+        db.remove_face(id);
+    }
+}
+
 struct GlobalFontSystem {
     font_system: Mutex<FontSystem>,
     cache: Mutex<LruCache<MeasureKey, (f32, f32)>>,
@@ -74,11 +98,20 @@ impl GlobalFontSystem {
     fn new() -> Self {
         // Cache up to ~10MB of text measurements (estimated ~100 bytes per entry average)
         const CACHE_CAPACITY: usize = 100_000;
-        let mut font_system = FontSystem::new();
-        let has_system_fonts = font_system.db().faces().next().is_some();
-        font_system.db_mut().load_fonts_dir("fonts");
+        let (locale, mut db) = FontSystem::new().into_locale_and_db();
+        let has_system_fonts = db.faces().next().is_some();
+        db.load_fonts_dir("fonts");
+        remove_unusable_fonts(&mut db);
+        // SFNS is variable: measurement and the PDF renderer disagree on bold
+        // selection. Helvetica supplies matching static faces for all styles.
+        #[cfg(target_os = "macos")]
+        if db
+            .faces()
+            .any(|face| face.families.iter().any(|(name, _)| name == "Helvetica"))
+        {
+            db.set_sans_serif_family("Helvetica");
+        }
         if !has_system_fonts {
-            let db = font_system.db_mut();
             let sans = db
                 .faces()
                 .find(|face| !face.monospaced)
@@ -95,7 +128,7 @@ impl GlobalFontSystem {
             }
         }
         Self {
-            font_system: Mutex::new(font_system),
+            font_system: Mutex::new(FontSystem::new_with_locale_and_db(locale, db)),
             cache: Mutex::new(LruCache::new(NonZeroUsize::new(CACHE_CAPACITY).unwrap())),
         }
     }

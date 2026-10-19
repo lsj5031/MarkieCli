@@ -286,7 +286,7 @@ def check(spec, tree, raw, stderr, result, width, variant):
         assert code, 'No monospace table code'
         for t in code:
             x, y = float(t.get('x')), float(t.get('y'))
-            advance = measured_width(t.text or '', t.get('font-size'), True, False, False)
+            advance = measured_width(''.join(t.itertext()), t.get('font-size'), True, False, False)
             assert any(float(r.get('x')) < x and x + advance < float(r.get('x')) + float(r.get('width')) + .1 and float(r.get('y')) < y < float(r.get('y')) + float(r.get('height')) for r in boxes), f'Code has no padded background: {t.attrib}'
     elif kind == 'decorated':
         t = node(args[0]); x, y, size = float(t.get('x')), float(t.get('y')), float(t.get('font-size'))
@@ -304,7 +304,7 @@ def check(spec, tree, raw, stderr, result, width, variant):
         assert node('Alpha').get('fill') == node('Omega').get('fill') == node('Bold').get('fill') == node('Italic').get('fill'), 'Link color lost across runs'
         assert node('Alpha').get('fill') != node('Plain').get('fill') == node('R').get('fill'), 'Link color leaks outside link'
     elif kind == 'highlight': assert len({t.get('fill') for t in texts}) >= 3, 'Syntax colors are not distinct'
-    elif kind == 'code_payload': assert ''.join((t.text or '').replace('\u00a0', ' ') for t in texts if t.get('font-family') == 'monospace') == args[0], 'Code characters lost during wrapping'
+    elif kind == 'code_payload': assert ''.join(''.join(t.itertext()).replace('\u00a0', ' ') for t in texts if t.get('font-family') == 'monospace') == args[0], 'Code characters lost during wrapping'
     elif kind == 'cluster_runs':
         cluster, identifying_char = args
         runs = [t.text or '' for t in texts if identifying_char in (t.text or '')]
@@ -315,8 +315,9 @@ def check(spec, tree, raw, stderr, result, width, variant):
         if width <= 360: assert len({t.get('y') for t in texts}) >= 3, 'Expected multiple wrapped baselines'
     elif kind == 'bounds':
         for t in texts:
-            advance = measured_width(t.text or '', t.get('font-size'), t.get('font-family') == 'monospace', t.get('font-weight') == '700', t.get('font-style') == 'italic')
-            assert float(t.get('x')) + advance <= width - 31, f'Text overflow: x={t.get("x")}, measured advance={advance:.2f}, right padding edge={width-32}, text={(t.text or "")[:90]!r}'
+            text = ''.join(t.itertext())
+            advance = measured_width(text, t.get('font-size'), t.get('font-family') == 'monospace', t.get('font-weight') == '700', t.get('font-style') == 'italic')
+            assert float(t.get('x')) + advance <= width - 31, f'Text overflow: x={t.get("x")}, measured advance={advance:.2f}, right padding edge={width-32}, text={text[:90]!r}'
     elif kind == 'spacing': assert 40 < num('Beta', 'x') - num('Alpha', 'x') < 70, 'Whitespace gap collapsed or excessive'
     elif kind in ('sup', 'sub'):
         assert num(args[0], 'font-size') < num(args[1], 'font-size'), 'Script not smaller'
@@ -356,8 +357,9 @@ def check(spec, tree, raw, stderr, result, width, variant):
         cells = [r for r in nodes(tree, 'rect') if r.get('stroke')][1:]
         for t in texts:
             x, y, size = float(t.get('x')), float(t.get('y')), float(t.get('font-size'))
-            advance = measured_width(t.text or '', t.get('font-size'), t.get('font-family') == 'monospace', t.get('font-weight') == '700', t.get('font-style') == 'italic')
-            assert any(float(r.get('x')) <= x + .1 and x + advance <= float(r.get('x')) + float(r.get('width')) + .1 and float(r.get('y')) <= y - size * .7 + .1 and y + size * .2 <= float(r.get('y')) + float(r.get('height')) + .1 for r in cells), f'Text outside cell: {t.attrib}, measured advance={advance:.2f}, text={t.text}'
+            text = ''.join(t.itertext())
+            advance = measured_width(text, t.get('font-size'), t.get('font-family') == 'monospace', t.get('font-weight') == '700', t.get('font-style') == 'italic')
+            assert any(float(r.get('x')) <= x + .1 and x + advance <= float(r.get('x')) + float(r.get('width')) + .1 and float(r.get('y')) <= y - size * .7 + .1 and y + size * .2 <= float(r.get('y')) + float(r.get('height')) + .1 for r in cells), f'Text outside cell: {t.attrib}, measured advance={advance:.2f}, text={text}'
         for box in [r for r in nodes(tree, 'rect') if r.get('rx') and not r.get('stroke')]:
             x, y, w, h = (float(box.get(a)) for a in ['x', 'y', 'width', 'height'])
             assert any(float(r.get('x')) <= x + .1 and x + w <= float(r.get('x')) + float(r.get('width')) + .1 and float(r.get('y')) <= y + .1 and y + h <= float(r.get('y')) + float(r.get('height')) + .1 for r in cells), f'Inline box outside cell: {box.attrib}'

@@ -81,7 +81,7 @@ fn main() -> Result<(), String> {
     }
 
     let svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{total_w}" height="{total_h}" viewBox="0 0 {total_w} {total_h}">
+        r#"<svg xmlns="http://www.w3.org/2000/svg" font-optical-sizing="none" width="{total_w}" height="{total_h}" viewBox="0 0 {total_w} {total_h}">
 <rect width="{total_w}" height="{total_h}" fill="{canvas_bg}"/>
 <g transform="translate({pad},{pad})">
 {inner}
