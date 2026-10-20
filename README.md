@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/in
 It installs into `~/.local/bin`. To choose a version or directory:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/install.sh | MARKIE_VERSION=0.6.1 INSTALL_DIR="$HOME/.local/bin" sh
+curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/install.sh | MARKIE_VERSION=0.6.2 INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
 To build the current source with Rust and a native linker:
@@ -88,6 +88,10 @@ Flowchart node labels wrap at a measured width of 18 times the diagram font size
 preferring word boundaries and preserving Unicode graphemes when a word must
 split. Explicit newlines and `<br>`, `<br/>`, or `<br />` start new lines. Node
 dimensions include the wrapped text, including extra room inside circles and diamonds.
+
+Flowchart edge labels reserve measured space and stay on their connectors while
+avoiding nodes, other labels, and group borders. If a route has no room for its
+label, it takes a detour through the label's position. This can enlarge the diagram.
 
 In Markdown documents, diagrams start at a 16px base font and shrink to fit the
 available content width only while **every text label remains at least 10px** at

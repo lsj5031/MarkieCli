@@ -2,6 +2,17 @@
 
 All notable changes to MarkieCli will be documented in this file.
 
+## [0.6.2] - 2026-10-20
+
+### Fixed
+
+- Keep flowchart edge labels attached to their connectors: reserve measured label space, search along the route for collision-free positions, and detour the connector when needed instead of leaving its label detached.
+
+### Documentation and verification
+
+- Refresh the README and reviewed SVG/PNG/PDF demos and smoke baseline for the additional label spacing.
+- Pass 151 unit tests, formatting, Clippy, native export smoke checks, and demo synchronization checks. The new regression checks connector distance and collision clearance in all four flow directions and fails with the previous implementation.
+
 ## [0.6.1] - 2026-10-20
 
 ### Changed

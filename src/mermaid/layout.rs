@@ -211,7 +211,34 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
             );
         }
 
-        self.layout_layered_graph(&nodes, &edges, &node_sizes, flowchart.direction)
+        // Reserve a corridor wide enough for a label before routing, rather
+        // than pushing its pill away from a connector that cannot contain it.
+        let spacing = (self.node_spacing_x, self.node_spacing_y);
+        for edge in &flowchart.edges {
+            if edge.from != edge.to
+                && let Some(label) = &edge.label
+            {
+                let font = self.font_size * 0.85;
+                let width = self
+                    .measure
+                    .measure_text(
+                        &crate::xml::sanitize_xml_text(label),
+                        font,
+                        false,
+                        false,
+                        false,
+                        None,
+                    )
+                    .0;
+                self.node_spacing_x = self
+                    .node_spacing_x
+                    .max((width + 16.0).max(font * 2.5) + 40.0);
+                self.node_spacing_y = self.node_spacing_y.max(font + 16.0 + 56.0);
+            }
+        }
+        let result = self.layout_layered_graph(&nodes, &edges, &node_sizes, flowchart.direction);
+        (self.node_spacing_x, self.node_spacing_y) = spacing;
+        result
     }
 
     fn calculate_flowchart_node_size(&mut self, label: &str, shape: &NodeShape) -> (f32, f32) {

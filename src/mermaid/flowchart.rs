@@ -527,7 +527,7 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
         } else {
             midpoint.1 -= (style.font_size * 0.85 + 16.0) / 2.0 + 8.0;
         }
-        render_edge_label(ctx, &[midpoint]);
+        render_edge_label(ctx, &mut vec![midpoint]);
 
         return svg;
     }
@@ -662,6 +662,7 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
     }
     // Coincident dogleg vertices have no direction and must not determine markers.
     points.dedup_by(|a, b| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01);
+    render_edge_label(ctx, &mut points);
     for &(x, y) in &points {
         ctx.extents.push(Rect::new(x - 8.0, y - 8.0, 16.0, 16.0));
     }
@@ -714,11 +715,13 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
         ));
     }
 
-    render_edge_label(ctx, &points);
     svg
 }
 
-fn render_edge_label<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>, points: &[(f32, f32)]) {
+fn render_edge_label<T: TextMeasure>(
+    ctx: &mut RenderEdgeContext<'_, T>,
+    points: &mut Vec<(f32, f32)>,
+) {
     let edge = ctx.edge;
     let style = ctx.style;
     let measure = &mut *ctx.measure;
@@ -744,29 +747,6 @@ fn render_edge_label<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>, points:
         let pill_pad = 8.0;
         let pill_w = (text_w + pill_pad * 2.0).max(label_font_size * 2.5);
         let pill_h = label_font_size + pill_pad * 2.0;
-        if points.len() >= 2 {
-            let a = points[mid.saturating_sub(1)];
-            let b = points[mid.min(points.len() - 1)];
-            if (a.1 - b.1).abs() < 0.1 && (a.0 - b.0).abs() < pill_w + 32.0 {
-                label_y -= pill_h / 2.0 + 8.0;
-            } else if (a.0 - b.0).abs() < 0.1 && (a.1 - b.1).abs() < pill_h + 32.0 {
-                label_x += pill_w / 2.0 + 8.0;
-            }
-        }
-        // Keep labels off the horizontal borders of groups crossed by the route.
-        for group in ctx.group_bounds {
-            if label_x + pill_w / 2.0 > group.x && label_x - pill_w / 2.0 < group.x + group.w {
-                for border in [group.y, group.y + group.h] {
-                    if (label_y - border).abs() < pill_h / 2.0 + 4.0 {
-                        label_y = if label_y >= border {
-                            border + pill_h / 2.0 + 6.0
-                        } else {
-                            border - pill_h / 2.0 - 6.0
-                        };
-                    }
-                }
-            }
-        }
         let mut label_bounds = Rect::new(
             label_x - pill_w / 2.0,
             label_y - pill_h / 2.0,
@@ -789,19 +769,48 @@ fn render_edge_label<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>, points:
                     .any(|border| candidate.overlaps(&border.with_padding(4.0)))
                 })
         };
-        if !clear(label_bounds) {
-            // Prefer moving along the label's route segment, keeping it nearby.
-            // Expanding the search also lets dense branches escape node/group borders.
+        // Search the actual connector, starting at its middle segment. Moving
+        // along a route is safe; moving arbitrarily away severs the association.
+        let mut on_route = None;
+        let mut segments: Vec<usize> = (0..points.len().saturating_sub(1)).collect();
+        segments.sort_by_key(|i| i.abs_diff(mid.saturating_sub(1)));
+        'route: for i in segments {
+            let (a, b) = (points[i], points[i + 1]);
+            let length = (b.0 - a.0).abs() + (b.1 - a.1).abs();
+            let steps = (length / 8.0).ceil().max(1.0) as usize;
+            for step in 0..=steps {
+                for sign in [1.0, -1.0] {
+                    let t = 0.5 + sign * 0.5 * step as f32 / steps as f32;
+                    let x = a.0 + (b.0 - a.0) * t;
+                    let y = a.1 + (b.1 - a.1) * t;
+                    let candidate = Rect::new(x - pill_w / 2.0, y - pill_h / 2.0, pill_w, pill_h);
+                    if clear(candidate) {
+                        on_route = Some(candidate);
+                        break 'route;
+                    }
+                }
+            }
+        }
+        if let Some(candidate) = on_route {
+            label_bounds = candidate;
+            label_x = candidate.x + pill_w / 2.0;
+            label_y = candidate.y + pill_h / 2.0;
+        } else if !clear(label_bounds) {
+            // If no segment has room, find space for the pill and bring the
+            // connector with it. Self-loop crowns already have separate spacing.
             let horizontal = points.len() < 2 || (points[mid - 1].1 - points[mid].1).abs() < 0.1;
             let mut radius = 1.0;
             'search: loop {
                 let dx = (pill_w + 8.0) * radius;
                 let dy = (pill_h + 8.0) * radius;
                 let mut offsets = [(dx, 0.0), (-dx, 0.0), (0.0, dy), (0.0, -dy)];
-                if !horizontal {
+                if horizontal && points.len() >= 2 {
                     offsets.rotate_left(2);
                 }
-                for (dx, dy) in offsets {
+                // A detour shifts perpendicular to its original segment so it
+                // cannot double back along the connector to reach the label.
+                let count = if points.len() >= 2 { 2 } else { 4 };
+                for &(dx, dy) in &offsets[..count] {
                     let candidate =
                         Rect::new(label_bounds.x + dx, label_bounds.y + dy, pill_w, pill_h);
                     if clear(candidate) {
@@ -813,6 +822,20 @@ fn render_edge_label<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>, points:
                 }
                 radius += 1.0;
             }
+        }
+        if on_route.is_none() && points.len() >= 2 {
+            let (a, b) = (points[mid - 1], points[mid]);
+            let detour = if (a.1 - b.1).abs() < 0.1 {
+                let x1 = a.0 + (b.0 - a.0) * 0.25;
+                let x2 = a.0 + (b.0 - a.0) * 0.75;
+                vec![(x1, a.1), (x1, label_y), (x2, label_y), (x2, b.1)]
+            } else {
+                let y1 = a.1 + (b.1 - a.1) * 0.25;
+                let y2 = a.1 + (b.1 - a.1) * 0.75;
+                vec![(a.0, y1), (label_x, y1), (label_x, y2), (b.0, y2)]
+            };
+            points.splice(mid..mid, detour);
+            points.dedup_by(|a, b| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01);
         }
         ctx.extents.push(label_bounds);
         ctx.occupied_labels.push(label_bounds);
@@ -1186,6 +1209,138 @@ mod tests {
             svg.contains("<polygon"),
             "Self-loop should have an arrowhead"
         );
+    }
+
+    #[test]
+    fn edge_labels_stay_on_their_connectors_and_clear_obstacles() {
+        for direction in ["LR", "TD", "RL", "BT"] {
+            for body in [
+                "A[Receive request] -->|validate| B[Check policy<br>Second line<br/>Third line<br />Fourth line]\nB --> C[Publish result]",
+                "subgraph Review\nA[An intentionally long review label that exercises measured node width] --> B[承認待ち 日本語 中文]\nend\nB -->|approved| C[Release]",
+                "A[Queued] -->|start| B[Running]\nB -->|retry| A\nA -->|resume| B\nB -->|done| C[Finished]\nC -->|revise| A",
+                "A[Queued] -->|The relationship number 0| B[Running]\nA -->|The relationship number 1| B\nA -->|The relationship number 2| B",
+            ] {
+                let source = format!("flowchart {direction}\n{body}");
+                let crate::mermaid::MermaidDiagram::Flowchart(diagram) =
+                    crate::mermaid::parse_mermaid(&source).unwrap()
+                else {
+                    panic!("Expected flowchart");
+                };
+                let style = DiagramStyle::default();
+                let (svg, _, _) = render_flowchart(&diagram, &style, &mut MockMeasure).unwrap();
+                let mut reader = quick_xml::Reader::from_str(&svg);
+                let mut routes: Vec<Vec<(f32, f32)>> = Vec::new();
+                let mut labels: Vec<Rect> = Vec::new();
+                let mut nodes = Vec::new();
+                let mut borders = Vec::new();
+                loop {
+                    match reader.read_event().unwrap() {
+                        quick_xml::events::Event::Empty(element) => {
+                            let attrs: HashMap<String, String> = element
+                                .attributes()
+                                .map(|a| {
+                                    let a = a.unwrap();
+                                    (
+                                        String::from_utf8(a.key.as_ref().to_vec()).unwrap(),
+                                        String::from_utf8(a.value.to_vec()).unwrap(),
+                                    )
+                                })
+                                .collect();
+                            if element.name().as_ref() == b"polyline" {
+                                routes.push(
+                                    attrs["points"]
+                                        .split_whitespace()
+                                        .map(|pair| {
+                                            let (x, y) = pair.split_once(',').unwrap();
+                                            (x.parse().unwrap(), y.parse().unwrap())
+                                        })
+                                        .collect(),
+                                );
+                            } else if element.name().as_ref() == b"rect" {
+                                let value = |key: &str| attrs[key].parse::<f32>().unwrap();
+                                let r = Rect::new(
+                                    value("x"),
+                                    value("y"),
+                                    value("width"),
+                                    value("height"),
+                                );
+                                match attrs.get("rx").map(String::as_str) {
+                                    Some("4") => labels.push(r),
+                                    Some("8") => borders.extend([
+                                        Rect::new(r.x, r.y, r.w, 0.0),
+                                        Rect::new(r.x, r.y + r.h, r.w, 0.0),
+                                        Rect::new(r.x, r.y, 0.0, r.h),
+                                        Rect::new(r.x + r.w, r.y, 0.0, r.h),
+                                    ]),
+                                    _ => nodes.push(r),
+                                }
+                            }
+                        }
+                        quick_xml::events::Event::Eof => break,
+                        _ => {}
+                    }
+                }
+                let labeled_routes: Vec<_> = routes
+                    .iter()
+                    .zip(&diagram.edges)
+                    .filter(|(_, edge)| edge.label.is_some())
+                    .map(|(route, _)| route)
+                    .collect();
+                assert_eq!(labels.len(), labeled_routes.len());
+                assert!(!labels.is_empty());
+                for (i, (label, route)) in labels.iter().zip(labeled_routes).enumerate() {
+                    let (x, y) = (label.x + label.w / 2.0, label.y + label.h / 2.0);
+                    let distance = route
+                        .windows(2)
+                        .map(|s| {
+                            let (a, b) = (s[0], s[1]);
+                            let dx = b.0 - a.0;
+                            let dy = b.1 - a.1;
+                            let t = (((x - a.0) * dx + (y - a.1) * dy) / (dx * dx + dy * dy))
+                                .clamp(0.0, 1.0);
+                            (x - a.0 - t * dx).hypot(y - a.1 - t * dy)
+                        })
+                        .fold(f32::INFINITY, f32::min);
+                    assert!(
+                        distance < 0.1,
+                        "{source}: label {i} is {distance}px from its connector"
+                    );
+                    assert!(
+                        nodes.iter().all(|node| !label.overlaps(node)),
+                        "{source}: label over node"
+                    );
+                    assert!(
+                        borders
+                            .iter()
+                            .all(|border| !label.overlaps(&border.with_padding(3.9))),
+                        "{source}: label over group border"
+                    );
+                    assert!(
+                        labels[..i].iter().all(|other| !label.overlaps(other)),
+                        "{source}: overlapping labels"
+                    );
+                    for segment in route.windows(2) {
+                        let (a, b) = (segment[0], segment[1]);
+                        for node in &nodes {
+                            // Exclude the boundary ports, but reject any route
+                            // that cuts through a node's interior after detouring.
+                            let interior =
+                                Rect::new(node.x + 0.1, node.y + 0.1, node.w - 0.2, node.h - 0.2);
+                            let line = Rect::new(
+                                a.0.min(b.0),
+                                a.1.min(b.1),
+                                (a.0 - b.0).abs(),
+                                (a.1 - b.1).abs(),
+                            );
+                            assert!(
+                                !interior.overlaps(&line),
+                                "{source}: connector crosses a node"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
