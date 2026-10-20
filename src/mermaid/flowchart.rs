@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::fonts::TextMeasure;
 
-use super::layout::{BBox, LayoutEngine, LayoutPos};
+use super::layout::{BBox, LayoutEngine, LayoutPos, flowchart_label_lines};
 use super::render::{DiagramStyle, escape_xml};
 use super::types::{ArrowType, EdgeStyle, FlowDirection, Flowchart, NodeShape};
 use crate::layout::Rect;
@@ -51,6 +51,19 @@ pub fn render_flowchart(
             .or_insert(0_usize) += 1;
     }
     let mut pair_seen = HashMap::new();
+    let mut loop_label_widths: HashMap<&str, f32> = HashMap::new();
+    for edge in &flowchart.edges {
+        if edge.from == edge.to {
+            let width = edge.label.as_ref().map_or(0.0, |label| {
+                measure
+                    .measure_text(label, style.font_size * 0.85, false, false, false, None)
+                    .0
+            });
+            let widest = loop_label_widths.entry(edge.from.as_str()).or_default();
+            *widest = widest.max(width);
+        }
+    }
+    let mut outer_lane = 0;
 
     let node_map: HashMap<&str, &super::types::FlowchartNode> =
         flowchart.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
@@ -76,6 +89,13 @@ pub fn render_flowchart(
             let key = pair_key(&edge.from, &edge.to);
             let route_index = *pair_seen.entry(key.clone()).or_insert(0);
             pair_seen.insert(key.clone(), route_index + 1);
+            let backwards = match flowchart.direction {
+                FlowDirection::TopDown => from.center().1 > to.center().1 + 1.0,
+                FlowDirection::BottomUp => from.center().1 < to.center().1 - 1.0,
+                FlowDirection::LeftRight => from.center().0 > to.center().0 + 1.0,
+                FlowDirection::RightLeft => from.center().0 < to.center().0 - 1.0,
+            };
+            let use_outer_lane = edge.from != edge.to && (route_index > 0 || backwards);
             svg.push_str(&render_edge(&mut RenderEdgeContext {
                 edge,
                 from_node: fn_,
@@ -88,12 +108,20 @@ pub fn render_flowchart(
                 measure,
                 route_index,
                 route_total: pair_totals[&key],
+                outer_lane: use_outer_lane.then_some(outer_lane),
+                loop_label_width: loop_label_widths
+                    .get(edge.from.as_str())
+                    .copied()
+                    .unwrap_or(0.0),
                 extents: &mut extents,
                 group_bounds: &group_bounds,
                 occupied_labels: &mut occupied_labels,
                 node_bounds: &node_bounds,
                 labels: &mut labels,
             }));
+            if use_outer_lane {
+                outer_lane += 1;
+            }
         }
     }
     // Label backgrounds must also cover routes belonging to later edges.
@@ -102,7 +130,8 @@ pub fn render_flowchart(
     // Draw nodes on top
     for node in &flowchart.nodes {
         if let Some(pos) = positions.get(&node.id) {
-            svg.push_str(&render_node(&node.label, &node.shape, pos, style));
+            let lines = flowchart_label_lines(&node.label, style.font_size, measure);
+            svg.push_str(&render_node(&lines, &node.shape, pos, style));
         }
     }
 
@@ -131,13 +160,13 @@ pub fn render_flowchart(
     Ok((svg, total_width, total_height))
 }
 
-fn render_node(label: &str, shape: &NodeShape, pos: &LayoutPos, style: &DiagramStyle) -> String {
+fn render_node(
+    lines: &[String],
+    shape: &NodeShape,
+    pos: &LayoutPos,
+    style: &DiagramStyle,
+) -> String {
     let mut svg = String::new();
-    let label = label
-        .replace("<br/>", "\n")
-        .replace("<br>", "\n")
-        .replace("<br />", "\n");
-    let escaped_label = escape_xml(&label);
 
     match shape {
         NodeShape::Rect => {
@@ -300,7 +329,6 @@ fn render_node(label: &str, shape: &NodeShape, pos: &LayoutPos, style: &DiagramS
     let text_y = pos.y + pos.height / 2.0;
 
     // Handle multi-line labels
-    let lines: Vec<&str> = escaped_label.lines().collect();
     let line_height = style.font_size * 1.2;
     let total_height = line_height * lines.len() as f32;
     let start_y = text_y - (total_height / 2.0) + line_height / 2.0;
@@ -309,7 +337,7 @@ fn render_node(label: &str, shape: &NodeShape, pos: &LayoutPos, style: &DiagramS
         let y = start_y + i as f32 * line_height;
         svg.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" dy="0.35em" font-family="{}" font-size="{:.1}" font-weight="500" fill="{}" text-anchor="middle">{}</text>"#,
-            text_x, y, style.font_family, style.font_size, style.node_text, line
+            text_x, y, style.font_family, style.font_size, style.node_text, escape_xml(line)
         ));
     }
 
@@ -374,6 +402,8 @@ struct RenderEdgeContext<'a, T: TextMeasure> {
     measure: &'a mut T,
     route_index: usize,
     route_total: usize,
+    outer_lane: Option<usize>,
+    loop_label_width: f32,
     extents: &'a mut Vec<Rect>,
     group_bounds: &'a [Rect],
     occupied_labels: &'a mut Vec<Rect>,
@@ -390,7 +420,6 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
     let style = ctx.style;
     let direction = ctx.direction;
     let waypoints = ctx.waypoints;
-    let measure = &mut *ctx.measure;
 
     let mut svg = String::new();
     let vertical = matches!(direction, FlowDirection::TopDown | FlowDirection::BottomUp);
@@ -410,14 +439,23 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
     // Adjust loop direction based on the graph flow direction so the loop
     // doesn't overlap content in the primary flow axis.
     if edge.from == edge.to {
-        let loop_radius = 40.0 + ctx.route_index as f32 * 28.0;
+        // The cubic midpoint reaches 3/4 of the control-point excursion.
+        // TD loops must leave enough room for a label beside the node and for
+        // successive labels along the nested loops.
+        let loop_radius = if vertical {
+            (ctx.loop_label_width / 2.0 + 28.0) / 0.75
+                + ctx.route_index as f32 * (ctx.loop_label_width + 48.0) / 0.75
+        } else {
+            48.0 + ctx.route_index as f32 * 52.0
+        };
+        let port_fraction = 0.2 + 0.15 * ctx.route_index as f32 / ctx.route_total as f32;
 
         let (exit_x, exit_y, enter_x, enter_y, cp1_x, cp1_y, cp2_x, cp2_y) = match direction {
             FlowDirection::LeftRight | FlowDirection::RightLeft => {
                 // Horizontal graph: loop upward
-                let exit_x = from_cx + from.width / 4.0;
+                let exit_x = from_cx + from.width * port_fraction;
                 let exit_y = from.y;
-                let enter_x = from_cx - from.width / 4.0;
+                let enter_x = from_cx - from.width * port_fraction;
                 let enter_y = from.y;
                 let cp1_x = exit_x + loop_radius;
                 let cp1_y = exit_y - loop_radius * 1.5;
@@ -428,13 +466,13 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
             // TopDown, BottomUp: loop to the right
             _ => {
                 let exit_x = from.x + from.width;
-                let exit_y = from_cy - from.height / 4.0;
+                let exit_y = from_cy - from.height * port_fraction;
                 let enter_x = from.right();
-                let enter_y = from_cy + from.height / 4.0;
+                let enter_y = from_cy + from.height * port_fraction;
                 let cp1_x = exit_x + loop_radius;
-                let cp1_y = exit_y;
+                let cp1_y = exit_y - loop_radius * 0.5;
                 let cp2_x = enter_x + loop_radius;
-                let cp2_y = enter_y;
+                let cp2_y = enter_y + loop_radius * 0.5;
                 (exit_x, exit_y, enter_x, enter_y, cp1_x, cp1_y, cp2_x, cp2_y)
             }
         };
@@ -478,43 +516,18 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
             exit_y.max(enter_y).max(cp1_y).max(cp2_y) - min_y + 16.0,
         ));
 
-        // Edge label
-        if let Some(ref label) = edge.label {
-            let escaped = escape_xml(label);
-            let (label_w, _) =
-                measure.measure_text(label, style.font_size * 0.82, false, false, false, None);
-            let label_x = if vertical {
-                from.right() + loop_radius + 10.0
-            } else {
-                from_cx - label_w / 2.0
-            };
-            let label_y = if vertical {
-                from_cy + style.font_size * 0.3
-            } else {
-                from.y - loop_radius * 1.5 - 10.0
-            };
-            let label_bounds = Rect::new(
-                label_x - 2.0,
-                label_y - style.font_size * 0.7,
-                label_w + 4.0,
-                style.font_size * 1.1,
-            );
-            ctx.extents.push(label_bounds);
-            ctx.occupied_labels.push(label_bounds);
-            ctx.labels.push_str(&format!(
-                r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="4" fill="{}" stroke="{}" stroke-width="0.5" />"#,
-                label_x - 2.0,
-                label_y - style.font_size * 0.7,
-                label_w + 4.0,
-                style.font_size * 1.1,
-                style.node_fill,
-                style.node_stroke
-            ));
-            ctx.labels.push_str(&format!(
-                r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="start">{}</text>"#,
-                label_x, label_y, style.font_family, style.font_size * 0.82, style.edge_text, escaped
-            ));
+        // Keep the label just outside the curve's crown, rather than obscuring
+        // the loop, and apply the same collision rules used by ordinary edges.
+        let mut midpoint = (
+            (exit_x + 3.0 * cp1_x + 3.0 * cp2_x + enter_x) / 8.0,
+            (exit_y + 3.0 * cp1_y + 3.0 * cp2_y + enter_y) / 8.0,
+        );
+        if vertical {
+            midpoint.0 += ctx.loop_label_width / 2.0 + 16.0;
+        } else {
+            midpoint.1 -= (style.font_size * 0.85 + 16.0) / 2.0 + 8.0;
         }
+        render_edge_label(ctx, &[midpoint]);
 
         return svg;
     }
@@ -548,12 +561,28 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
         }
     };
 
-    let (exit_x, exit_y, enter_x, enter_y) = if ctx.route_total > 1 {
-        let offset = (ctx.route_index as f32 - (ctx.route_total - 1) as f32 / 2.0) * 12.0;
-        if vertical {
-            (from.right(), from_cy + offset, to.right(), to_cy + offset)
+    let (exit_x, exit_y, enter_x, enter_y) = if ctx.outer_lane.is_some() {
+        // Keep forward relations on their ordinary route; return/parallel lanes use
+        // the opposite side from self-loops. Bound ports to the node's side.
+        let fraction = if ctx.route_total > 1 {
+            ctx.route_index as f32 / ctx.route_total as f32 - 0.5
         } else {
-            (from_cx + offset, from.y, to_cx + offset, to.y)
+            0.0
+        };
+        if vertical {
+            (
+                from.x,
+                from_cy + fraction * from.height * 0.6,
+                to.x,
+                to_cy + fraction * to.height * 0.6,
+            )
+        } else {
+            (
+                from_cx + fraction * from.width * 0.6,
+                from.bottom(),
+                to_cx + fraction * to.width * 0.6,
+                to.bottom(),
+            )
         }
     } else {
         (exit_x, exit_y, enter_x, enter_y)
@@ -600,9 +629,15 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
         points.push((x2, y2));
     }
 
-    if ctx.route_total > 1 {
+    if let Some(lane_index) = ctx.outer_lane {
         points = if vertical {
-            let lane = from.right().max(to.right()) + 30.0 + ctx.route_index as f32 * 30.0;
+            let lane = ctx
+                .node_bounds
+                .iter()
+                .map(|r| r.x)
+                .fold(from.x.min(to.x), f32::min)
+                - 30.0
+                - lane_index as f32 * 40.0;
             vec![
                 (exit_x, exit_y),
                 (lane, exit_y),
@@ -610,7 +645,13 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
                 (enter_x, enter_y),
             ]
         } else {
-            let lane = from.y.min(to.y) - 30.0 - ctx.route_index as f32 * 30.0;
+            let lane = ctx
+                .node_bounds
+                .iter()
+                .map(|r| r.y + r.h)
+                .fold(from.bottom().max(to.bottom()), f32::max)
+                + 30.0
+                + lane_index as f32 * 40.0;
             vec![
                 (exit_x, exit_y),
                 (exit_x, lane),
@@ -673,17 +714,25 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
         ));
     }
 
-    // Label on middle segment
+    render_edge_label(ctx, &points);
+    svg
+}
+
+fn render_edge_label<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>, points: &[(f32, f32)]) {
+    let edge = ctx.edge;
+    let style = ctx.style;
+    let measure = &mut *ctx.measure;
+    // Label on middle segment (or the midpoint of a self-loop).
     let mid = points.len() / 2;
     let mut label_x = if points.len() >= 2 {
         (points[mid.saturating_sub(1)].0 + points[mid.min(points.len() - 1)].0) / 2.0
     } else {
-        (exit_x + enter_x) / 2.0
+        points[0].0
     };
     let mut label_y = if points.len() >= 2 {
         (points[mid.saturating_sub(1)].1 + points[mid.min(points.len() - 1)].1) / 2.0
     } else {
-        (exit_y + enter_y) / 2.0
+        points[0].1
     };
 
     if let Some(ref label) = edge.label {
@@ -724,11 +773,23 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
             pill_w,
             pill_h,
         );
-        if ctx
-            .occupied_labels
-            .iter()
-            .any(|other| label_bounds.with_padding(4.0).overlaps(other))
-        {
+        let clear = |candidate: Rect| {
+            !ctx.occupied_labels
+                .iter()
+                .any(|other| candidate.with_padding(4.0).overlaps(other))
+                && !ctx.node_bounds.iter().any(|node| candidate.overlaps(node))
+                && !ctx.group_bounds.iter().any(|group| {
+                    [
+                        Rect::new(group.x, group.y, group.w, 0.0),
+                        Rect::new(group.x, group.y + group.h, group.w, 0.0),
+                        Rect::new(group.x, group.y, 0.0, group.h),
+                        Rect::new(group.x + group.w, group.y, 0.0, group.h),
+                    ]
+                    .iter()
+                    .any(|border| candidate.overlaps(&border.with_padding(4.0)))
+                })
+        };
+        if !clear(label_bounds) {
             // Prefer moving along the label's route segment, keeping it nearby.
             // Expanding the search also lets dense branches escape node/group borders.
             let horizontal = points.len() < 2 || (points[mid - 1].1 - points[mid].1).abs() < 0.1;
@@ -743,22 +804,7 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
                 for (dx, dy) in offsets {
                     let candidate =
                         Rect::new(label_bounds.x + dx, label_bounds.y + dy, pill_w, pill_h);
-                    let clear = !ctx
-                        .occupied_labels
-                        .iter()
-                        .any(|other| candidate.with_padding(4.0).overlaps(other))
-                        && !ctx.node_bounds.iter().any(|node| candidate.overlaps(node))
-                        && !ctx.group_bounds.iter().any(|group| {
-                            [
-                                Rect::new(group.x, group.y, group.w, 0.0),
-                                Rect::new(group.x, group.y + group.h, group.w, 0.0),
-                                Rect::new(group.x, group.y, 0.0, group.h),
-                                Rect::new(group.x + group.w, group.y, 0.0, group.h),
-                            ]
-                            .iter()
-                            .any(|border| candidate.overlaps(&border.with_padding(4.0)))
-                        });
-                    if clear {
+                    if clear(candidate) {
                         label_x += dx;
                         label_y += dy;
                         label_bounds = candidate;
@@ -791,8 +837,6 @@ fn render_edge<T: TextMeasure>(ctx: &mut RenderEdgeContext<'_, T>) -> String {
             escape_xml(&cleaned)
         ));
     }
-
-    svg
 }
 
 fn render_arrow_head(
@@ -973,6 +1017,62 @@ mod tests {
         }
     }
 
+    #[test]
+    fn long_node_labels_wrap_without_losing_unicode_or_explicit_breaks() {
+        for label in [
+            "Validate the customer request before saving the complete account information"
+                .to_string(),
+            "確認申請資料並且保存完整客戶帳戶資訊以便稍後審核和處理所有後續服務請求".to_string(),
+            "e\u{301}".repeat(40),
+            "👩‍💻".repeat(40),
+            "First<br><br>Second<br/>Third<br />Fourth".to_string(),
+        ] {
+            let source = format!("flowchart TD\nA[\"{label}\"]");
+            let style = DiagramStyle::default();
+            let (svg, width, height) =
+                crate::mermaid::render_diagram(&source, &style, &mut MockMeasure).unwrap();
+            let mut reader = quick_xml::Reader::from_str(&svg);
+            let mut lines = Vec::new();
+            loop {
+                match reader.read_event().unwrap() {
+                    quick_xml::events::Event::Text(text) => {
+                        lines.push(text.decode().unwrap().into_owned())
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+            }
+            assert!(lines.len() > 1, "{svg}");
+            let original = label
+                .replace("<br>", "")
+                .replace("<br/>", "")
+                .replace("<br />", "");
+            assert_eq!(lines.concat().replace(' ', ""), original.replace(' ', ""));
+            for line in &lines {
+                assert!(!line.starts_with('\u{301}'), "split a combining grapheme");
+                if label.starts_with('👩') {
+                    use unicode_segmentation::UnicodeSegmentation;
+                    assert!(line.graphemes(true).all(|grapheme| grapheme == "👩‍💻"));
+                }
+                assert!(
+                    MockMeasure
+                        .measure_text(line, style.font_size, false, false, false, None)
+                        .0
+                        <= style.font_size * 18.0
+                );
+            }
+            assert!(width < 330.0, "wrapped node should remain compact: {width}");
+            assert!(height >= lines.len() as f32 * style.font_size * 1.2 + 24.0);
+            if label.starts_with("First") {
+                assert_eq!(
+                    svg.matches("<text ").count(),
+                    5,
+                    "preserve explicit blank line"
+                );
+            }
+        }
+    }
+
     fn first_polygon_points(svg: &str) -> Vec<(f32, f32)> {
         let marker = "<polygon points=\"";
         let start = svg.find(marker).expect("expected polygon");
@@ -1035,6 +1135,8 @@ mod tests {
             measure: &mut measure,
             route_index: 0,
             route_total: 1,
+            outer_lane: None,
+            loop_label_width: 0.0,
             extents: &mut Vec::new(),
             group_bounds: &[],
             occupied_labels: &mut Vec::new(),
@@ -1084,5 +1186,127 @@ mod tests {
             svg.contains("<polygon"),
             "Self-loop should have an arrowhead"
         );
+    }
+
+    #[test]
+    fn crowded_loop_and_cycle_labels_clear_nodes_and_each_other() {
+        for direction in ["LR", "TD", "RL", "BT"] {
+            let source = format!(
+                "flowchart {direction}\nA[Queued] -->|start| B{{Running}}\n\
+                 B -->|retry| A\nA -->|resume| B\n\
+                 B -->|heartbeat| B\nB -->|watchdog| B\n\
+                 B -->|done| C((Finished))\nC -->|refresh| C\nC -->|revise| A"
+            );
+            let crate::mermaid::MermaidDiagram::Flowchart(diagram) =
+                crate::mermaid::parse_mermaid(&source).unwrap()
+            else {
+                panic!("Expected flowchart");
+            };
+            let style = DiagramStyle::default();
+            let (positions, _, _) =
+                LayoutEngine::new(&mut MockMeasure, style.font_size).layout_flowchart(&diagram);
+            let (svg, _, _) = render_flowchart(&diagram, &style, &mut MockMeasure).unwrap();
+            let mut reader = quick_xml::Reader::from_str(&svg);
+            let mut labels: Vec<Rect> = Vec::new();
+            let mut routes = Vec::new();
+            let mut curves: Vec<Vec<f32>> = Vec::new();
+            while let Ok(event) = reader.read_event() {
+                match event {
+                    quick_xml::events::Event::Empty(element) => {
+                        let attrs: HashMap<String, String> = element
+                            .attributes()
+                            .map(|a| {
+                                let a = a.unwrap();
+                                (
+                                    String::from_utf8(a.key.as_ref().to_vec()).unwrap(),
+                                    String::from_utf8(a.value.to_vec()).unwrap(),
+                                )
+                            })
+                            .collect();
+                        if element.name().as_ref() == b"rect"
+                            && attrs.get("rx").map(String::as_str) == Some("4")
+                        {
+                            let value = |key: &str| attrs[key].parse::<f32>().unwrap();
+                            let rect =
+                                Rect::new(value("x"), value("y"), value("width"), value("height"));
+                            assert!(
+                                labels.iter().all(|other| !rect.overlaps(other)),
+                                "{direction}: overlapping labels"
+                            );
+                            assert!(
+                                positions.values().all(
+                                    |p| !rect.overlaps(&Rect::new(p.x, p.y, p.width, p.height))
+                                ),
+                                "{direction}: label over node"
+                            );
+                            labels.push(rect);
+                        }
+                        if element.name().as_ref() == b"polyline" {
+                            routes.push(attrs["points"].clone());
+                        }
+                        if element.name().as_ref() == b"path"
+                            && attrs.get("d").is_some_and(|d| d.contains(" C "))
+                        {
+                            curves.push(
+                                attrs["d"]
+                                    .split([' ', ','])
+                                    .filter_map(|s| s.parse().ok())
+                                    .collect(),
+                            );
+                        }
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+            }
+            assert_eq!(labels.len(), 8);
+            assert_eq!(routes.len(), 5);
+            for route in &routes {
+                let points: Vec<(f32, f32)> = route
+                    .split_whitespace()
+                    .map(|pair| {
+                        let (x, y) = pair.split_once(',').unwrap();
+                        (x.parse().unwrap(), y.parse().unwrap())
+                    })
+                    .collect();
+                for segment in points.windows(2) {
+                    let (a, b) = (segment[0], segment[1]);
+                    for node in positions.values() {
+                        let (x, y) = node.center();
+                        let crosses = if (a.0 - b.0).abs() < 0.1 {
+                            (x - a.0).abs() < 1.0 && y > a.1.min(b.1) && y < a.1.max(b.1)
+                        } else {
+                            (y - a.1).abs() < 1.0 && x > a.0.min(b.0) && x < a.0.max(b.0)
+                        };
+                        assert!(!crosses, "{direction}: route passes through a node center");
+                    }
+                }
+            }
+            for curve in curves {
+                for i in 1..100 {
+                    let t = i as f32 / 100.0;
+                    let u = 1.0 - t;
+                    let coordinate = |axis| {
+                        u * u * u * curve[axis]
+                            + 3.0 * u * u * t * curve[axis + 2]
+                            + 3.0 * u * t * t * curve[axis + 4]
+                            + t * t * t * curve[axis + 6]
+                    };
+                    let sample = Rect::new(coordinate(0), coordinate(1), 0.01, 0.01);
+                    assert!(
+                        labels.iter().all(|label| !sample.overlaps(label)),
+                        "{direction}: label obscures self-loop"
+                    );
+                }
+            }
+            let mut distinct = routes.clone();
+            distinct.sort();
+            distinct.dedup();
+            assert_eq!(
+                distinct.len(),
+                routes.len(),
+                "{direction}: coincident relations"
+            );
+        }
     }
 }

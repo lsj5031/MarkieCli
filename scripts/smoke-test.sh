@@ -56,13 +56,34 @@ render_all_formats "$OUTPUT_DIR/smoke_math.md" "smoke_math"
 render_all_formats "$OUTPUT_DIR/smoke_mermaid.md" "smoke_mermaid"
 
 # Keep full geometry as review artifacts, separate from normalized baselines.
-# Two fixed widths expose scaling/wrapping differences without a large matrix.
+# Retain 640/1200 coverage for flowchart and compatibility. The document's
+# three-node LR diagram needs 641px here just to reach 10px text; 800px gives
+# readable headroom (~13px) rather than accepting at a font-dependent boundary.
 for input in "$FIXTURE_DIR"/quality/*.md; do
   stem="$(basename "$input" .md)"
   cp "$input" "$OUTPUT_DIR/quality_$stem.md"
-  for width in 640 1200; do
+  widths=(640 1200)
+  if [[ "$stem" == document ]]; then
+    widths=(800 1200)
+  fi
+  for width in "${widths[@]}"; do
     render_all_formats "$input" "quality_${stem}_$width" --width "$width"
   done
+done
+
+echo "==> Checking narrow document readability rejection (retry rendered at 800px)"
+for format in svg png pdf; do
+  output="$OUTPUT_DIR/rejected_document_640.$format"
+  if "$BIN" "$FIXTURE_DIR/quality/document.md" -o "$output" \
+    --width 640 --png-scale "$PNG_SCALE" --theme "$THEME_FILE" \
+    >"$output.stdout" 2>"$output.stderr"; then
+    echo "Expected the 640px document to fail readability validation ($format)" >&2
+    exit 1
+  fi
+  if [[ -e "$output" ]]; then
+    echo "Rejected render has an output file: $output (use a fresh evidence directory)" >&2
+    exit 1
+  fi
 done
 
 echo "==> Checking unsupported syntax diagnostics"

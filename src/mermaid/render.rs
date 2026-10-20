@@ -38,18 +38,24 @@ impl Default for DiagramStyle {
 impl DiagramStyle {
     pub fn from_theme(text_color: &str, background: &str, code_bg: &str) -> Self {
         let diagram_fg = pick_higher_contrast(code_bg, text_color, background);
-        let label_fg = mix_color(code_bg, &diagram_fg, 0.60);
-        let edge_color = mix_color(code_bg, &diagram_fg, 0.30);
         let node_fill_color = mix_color(code_bg, &diagram_fg, 0.03);
-        let node_stroke_color = mix_color(code_bg, &diagram_fg, 0.20);
+        // Shapes and labels appear on both the canvas and the tinted node fill.
+        // Thin strokes and small labels need headroom for export antialiasing.
+        // Keep the theme's blends where readable, strengthening only as needed.
+        let surfaces = [code_bg, node_fill_color.as_str()];
+        let label_fg = ensure_contrast(&mix_color(code_bg, &diagram_fg, 0.60), &surfaces, 5.5);
+        let edge_color = ensure_contrast(&mix_color(code_bg, &diagram_fg, 0.30), &surfaces, 4.5);
+        let node_stroke_color =
+            ensure_contrast(&mix_color(code_bg, &diagram_fg, 0.20), &surfaces, 4.5);
+        let node_text = ensure_contrast(&diagram_fg, &surfaces, 5.5);
 
         Self {
             node_fill: node_fill_color,
             node_stroke: node_stroke_color,
-            node_text: diagram_fg,
+            node_text,
             edge_stroke: edge_color,
             edge_text: label_fg,
-            background: background.to_string(),
+            background: code_bg.to_string(),
             font_family: "sans-serif".to_string(),
             font_size: 13.0,
         }
@@ -112,6 +118,32 @@ fn pick_higher_contrast(base: &str, primary: &str, secondary: &str) -> String {
     } else {
         primary.to_string()
     }
+}
+
+fn ensure_contrast(color: &str, surfaces: &[&str], minimum: f32) -> String {
+    let contrast = |color: &str| {
+        surfaces
+            .iter()
+            .filter_map(|surface| contrast_ratio(color, surface))
+            .fold(f32::INFINITY, f32::min)
+    };
+    if contrast(color) >= minimum {
+        return color.to_string();
+    }
+
+    let target = if contrast("#000000") > contrast("#ffffff") {
+        "#000000"
+    } else {
+        "#ffffff"
+    };
+    // Check the rounded SVG colors, rather than unquantized RGB values.
+    for step in 1..=100 {
+        let candidate = mix_color(color, target, step as f32 / 100.0);
+        if contrast(&candidate) >= minimum {
+            return candidate;
+        }
+    }
+    target.to_string()
 }
 
 /// Render any mermaid diagram to SVG
@@ -1252,6 +1284,7 @@ fn render_state(
 
     let mut pair_seen: HashMap<(String, String), usize> = HashMap::new();
     let mut occupied_labels: Vec<Rect> = Vec::new();
+    let mut labels = String::new();
     for transition in visible_transitions {
         let key = state_pair_key(&transition.from, &transition.to);
         let route_index = pair_seen.get(&key).copied().unwrap_or(0);
@@ -1272,11 +1305,14 @@ fn render_state(
                 route_total,
                 occupied_labels: &mut occupied_labels,
                 obstacles: &state_obstacles,
+                labels: &mut labels,
             });
             svg.push_str(&t_svg);
             extents.push(ext);
         }
     }
+    // Later return routes must not paint over earlier label backgrounds or text.
+    svg.push_str(&labels);
 
     // Draw states
     for state in &diagram.states {
@@ -1553,6 +1589,7 @@ fn render_composite_state_contents(
 
     let mut pair_seen: HashMap<(String, String), usize> = HashMap::new();
     let mut occupied_labels: Vec<Rect> = Vec::new();
+    let mut labels = String::new();
     for transition in child_transitions {
         let key = state_pair_key(&transition.from, &transition.to);
         let route_index = pair_seen.get(&key).copied().unwrap_or(0);
@@ -1576,11 +1613,13 @@ fn render_composite_state_contents(
                 route_total,
                 occupied_labels: &mut occupied_labels,
                 obstacles: &child_obstacles,
+                labels: &mut labels,
             });
             svg.push_str(&t_svg);
             extents.push(extent);
         }
     }
+    svg.push_str(&labels);
 
     for (note_state, text, position) in child_notes {
         if let Some(target) = child_positions
@@ -1678,6 +1717,7 @@ struct StateTransitionContext<'a, T: TextMeasure> {
     route_total: usize,
     occupied_labels: &'a mut Vec<Rect>,
     obstacles: &'a [Rect],
+    labels: &'a mut String,
 }
 
 fn render_state_transition<T: TextMeasure>(
@@ -2204,7 +2244,7 @@ fn render_state_transition<T: TextMeasure>(
                 }
             }
             for o in occupied_labels.iter() {
-                if r.overlaps(o) {
+                if r.with_padding(6.0).overlaps(o) {
                     s += 220.0;
                 }
             }
@@ -2287,7 +2327,7 @@ fn render_state_transition<T: TextMeasure>(
         track_point!(best_rect.x, best_rect.y);
         track_point!(best_rect.x + best_rect.w, best_rect.y + best_rect.h);
 
-        svg.push_str(&format!(
+        ctx.labels.push_str(&format!(
             r#"<rect x="{:.2}" y="{:.2}" width="{:.2}" height="{:.2}" rx="3" fill="{}" stroke="{}" stroke-width="0.5" />"#,
             best_rect.x,
             best_rect.y,
@@ -2297,7 +2337,7 @@ fn render_state_transition<T: TextMeasure>(
             style.node_stroke
         ));
 
-        svg.push_str(&format!(
+        ctx.labels.push_str(&format!(
             r#"<text x="{:.2}" y="{:.2}" font-family="{}" font-size="{:.1}" fill="{}" text-anchor="middle">{}</text>"#,
             best_x,
             best_y,
@@ -2847,14 +2887,39 @@ mod tests {
     }
 
     #[test]
-    fn from_theme_produces_color_hierarchy() {
+    fn theme_diagrams_keep_readable_strokes_and_labels() {
+        let themes = std::iter::once(("default", crate::theme::Theme::default())).chain(
+            crate::theme::Theme::list_builtins()
+                .into_iter()
+                .map(|name| (name, crate::theme::Theme::from_builtin(name).unwrap())),
+        );
+        for (name, theme) in themes {
+            let style = DiagramStyle::from_theme(
+                &theme.text_color,
+                &theme.background_color,
+                &theme.code_bg_color,
+            );
+            for surface in [&theme.code_bg_color, &style.node_fill] {
+                for (color, minimum) in [
+                    (&style.node_stroke, 4.5),
+                    (&style.edge_stroke, 4.5),
+                    (&style.node_text, 5.5),
+                    (&style.edge_text, 5.5),
+                ] {
+                    let ratio = contrast_ratio(color, surface).unwrap();
+                    assert!(ratio >= minimum, "{name}: {color} on {surface}: {ratio}");
+                }
+            }
+            assert_eq!(style.background, theme.code_bg_color);
+            // Retain the subtle theme-tinted fill.
+            assert!(contrast_ratio(&style.node_fill, &theme.code_bg_color).unwrap() < 1.2);
+        }
+
+        // Solarized Light uses a dark code canvas: retain its cream primary text,
+        // rather than assuming a light page also means a light diagram.
         let style = DiagramStyle::from_theme("#586e75", "#fdf6e3", "#073642");
-        // edge_text should be a 60% mix of code_bg toward fg (not raw fg)
+        assert_eq!(style.node_text, "#fdf6e3");
         assert_ne!(style.edge_text, style.node_text);
-        // node_fill should be very close to code_bg (3% fg mix)
-        assert_ne!(style.node_fill, "#073642");
-        // node_stroke should be lighter than node_text (20% vs 100% fg)
-        assert_ne!(style.node_stroke, style.node_text);
     }
 
     #[test]
@@ -2890,6 +2955,68 @@ mod tests {
             err.contains("Unsupported Mermaid diagram type 'pie'"),
             "error should name the unsupported type, got: {err}"
         );
+    }
+
+    #[test]
+    fn state_transition_labels_leave_readable_space_between_pills() {
+        let source = "stateDiagram\n[*] --> Idle\nIdle --> Loading: Load Data\n\
+                      Loading --> Processing: Data Ready\nProcessing --> Success: Complete\n\
+                      Processing --> Error: Fail\nSuccess --> [*]\nError --> Idle: Retry";
+        for font_size in [13.0, 16.0, 24.0] {
+            let style = DiagramStyle {
+                font_size,
+                ..Default::default()
+            };
+            let (svg, _, _) = render_diagram(source, &style, &mut MockMeasure).unwrap();
+            let mut reader = quick_xml::Reader::from_str(&svg);
+            let mut last_rect = None;
+            let mut labels: Vec<Rect> = Vec::new();
+            loop {
+                match reader.read_event().unwrap() {
+                    quick_xml::events::Event::Empty(element)
+                        if element.name().as_ref() == b"rect" =>
+                    {
+                        let attrs: HashMap<_, _> = element
+                            .attributes()
+                            .map(|attr| {
+                                let attr = attr.unwrap();
+                                (attr.key.as_ref().to_vec(), attr.value.into_owned())
+                            })
+                            .collect();
+                        let value = |key: &[u8]| {
+                            std::str::from_utf8(&attrs[key])
+                                .unwrap()
+                                .parse::<f32>()
+                                .unwrap()
+                        };
+                        last_rect = Some(Rect::new(
+                            value(b"x"),
+                            value(b"y"),
+                            value(b"width"),
+                            value(b"height"),
+                        ));
+                    }
+                    quick_xml::events::Event::Text(text)
+                        if matches!(
+                            text.decode().unwrap().as_ref(),
+                            "Load Data" | "Data Ready" | "Complete" | "Fail" | "Retry"
+                        ) =>
+                    {
+                        let rect = last_rect.unwrap();
+                        for other in &labels {
+                            assert!(
+                                !rect.with_padding(5.9).overlaps(other),
+                                "{font_size}px: transition labels crowd each other: {rect:?}, {other:?}"
+                            );
+                        }
+                        labels.push(rect);
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+            }
+            assert_eq!(labels.len(), 5);
+        }
     }
 
     #[test]

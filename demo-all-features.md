@@ -338,4 +338,4 @@ Run `--list-themes` to see all available themes:
 
 ---
 
-*Generated with Markie CLI v0.5.0*
+*Generated with Markie CLI v0.6.1*

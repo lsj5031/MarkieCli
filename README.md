@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/in
 It installs into `~/.local/bin`. To choose a version or directory:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/install.sh | MARKIE_VERSION=0.6.0 INSTALL_DIR="$HOME/.local/bin" sh
+curl -fsSL https://raw.githubusercontent.com/lsj5031/MarkieCli/master/scripts/install.sh | MARKIE_VERSION=0.6.1 INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
 To build the current source with Rust and a native linker:
@@ -83,6 +83,20 @@ cat diagram.mmd | markie-mermaid - -o diagram.pdf
 
 `markie-mermaid` also accepts `--padding` and `--theme PATH` for an Alacritty theme
 file. Its default PNG scale is 1×; `markie` defaults to 2×.
+
+Flowchart node labels wrap at a measured width of 18 times the diagram font size,
+preferring word boundaries and preserving Unicode graphemes when a word must
+split. Explicit newlines and `<br>`, `<br/>`, or `<br />` start new lines. Node
+dimensions include the wrapped text, including extra room inside circles and diamonds.
+
+In Markdown documents, diagrams start at a 16px base font and shrink to fit the
+available content width only while **every text label remains at least 10px** at
+the final document size (7.5pt in PDF). This includes smaller sequence messages,
+notes, class members, and relationship labels. If the diagram cannot fit, rendering
+fails with its source line, effective text size, and suggested minimum `--width`;
+it does not clip or silently shrink further. Shorten labels, split the diagram,
+increase document width, or use `markie-mermaid` for an export at its natural size.
+Increasing `--png-scale` changes raster resolution, not this document-size limit.
 
 Run either command with `--help` for all options. Generate shell completions with
 `markie --completions bash` (also zsh, fish, powershell, and elvish).

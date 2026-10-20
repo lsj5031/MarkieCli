@@ -45,7 +45,11 @@ bash scripts/smoke-test.sh target/engine-quality
 
 This reuses the existing smoke renderer: it runs `cargo test`, builds the current
 binary, renders the original math/five-family fixtures and the three quality
-documents to SVG, PNG and PDF. Quality documents render at **640px and 1200px**;
+documents to SVG, PNG and PDF. Flowchart and compatibility documents render at
+**640px and 1200px**. The document-width fixture renders at **800px and 1200px**;
+its long horizontal diagram is also checked at 640px for an explicit readability
+error in all three formats, with a wider retry and source-location advice.
+Document diagrams must keep every text label at least 10px after fitting.
 PNG defaults to 2× scale. `THEME_FILE` and `PNG_SCALE` retain their existing
 overrides. It never updates committed baselines. Use a fresh output directory
 when comparing revisions, to avoid confusing old artifacts with the current run.
@@ -61,9 +65,10 @@ when comparing revisions, to avoid confusing old artifacts with the current run.
 
 `scripts/check-quality.py` checks parseable SVG, representative visible text
 content, LR node order/alignment after a leading comment, absence of literal
-break tags/header nodes, PNG signature and scaled dimensions, and PDF signature.
-The shell checks require nonzero exit status and the expected diagnostics for
-unsupported inputs. Text preservation in SVG does not prove that fonts contain
+break tags/header nodes, minimum fitted diagram text size, PNG signature and
+scaled dimensions, and PDF signature. The shell checks require nonzero exit
+status and the expected diagnostics for unsupported and unreadably narrow inputs.
+Text preservation in SVG does not prove that fonts contain
 the glyphs, that edges connect correctly, or that labels fit. The checker does
 not certify general geometry, all relationships, math correctness or PDF content.
 

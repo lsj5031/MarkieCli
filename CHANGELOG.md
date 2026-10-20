@@ -2,6 +2,25 @@
 
 All notable changes to MarkieCli will be documented in this file.
 
+## [0.6.1] - 2026-10-20
+
+### Changed
+
+- Start embedded document diagrams at a 16px base font and reject layouts that would shrink any diagram text below 10px. Diagnostics identify the source line and suggest a minimum document width; PNG resolution scaling does not bypass this limit.
+- Wrap long flowchart node labels at measured word or Unicode grapheme boundaries, preserving explicit line breaks and sizing circles and diamonds to contain multiline text.
+
+### Fixed
+
+- Strengthen theme-aware diagram strokes and secondary labels for readable light and dark exports, including hollow ER markers on the diagram canvas.
+- Separate flowchart return and parallel routes from self-loops, spread loop attachments, and keep labels clear of nodes, other labels, and group borders.
+- Reserve visible space between state transition labels and paint them above routes so later connectors cannot cover their text, including inside composite states.
+
+### Documentation and verification
+
+- Document diagram wrapping, minimum text size, and overflow handling in the README.
+- Refresh reviewed SVG/PNG/PDF demos and smoke baselines under DejaVu font isolation.
+- Pass 150 unit tests, formatting, Clippy, and native SVG/PNG/PDF smoke checks with explicit narrow-document rejection coverage.
+
 ## [0.6.0] - 2026-10-19
 
 ### Added

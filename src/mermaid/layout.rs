@@ -1,8 +1,59 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::fonts::TextMeasure;
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::types::*;
+
+/// Shared by node measurement and painting so wrapping cannot change their contract.
+pub(super) fn flowchart_label_lines(
+    label: &str,
+    font_size: f32,
+    measure: &mut impl TextMeasure,
+) -> Vec<String> {
+    let label = crate::xml::sanitize_xml_text(label)
+        .replace("<br/>", "\n")
+        .replace("<br>", "\n")
+        .replace("<br />", "\n");
+    let max_width = font_size * 18.0;
+    let mut lines = Vec::new();
+    for paragraph in label.split('\n') {
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            let candidate = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
+            if measure
+                .measure_text(&candidate, font_size, false, false, false, None)
+                .0
+                <= max_width
+            {
+                line = candidate;
+                continue;
+            }
+            if !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+            }
+            // CJK and unbroken identifiers still wrap without splitting a grapheme.
+            for grapheme in word.graphemes(true) {
+                let candidate = format!("{line}{grapheme}");
+                if !line.is_empty()
+                    && measure
+                        .measure_text(&candidate, font_size, false, false, false, None)
+                        .0
+                        > max_width
+                {
+                    lines.push(std::mem::take(&mut line));
+                }
+                line.push_str(grapheme);
+            }
+        }
+        lines.push(line);
+    }
+    lines
+}
 
 /// Bounding box for layout elements
 #[derive(Debug, Clone, Copy, Default)]
@@ -126,15 +177,10 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
         let mut max_width: f32 = 0.0;
         let mut lines = 0;
 
-        for line in text.lines() {
+        for line in text.split('\n') {
             lines += 1;
             let width = self.measure_text_width(line, font_size, is_code, bold, italic);
             max_width = max_width.max(width);
-        }
-
-        if lines == 0 {
-            lines = 1;
-            max_width = self.measure_text_width(text, font_size, is_code, bold, italic);
         }
 
         (max_width, lines)
@@ -170,8 +216,9 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
 
     fn calculate_flowchart_node_size(&mut self, label: &str, shape: &NodeShape) -> (f32, f32) {
         let line_height = self.font_size * 1.2;
+        let label = flowchart_label_lines(label, self.font_size, self.measure).join("\n");
         let (text_width, lines) =
-            self.measure_multiline(label, self.font_size, false, false, false);
+            self.measure_multiline(&label, self.font_size, false, false, false);
         let pad_w = self.node_padding_h * 2.0;
         let pad_h = self.node_padding_v * 2.0;
 
@@ -181,18 +228,18 @@ impl<'a, T: TextMeasure> LayoutEngine<'a, T> {
 
         match shape {
             NodeShape::Circle => {
-                let size = width.max(height);
+                let size = width.hypot(height);
                 width = size;
                 height = size;
             }
             NodeShape::DoubleCircle => {
-                let size = width.max(height) + 8.0;
+                let size = width.hypot(height) + 8.0;
                 width = size;
                 height = size;
             }
             NodeShape::Rhombus => {
-                width += 26.0;
-                height += 16.0;
+                width *= 2.0;
+                height *= 2.0;
             }
             NodeShape::Hexagon => {
                 width += 24.0;

@@ -1629,11 +1629,12 @@ impl<T: TextMeasure> Renderer<T> {
         use crate::mermaid::{DiagramStyle, render_diagram};
 
         let x = self.line_start_x();
-        let style = DiagramStyle::from_theme(
+        let mut style = DiagramStyle::from_theme(
             &self.theme.text_color,
             &self.theme.background_color,
             &self.theme.code_bg_color,
         );
+        style.font_size = 16.0;
 
         let (svg, width, height) =
             render_diagram(source, &style, &mut self.measure).map_err(|e| {
@@ -1643,7 +1644,7 @@ impl<T: TextMeasure> Renderer<T> {
                 )
             })?;
 
-        // Scale down oversized diagrams so they never overflow the code-block frame.
+        // Fit the document, but never sacrifice the smallest member/message label.
         let available_width = self.right_edge() - x;
         let content_max_width = (available_width - 20.0).max(1.0);
         let scale = if width > content_max_width {
@@ -1651,6 +1652,44 @@ impl<T: TextMeasure> Renderer<T> {
         } else {
             1.0
         };
+        let mut smallest_font = style.font_size;
+        let mut reader = quick_xml::Reader::from_str(&svg);
+        loop {
+            match reader
+                .read_event()
+                .map_err(|e| format!("Invalid Mermaid SVG: {e}"))?
+            {
+                quick_xml::events::Event::Start(element)
+                | quick_xml::events::Event::Empty(element)
+                    if element.name().as_ref() == b"text" =>
+                {
+                    for attribute in element.attributes() {
+                        let attribute =
+                            attribute.map_err(|e| format!("Invalid Mermaid SVG: {e}"))?;
+                        if attribute.key.as_ref() == b"font-size" {
+                            let size = std::str::from_utf8(&attribute.value)
+                                .ok()
+                                .and_then(|value| value.parse::<f32>().ok())
+                                .ok_or("Invalid Mermaid SVG font size")?;
+                            smallest_font = smallest_font.min(size);
+                        }
+                    }
+                }
+                quick_xml::events::Event::Eof => break,
+                _ => {}
+            }
+        }
+        const MIN_DIAGRAM_TEXT: f32 = 10.0;
+        if smallest_font * scale < MIN_DIAGRAM_TEXT {
+            let required_width =
+                (self.width - content_max_width + width * MIN_DIAGRAM_TEXT / smallest_font).ceil();
+            return Err(format!(
+                "Mermaid diagram (line {}): fitting this diagram would reduce text to {:.3}px, below the 10px readability minimum. Increase --width to at least {:.0}, shorten labels, split the diagram, or export it separately with markie-mermaid.",
+                self.code_block_start_line,
+                smallest_font * scale,
+                required_width
+            ));
+        }
         let rendered_width = width * scale;
         let rendered_height = height * scale;
         let offset_x = (available_width - rendered_width).max(0.0) / 2.0;
@@ -3510,7 +3549,7 @@ classDiagram
     }
 
     #[test]
-    fn test_mermaid_block_scales_down_when_wider_than_content() {
+    fn test_mermaid_block_rejects_unreadable_document_scale() {
         let theme = Theme::default();
         let measure = MockMeasure;
         let mut renderer = Renderer::new(theme, measure, 360.0).unwrap();
@@ -3528,11 +3567,54 @@ flowchart LR
 ```
 "#;
 
-        let svg = renderer.render(markdown).unwrap();
-        assert!(
-            svg.contains("scale("),
-            "Expected Mermaid block to be scaled when too wide"
-        );
+        let error = renderer.render(markdown).unwrap_err();
+        assert!(error.contains("Mermaid diagram (line 2)"), "{error}");
+        assert!(error.contains("10px readability minimum"), "{error}");
+        assert!(error.contains("Increase --width to at least"), "{error}");
+    }
+
+    #[test]
+    fn test_mermaid_readability_checks_message_and_member_text() {
+        for source in [
+            "sequenceDiagram\nAlice->>Bob: Request\nBob-->>Alice: Response",
+            "classDiagram\nclass Account {\n+String accountName\n+save() bool\n}",
+        ] {
+            let style = crate::mermaid::DiagramStyle {
+                font_size: 16.0,
+                ..Default::default()
+            };
+            let (_, natural_width, _) =
+                crate::mermaid::render_diagram(source, &style, &mut MockMeasure).unwrap();
+            let theme = Theme {
+                padding_x: 20.0,
+                ..Default::default()
+            };
+            // At 70%, base text is 11.2px but messages/members fall below 10px.
+            let mut renderer =
+                Renderer::new(theme.clone(), MockMeasure, natural_width * 0.7 + 60.0).unwrap();
+            let markdown = format!("```mermaid\n{source}\n```");
+            assert!(
+                renderer
+                    .render(&markdown)
+                    .unwrap_err()
+                    .contains("10px readability minimum")
+            );
+
+            // Both families remain readable when scaled to 90%.
+            let mut renderer =
+                Renderer::new(theme, MockMeasure, natural_width * 0.9 + 60.0).unwrap();
+            assert!(renderer.render(&markdown).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_small_mermaid_diagram_keeps_document_font_size() {
+        let mut renderer = Renderer::new(Theme::default(), MockMeasure, 600.0).unwrap();
+        let svg = renderer
+            .render("```mermaid\nflowchart TD\nA[Start] --> B[Done]\n```")
+            .unwrap();
+        assert!(svg.contains("scale(1.0000)"));
+        assert!(svg.contains("font-size=\"16.0\""));
     }
 
     #[test]

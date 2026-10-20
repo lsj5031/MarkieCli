@@ -3,6 +3,7 @@
 
 import math
 from pathlib import Path
+import re
 import struct
 import sys
 import xml.etree.ElementTree as ET
@@ -36,8 +37,10 @@ def check(directory, png_scale):
                                   "After compatibility content:"],
     }
     stems = [("smoke_math", 1200), ("smoke_mermaid", 1200)]
+    # Match smoke-test.sh: retain 640px cases that fit, give the long LR
+    # document readable headroom at 800px, and test its 640px rejection below.
     stems += [(f"{stem}_{width}", width) for stem in labels if stem.startswith("quality_")
-              for width in (640, 1200)]
+              for width in ((800, 1200) if stem == "quality_document" else (640, 1200))]
     for stem, width in stems:
         root = ET.parse(directory / f"{stem}.svg").getroot()
         svg_width, svg_height = map(float, (root.attrib["width"], root.attrib["height"]))
@@ -49,6 +52,13 @@ def check(directory, png_scale):
             # Table cells and highlighted code can split even a single word
             # into several SVG text elements. Preserve content across wrapping.
             assert "".join(label.split()) in "".join(text.split()), f"{stem}: lost text {label!r}"
+        for group in root.findall(".//s:g", ns):
+            scale = re.search(r"\bscale\(([0-9.]+)\)", group.get("transform", ""))
+            if scale:
+                sizes = [float(node.attrib["font-size"]) * float(scale[1])
+                         for node in group.findall(".//s:text", ns)]
+                # The renderer writes group scales to four decimal places.
+                assert all(size >= 9.999 for size in sizes), f"{stem}: unreadable diagram text {sizes}"
         if key == "quality_flowchart":
             assert "flowchart LR" not in text and "<br" not in text, stem
             # A leading comment must not cause a vertical graph. These labels
@@ -66,6 +76,27 @@ def check(directory, png_scale):
         with (directory / f"{stem}.pdf").open("rb") as document:
             assert document.read(5) == b"%PDF-", f"{stem}: invalid PDF signature"
         print(f"OK {stem}: SVG content (LR where applicable), PNG dimensions, PDF signature")
+
+    source_lines = (directory / "quality_document.md").read_text().splitlines()
+    fence_line = source_lines.index("```mermaid") + 1
+    for extension in ("svg", "png", "pdf"):
+        rejected = directory / f"rejected_document_640.{extension}"
+        assert not rejected.exists(), f"{rejected.name}: rejected output was written"
+        diagnostic = Path(f"{rejected}.stderr").read_text()
+        match = re.search(
+            r"Mermaid diagram \(line (\d+)\): fitting this diagram would reduce text "
+            r"to (\d+\.\d{3})px, below the 10px readability minimum\. "
+            r"Increase --width to at least (\d+)", diagnostic)
+        assert match, f"{rejected.name}: missing useful readability diagnostic: {diagnostic}"
+        line, effective_size, suggested_width = match.groups()
+        assert int(line) == fence_line, diagnostic
+        assert 0 < float(effective_size) < 10, diagnostic
+        assert 640 < int(suggested_width) <= 800, diagnostic
+        assert "shorten labels, split the diagram" in diagnostic, diagnostic
+        assert "markie-mermaid" in diagnostic, diagnostic
+        # The same unchanged corpus has already passed all content/format checks
+        # at 800px above, verifying the proposed wider retry really renders.
+        print(f"OK {rejected.name}: source line, effective size, width advice, 800px retry")
 
 
 if __name__ == "__main__":
